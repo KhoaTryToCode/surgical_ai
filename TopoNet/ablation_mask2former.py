@@ -71,6 +71,13 @@ from transformers import (
 from utils.prepare_dataset import get_split
 from utils.dataset import load_image, load_mask
 
+try:
+    import surface_distance
+    from surface_distance import metrics as sd_metrics
+    HAS_SURFACE_DIST = True
+except Exception:
+    HAS_SURFACE_DIST = False
+
 # Official TopoNet metric evaluation function
 def evaluation(pred, gt):
     smooth = 1e-5
@@ -83,7 +90,27 @@ def compute_toponet_metrics(pred_map, gt_2d):
     pred_channels = np.array([pred_map == i for i in range(4)]).astype(np.uint8)
     gt_channels = np.array([gt_2d == i for i in range(4)]).astype(np.uint8)
     iou, dice = evaluation(pred_channels[1:].flatten(), gt_channels[1:].flatten())
-    return dice, iou
+    
+    assd = None
+    if HAS_SURFACE_DIST:
+        if 0 == np.count_nonzero(pred_channels[1:]):
+            assd = 80.0
+        else:
+            temp_assd = []
+            for i in range(3):
+                sd = sd_metrics.compute_surface_distances(
+                    np.array(gt_channels[i + 1], dtype=bool),
+                    np.array(pred_channels[i + 1], dtype=bool),
+                    (1.0, 1.0)
+                )
+                avg_sd = surface_distance.compute_average_surface_distance(sd)
+                temp_assd.append(avg_sd[1])
+            if np.mean(temp_assd) < 500:
+                assd = np.mean(temp_assd)
+            else:
+                assd = 80.0
+                
+    return dice, iou, assd
 
 # Helper function to disable Masked Attention in Transformer Decoder
 def disable_masked_attention(model):
@@ -280,7 +307,7 @@ for epoch in range(start_epoch, EPOCHS + 1):
             pred_map = processor.post_process_semantic_segmentation(
                 outputs, target_sizes=[(1024, 1024)]
             )[0].cpu().numpy()
-            t_dice, t_iou = compute_toponet_metrics(pred_map, gt_2d)
+            t_dice, t_iou, t_assd = compute_toponet_metrics(pred_map, gt_2d)
             train_dices.append(t_dice)
             train_ious.append(t_iou)
 
@@ -297,6 +324,7 @@ for epoch in range(start_epoch, EPOCHS + 1):
     val_losses = []
     val_dices = []
     val_ious = []
+    val_assds = []
 
     with torch.no_grad():
         for rgb_img, gt_2d, _ in tqdm(val_dataset, desc=f"Epoch {epoch}/{EPOCHS} [Val]"):
@@ -317,19 +345,25 @@ for epoch in range(start_epoch, EPOCHS + 1):
                 outputs, target_sizes=[(1024, 1024)]
             )[0].cpu().numpy()
 
-            v_dice, v_iou = compute_toponet_metrics(pred_map, gt_2d)
+            v_dice, v_iou, v_assd = compute_toponet_metrics(pred_map, gt_2d)
             val_dices.append(v_dice)
             val_ious.append(v_iou)
+            if v_assd is not None:
+                val_assds.append(v_assd)
 
     epoch_train_loss = total_loss / len(train_dataset)
     mean_val_loss = np.mean(val_losses)
     mean_train_dice = np.mean(train_dices)
     mean_val_iou = np.mean(val_ious)
     mean_val_dice = np.mean(val_dices)
+    mean_val_assd = np.mean(val_assds) if len(val_assds) > 0 else 0.0
 
-    print(f"👉 Epoch {epoch:03d} | Tr Loss: {epoch_train_loss:.4f} | Val Loss: {mean_val_loss:.4f} | Tr Dice: {mean_train_dice:.4f} | Val Dice: {mean_val_dice:.4f} | Val IoU: {mean_val_iou:.4f}")
+    print_msg = f"👉 Epoch {epoch:03d} | Tr Loss: {epoch_train_loss:.4f} | Val Loss: {mean_val_loss:.4f} | Tr Dice: {mean_train_dice:.4f} | Val Dice: {mean_val_dice:.4f} | Val IoU: {mean_val_iou:.4f}"
+    if len(val_assds) > 0:
+        print_msg += f" | Val ASSD: {mean_val_assd:.4f}"
+    print(print_msg)
 
-    wandb.log({
+    log_dict = {
         "epoch": epoch,
         "train_loss": epoch_train_loss,
         "train_dice": mean_train_dice,
@@ -337,7 +371,10 @@ for epoch in range(start_epoch, EPOCHS + 1):
         "val_dice": mean_val_dice,
         "val_iou": mean_val_iou,
         "learning_rate": current_lr
-    })
+    }
+    if len(val_assds) > 0:
+        log_dict["val_assd"] = mean_val_assd
+    wandb.log(log_dict)
 
     if mean_val_dice > best_val_dice:
         best_val_dice = mean_val_dice
