@@ -48,9 +48,11 @@ if torch.cuda.is_available():
 
 # 1. Install Dependencies if missing
 try:
+    # pyrefly: ignore [missing-import]
     import transformers
 except ImportError:
     os.system("pip install -q transformers")
+    # pyrefly: ignore [missing-import]
     import transformers
 
 try:
@@ -59,7 +61,11 @@ except ImportError:
     os.system("pip install -q wandb")
     import wandb
 
-from transformers import AutoImageProcessor, Mask2FormerForUniversalSegmentation
+from transformers import (
+    AutoImageProcessor,
+    Mask2FormerForUniversalSegmentation,
+    MaskFormerForInstanceSegmentation
+)
 
 # ==================== IMPORT TOPONET UTILS ====================
 from utils.prepare_dataset import get_split
@@ -125,7 +131,7 @@ else:
 
 # ==================== MODEL & BACKBONE SELECTION ====================
 if "ResNet" in ABLATION_MODE:
-    MODEL_NAME = "facebook/mask2former-resnet50-ade-semantic"
+    MODEL_NAME = "facebook/maskformer-resnet50-ade"
     BACKBONE_NAME = "ResNet-50"
 else:
     MODEL_NAME = "facebook/mask2former-swin-tiny-ade-semantic"
@@ -192,11 +198,20 @@ processor = AutoImageProcessor.from_pretrained(
     ignore_index=255
 )
 
-model = Mask2FormerForUniversalSegmentation.from_pretrained(
-    MODEL_NAME,
-    num_labels=4,
-    ignore_mismatched_sizes=True
-).to(device)
+if "ResNet" in ABLATION_MODE:
+    print(f"✅ Initializing ResNet-50 backbone model from '{MODEL_NAME}'...")
+    model = MaskFormerForInstanceSegmentation.from_pretrained(
+        MODEL_NAME,
+        num_labels=4,
+        ignore_mismatched_sizes=True
+    ).to(device)
+else:
+    print(f"✅ Initializing Swin-Tiny backbone model from '{MODEL_NAME}'...")
+    model = Mask2FormerForUniversalSegmentation.from_pretrained(
+        MODEL_NAME,
+        num_labels=4,
+        ignore_mismatched_sizes=True
+    ).to(device)
 
 # Apply Attention Ablation if Full Attention selected
 if not USE_MASKED_ATTENTION:
