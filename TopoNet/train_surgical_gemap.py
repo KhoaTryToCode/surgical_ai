@@ -77,7 +77,8 @@ def parse_args():
     parser.add_argument('--save_dir', type=str, default='checkpoints_gemap')
     parser.add_argument('--wandb_key', type=str,
                         default='83f4544a22543e319c6009abceaac90b634c68a3')
-    parser.add_argument('--wandb_entity', type=str, default='10423057')
+    parser.add_argument('--wandb_entity', type=str, default=None,
+                        help='WandB entity/username (optional, default: automatic)')
     parser.add_argument('--wandb_project', type=str,
                         default='liver-landmark-segmentation-ablation')
     parser.add_argument('--seed', type=int, default=42)
@@ -358,12 +359,14 @@ def main():
     # ── WandB ──
     if HAS_WANDB and args.wandb_key:
         wandb.login(key=args.wandb_key)
-        wandb.init(
-            project=args.wandb_project,
-            entity=args.wandb_entity,
-            name='SurgicalGeMap_SwinTiny',
-            config=vars(args),
-        )
+        wandb_kwargs = {
+            'project': args.wandb_project,
+            'name': 'SurgicalGeMap_SwinTiny',
+            'config': vars(args),
+        }
+        if args.wandb_entity:
+            wandb_kwargs['entity'] = args.wandb_entity
+        wandb.init(**wandb_kwargs)
 
     # ── Dataset ──
     train_files, test_files, val_files = prepare_dataset.get_split(args.data_path)
