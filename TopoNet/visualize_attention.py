@@ -36,21 +36,23 @@ def disable_masked_attention(model):
     return model
 
 
-def colorize_mask(mask_2d):
+def overlay_mask_on_rgb(rgb_img, mask_2d, alpha=0.6):
     """
-    Colorizes 2D class segmentation map (0, 1, 2, 3) into an RGB colorized mask.
-    0: Background (Dark gray [30, 30, 30])
-    1: Landmark 1 (Red [255, 50, 50])
-    2: Landmark 2 (Green [50, 255, 50])
-    3: Landmark 3 (Blue [50, 120, 255])
+    Overlays the colorized landmark class segmentation mask onto the original RGB surgical image.
+    0: Background (Unchanged RGB)
+    1: Landmark 1 (Bright Red [255, 40, 40])
+    2: Landmark 2 (Bright Green [40, 255, 40])
+    3: Landmark 3 (Bright Blue [40, 140, 255])
     """
-    h, w = mask_2d.shape
-    color_mask = np.zeros((h, w, 3), dtype=np.uint8)
-    color_mask[mask_2d == 0] = [30, 30, 30]
-    color_mask[mask_2d == 1] = [255, 50, 50]
-    color_mask[mask_2d == 2] = [50, 255, 50]
-    color_mask[mask_2d == 3] = [50, 120, 255]
-    return color_mask
+    color_mask = np.zeros_like(rgb_img, dtype=np.uint8)
+    color_mask[mask_2d == 1] = [255, 40, 40]
+    color_mask[mask_2d == 2] = [40, 255, 40]
+    color_mask[mask_2d == 3] = [40, 140, 255]
+    
+    fg_mask = (mask_2d > 0)
+    overlay = rgb_img.copy()
+    overlay[fg_mask] = cv2.addWeighted(rgb_img, 1.0 - alpha, color_mask, alpha, 0)[fg_mask]
+    return overlay
 
 
 def overlay_heatmap(rgb_img, attn_map, alpha=0.5):
@@ -108,22 +110,22 @@ def visualize_sample_and_attention_dashboard(
         pred_map_masked = processor.post_process_semantic_segmentation(out_masked, target_sizes=[(1024, 1024)])[0].cpu().numpy()
         pred_map_full = processor.post_process_semantic_segmentation(out_full, target_sizes=[(1024, 1024)])[0].cpu().numpy()
 
-    # 4. Save Sample Prediction Overview Figure (RGB, GT, Masked Pred, Full Pred)
+    # 4. Save Sample Prediction Overview Figure (RGB, GT Overlay, Masked Pred Overlay, Full Pred Overlay)
     fig_overview, axes_ov = plt.subplots(1, 4, figsize=(20, 5))
     axes_ov[0].imshow(rgb_img)
     axes_ov[0].set_title("Input RGB Image", fontsize=13, fontweight='bold')
     axes_ov[0].axis('off')
 
-    axes_ov[1].imshow(colorize_mask(gt_2d))
-    axes_ov[1].set_title("Ground Truth Mask", fontsize=13, fontweight='bold')
+    axes_ov[1].imshow(overlay_mask_on_rgb(rgb_img, gt_2d))
+    axes_ov[1].set_title("Ground Truth (Overlay)", fontsize=13, fontweight='bold')
     axes_ov[1].axis('off')
 
-    axes_ov[2].imshow(colorize_mask(pred_map_masked))
-    axes_ov[2].set_title("Masked Attention Pred", fontsize=13, fontweight='bold')
+    axes_ov[2].imshow(overlay_mask_on_rgb(rgb_img, pred_map_masked))
+    axes_ov[2].set_title("Masked Attention (Overlay)", fontsize=13, fontweight='bold')
     axes_ov[2].axis('off')
 
-    axes_ov[3].imshow(colorize_mask(pred_map_full))
-    axes_ov[3].set_title("Full Attention Pred", fontsize=13, fontweight='bold')
+    axes_ov[3].imshow(overlay_mask_on_rgb(rgb_img, pred_map_full))
+    axes_ov[3].set_title("Full Attention (Overlay)", fontsize=13, fontweight='bold')
     axes_ov[3].axis('off')
 
     plt.tight_layout()
@@ -144,7 +146,7 @@ def visualize_sample_and_attention_dashboard(
     gs = fig.add_gridspec(3, 9, height_ratios=[1.2, 1.0, 1.0])
     fig.suptitle(f"Surgical Landmark Segmentation Dashboard & 9-Layer Attention Progression\n(Sample Index {sample_idx} | Target Landmark Class {target_class_idx})", fontsize=16, fontweight='bold')
 
-    # Top Row: RGB, GT, Masked Pred, Full Pred (spanning columns)
+    # Top Row: RGB, GT Overlay, Masked Pred Overlay, Full Pred Overlay
     ax_rgb = fig.add_subplot(gs[0, 0:2])
     ax_gt  = fig.add_subplot(gs[0, 2:4])
     ax_pm  = fig.add_subplot(gs[0, 4:6])
@@ -154,16 +156,16 @@ def visualize_sample_and_attention_dashboard(
     ax_rgb.set_title("Input Surgical RGB Image", fontsize=12, fontweight='bold')
     ax_rgb.axis('off')
 
-    ax_gt.imshow(colorize_mask(gt_2d))
-    ax_gt.set_title("Ground Truth Mask", fontsize=12, fontweight='bold')
+    ax_gt.imshow(overlay_mask_on_rgb(rgb_img, gt_2d))
+    ax_gt.set_title("Ground Truth (Overlay)", fontsize=12, fontweight='bold')
     ax_gt.axis('off')
 
-    ax_pm.imshow(colorize_mask(pred_map_masked))
-    ax_pm.set_title("Masked Attention Prediction", fontsize=12, fontweight='bold')
+    ax_pm.imshow(overlay_mask_on_rgb(rgb_img, pred_map_masked))
+    ax_pm.set_title("Masked Attention (Overlay)", fontsize=12, fontweight='bold')
     ax_pm.axis('off')
 
-    ax_pf.imshow(colorize_mask(pred_map_full))
-    ax_pf.set_title("Full Attention Prediction", fontsize=12, fontweight='bold')
+    ax_pf.imshow(overlay_mask_on_rgb(rgb_img, pred_map_full))
+    ax_pf.set_title("Full Attention (Overlay)", fontsize=12, fontweight='bold')
     ax_pf.axis('off')
 
     # Middle & Bottom Rows: 9-Layer Attention Progression
