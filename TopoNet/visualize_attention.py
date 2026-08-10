@@ -79,7 +79,18 @@ def visualize_sample_and_attention_dashboard(
 
     # 1. Load Validation Sample
     train_files, test_files, val_files = get_split(data_path)
+    
+    # Safe fallback if val_files is empty or smaller than sample_idx
+    if len(val_files) == 0:
+        print(f"⚠️ Validation split empty in '{data_path}'. Falling back to 'test' or 'train' set.")
+        val_files = test_files if len(test_files) > 0 else train_files
+        
+    if len(val_files) == 0:
+        raise ValueError(f"No image files found in '{data_path}'. Please verify dataset path.")
+        
+    sample_idx = min(max(0, sample_idx), len(val_files) - 1)
     img_path = val_files[sample_idx]
+    print(f"📸 Processing sample [{sample_idx + 1}/{len(val_files)}]: {img_path}")
     rgb_img = load_image(img_path)
     gt_masks = load_mask(img_path)
     gt_2d = np.argmax(gt_masks, axis=0).astype(np.int32)
