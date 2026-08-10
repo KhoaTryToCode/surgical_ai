@@ -449,12 +449,16 @@ class SurgicalGeMap(nn.Module):
         features = self.backbone(x)
 
         # ── FPN ──
-        fused = self.pixel_decoder(features)  # (B, D, H/4, W/4)
+        fused = self.pixel_decoder(features)  # (B, D, H/4, W/4) -> (B, 256, 256, 256)
+
+        # ── Downsample for Cross-Attention (prevents OOM) ──
+        # 256x256 = 65,536 tokens causes GPU OOM in MultiheadAttention.
+        # Downsampling to 64x64 = 4,096 tokens reduces attention VRAM by 256x!
+        spatial_feat = F.adaptive_avg_pool2d(fused, (64, 64))  # (B, D, 64, 64)
 
         # ── Spatial tokens ──
-        H_feat, W_feat = fused.shape[-2:]
-        spatial_tokens = fused.flatten(2).permute(0, 2, 1)  # (B, HW, D)
-        spatial_pos = self.pos_enc(fused)  # (1, D, H, W)
+        spatial_tokens = spatial_feat.flatten(2).permute(0, 2, 1)  # (B, 4096, D)
+        spatial_pos = self.pos_enc(spatial_feat)  # (1, D, 64, 64)
         spatial_pos = spatial_pos.flatten(2).permute(0, 2, 1).expand(B, -1, -1)
 
         # ── Build queries ──

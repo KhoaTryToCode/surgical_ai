@@ -238,8 +238,11 @@ def extract_predictions(pred_logits, pred_pts, conf_threshold=0.3):
 # ──────────────────────────────────────────────
 
 def train_one_epoch(model, criterion, dataloader, optimizer, scheduler,
-                    device, epoch):
+                    scaler, device, epoch):
     model.train()
+    if device.type == 'cuda':
+        torch.cuda.empty_cache()
+
     epoch_losses = {
         'loss_total': 0, 'loss_cls': 0, 'loss_pts': 0,
         'loss_dir': 0, 'loss_geo': 0,
@@ -254,19 +257,21 @@ def train_one_epoch(model, criterion, dataloader, optimizer, scheduler,
         gt_labels = gt_labels.to(device)
         num_instances = num_instances.to(device)
 
-        # Forward
-        pred_logits, pred_pts = model(images)
-
-        # Loss
-        loss_dict, total_loss = criterion(
-            pred_logits, pred_pts, gt_labels, gt_pts, num_instances
-        )
-
-        # Backward
         optimizer.zero_grad()
-        total_loss.backward()
+
+        # Mixed Precision Forward
+        with torch.cuda.amp.autocast(enabled=device.type == 'cuda'):
+            pred_logits, pred_pts = model(images)
+            loss_dict, total_loss = criterion(
+                pred_logits, pred_pts, gt_labels, gt_pts, num_instances
+            )
+
+        # Backward with GradScaler
+        scaler.scale(total_loss).backward()
+        scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
 
         # Accumulate
         for k, v in loss_dict.items():
@@ -409,12 +414,13 @@ def main():
         cls_weight=2.0, pts_weight=5.0, dir_weight=2.0, geo_weight=0.5
     ).to(device)
 
-    # ── Optimizer ──
+    # ── Optimizer & Scaler ──
     optimizer = optim.AdamW(model.parameters(), lr=args.lr,
                             weight_decay=args.weight_decay)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=args.epochs, eta_min=1e-6
     )
+    scaler = torch.cuda.amp.GradScaler(enabled=device.type == 'cuda')
 
     # ── Training ──
     os.makedirs(args.save_dir, exist_ok=True)
@@ -426,7 +432,7 @@ def main():
         # Train
         train_losses = train_one_epoch(
             model, criterion, train_loader, optimizer, scheduler,
-            device, epoch
+            scaler, device, epoch
         )
 
         # Validate
