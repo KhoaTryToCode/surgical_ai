@@ -19,9 +19,10 @@ class HungarianMatcher(nn.Module):
     """
     Optimal bipartite matching between N predicted queries and M GT polylines.
 
-    Cost = cls_weight * classification_cost + pts_weight * point_L1_cost.
+    Uses Bi-Directional Min-Matching: evaluates both forward and reverse
+    GT polyline orientations to eliminate line drawing direction ambiguity.
 
-    Returns per-sample matching indices.
+    Cost = cls_weight * classification_cost + pts_weight * min(forward_cost, reverse_cost).
     """
 
     def __init__(self, cls_weight=2.0, pts_weight=5.0, num_classes=4):
@@ -41,7 +42,7 @@ class HungarianMatcher(nn.Module):
             num_instances: (B,) number of real GT instances per sample
 
         Returns:
-            List of (pred_indices, gt_indices) tuples, one per batch element.
+            List of (pred_indices, gt_indices, is_reversed_indices) tuples per batch.
         """
         B = pred_logits.shape[0]
         matches = []
@@ -53,33 +54,43 @@ class HungarianMatcher(nn.Module):
                 matches.append((
                     torch.tensor([], dtype=torch.long),
                     torch.tensor([], dtype=torch.long),
+                    torch.tensor([], dtype=torch.bool),
                 ))
                 continue
 
             # Extract valid GT for this sample
             gt_cls_b = gt_labels[b, :M]     # (M,)
-            gt_pts_b = gt_pts[b, :M]        # (M, K, 2)
+            gt_pts_b_fwd = gt_pts[b, :M]    # (M, K, 2)
+            gt_pts_b_rev = torch.flip(gt_pts_b_fwd, dims=[1])  # (M, K, 2) reversed
 
             # Classification cost: negative probability of GT class
             pred_prob = pred_logits[b].softmax(-1)  # (N, num_classes)
             cls_cost = -pred_prob[:, gt_cls_b]       # (N, M)
 
-            # Point L1 cost: mean L1 distance between pred and GT points
-            # pred_pts[b]: (N, K, 2), gt_pts_b: (M, K, 2)
-            pts_cost = torch.cdist(
-                pred_pts[b].flatten(1),  # (N, K*2)
-                gt_pts_b.flatten(1),     # (M, K*2)
-                p=1
-            ) / (pred_pts.shape[2] * 2)  # normalize by K*2
+            # Point L1 cost: forward vs reverse
+            pts_cost_fwd = torch.cdist(
+                pred_pts[b].flatten(1), gt_pts_b_fwd.flatten(1), p=1
+            ) / (pred_pts.shape[2] * 2)
+
+            pts_cost_rev = torch.cdist(
+                pred_pts[b].flatten(1), gt_pts_b_rev.flatten(1), p=1
+            ) / (pred_pts.shape[2] * 2)
+
+            # Bi-directional min matching
+            pts_cost_stacked = torch.stack([pts_cost_fwd, pts_cost_rev], dim=-1)  # (N, M, 2)
+            pts_cost, is_rev_matrix = torch.min(pts_cost_stacked, dim=-1)          # (N, M), (N, M)
 
             # Total cost
             cost = self.cls_weight * cls_cost + self.pts_weight * pts_cost
             cost = cost.detach().cpu().numpy()
 
             row_ind, col_ind = linear_sum_assignment(cost)
+            is_rev_matched = is_rev_matrix[row_ind, col_ind].bool()
+
             matches.append((
                 torch.tensor(row_ind, dtype=torch.long),
                 torch.tensor(col_ind, dtype=torch.long),
+                is_rev_matched.cpu(),
             ))
 
         return matches
@@ -104,7 +115,6 @@ class FocalLoss(nn.Module):
             pred_logits: (N_total, num_classes) raw logits
             targets: (N_total,) integer class labels
         """
-        # One-hot encode targets
         target_onehot = F.one_hot(targets, self.num_classes).float()
 
         pred_sigmoid = pred_logits.sigmoid()
@@ -129,14 +139,6 @@ class PointL1Loss(nn.Module):
         super().__init__()
 
     def forward(self, pred_pts, gt_pts):
-        """
-        Args:
-            pred_pts: (M_matched, K, 2) predicted points
-            gt_pts: (M_matched, K, 2) GT points
-
-        Returns:
-            Scalar loss.
-        """
         if pred_pts.numel() == 0:
             return pred_pts.sum() * 0.0
         return F.l1_loss(pred_pts, gt_pts, reduction='mean')
@@ -156,21 +158,14 @@ class DirectionCosineLoss(nn.Module):
         super().__init__()
 
     def forward(self, pred_pts, gt_pts):
-        """
-        Args:
-            pred_pts: (M, K, 2) predicted points
-            gt_pts: (M, K, 2) GT points
-        """
         if pred_pts.numel() == 0:
             return pred_pts.sum() * 0.0
 
-        # Direction vectors: (M, K-1, 2)
         pred_dirs = pred_pts[:, 1:] - pred_pts[:, :-1]
         gt_dirs = gt_pts[:, 1:] - gt_pts[:, :-1]
 
-        # Flatten for CosineEmbeddingLoss
         M, D, C = pred_dirs.shape
-        pred_flat = pred_dirs.reshape(-1, C)  # (M*(K-1), 2)
+        pred_flat = pred_dirs.reshape(-1, C)
         gt_flat = gt_dirs.reshape(-1, C)
 
         target = torch.ones(pred_flat.shape[0], device=pred_flat.device)
@@ -195,24 +190,12 @@ class GeometricLoss(nn.Module):
         self.inter_weight = inter_weight
 
     def compute_intra(self, pts):
-        """
-        Compute intra-instance geometric features.
+        offsets = pts[:, 1:] - pts[:, :-1]
+        lengths = torch.norm(offsets, p=2, dim=-1).flatten()
 
-        Args:
-            pts: (M, K, 2)
-
-        Returns:
-            lengths: (M*(K-1),) segment lengths
-            dots: (M*(K-2),) consecutive direction dot products
-        """
-        # Consecutive offsets
-        offsets = pts[:, 1:] - pts[:, :-1]  # (M, K-1, 2)
-        lengths = torch.norm(offsets, p=2, dim=-1).flatten()  # (M*(K-1),)
-
-        # Consecutive dot products (curvature proxy)
         if offsets.shape[1] >= 2:
-            d1 = offsets[:, :-1]  # (M, K-2, 2)
-            d2 = offsets[:, 1:]   # (M, K-2, 2)
+            d1 = offsets[:, :-1]
+            d2 = offsets[:, 1:]
             norms = torch.norm(d1, p=2, dim=-1) * torch.norm(d2, p=2, dim=-1) + 1e-6
             dots = (d1 * d2).sum(-1) / norms
             dots = dots.flatten()
@@ -222,21 +205,14 @@ class GeometricLoss(nn.Module):
         return lengths, dots
 
     def forward(self, pred_pts, gt_pts):
-        """
-        Args:
-            pred_pts: (M, K, 2) matched predicted points
-            gt_pts: (M, K, 2) matched GT points
-        """
         if pred_pts.numel() == 0:
             return pred_pts.sum() * 0.0
 
         loss = 0.0
 
-        # ── Intra-instance ──
         pred_lengths, pred_dots = self.compute_intra(pred_pts)
         gt_lengths, gt_dots = self.compute_intra(gt_pts)
 
-        # Filter out NaN/Inf
         valid_l = torch.isfinite(gt_lengths)
         if valid_l.any():
             loss += self.intra_weight * F.l1_loss(
@@ -248,19 +224,16 @@ class GeometricLoss(nn.Module):
                 loss += self.intra_weight * F.l1_loss(
                     pred_dots[valid_d], gt_dots[valid_d])
 
-        # ── Inter-instance ──
         M = pred_pts.shape[0]
         if M >= 2:
-            # Pairwise centroid distances
-            pred_centroids = pred_pts.mean(dim=1)  # (M, 2)
-            gt_centroids = gt_pts.mean(dim=1)       # (M, 2)
+            pred_centroids = pred_pts.mean(dim=1)
+            gt_centroids = gt_pts.mean(dim=1)
 
             pred_dists = torch.cdist(pred_centroids.unsqueeze(0),
                                      pred_centroids.unsqueeze(0)).squeeze(0)
             gt_dists = torch.cdist(gt_centroids.unsqueeze(0),
                                    gt_centroids.unsqueeze(0)).squeeze(0)
 
-            # Upper triangle only (avoid redundancy)
             triu_idx = torch.triu_indices(M, M, offset=1)
             pred_inter = pred_dists[triu_idx[0], triu_idx[1]]
             gt_inter = gt_dists[triu_idx[0], triu_idx[1]]
@@ -275,16 +248,6 @@ class GeometricLoss(nn.Module):
 # ──────────────────────────────────────────────
 
 def chamfer_distance(pred_pts, gt_pts):
-    """
-    Chamfer distance between two sets of polyline points.
-
-    Args:
-        pred_pts: (M1, K, 2) or (M1*K, 2) predicted points
-        gt_pts: (M2, K, 2) or (M2*K, 2) GT points
-
-    Returns:
-        Scalar chamfer distance.
-    """
     if pred_pts.dim() == 3:
         pred_pts = pred_pts.reshape(-1, 2)
     if gt_pts.dim() == 3:
@@ -293,12 +256,9 @@ def chamfer_distance(pred_pts, gt_pts):
     if pred_pts.shape[0] == 0 or gt_pts.shape[0] == 0:
         return torch.tensor(0.0)
 
-    # (M1*K, M2*K)
     dists = torch.cdist(pred_pts.float(), gt_pts.float(), p=2)
 
-    # Forward: for each pred point, min distance to any GT point
     fwd = dists.min(dim=1)[0].mean()
-    # Backward: for each GT point, min distance to any pred point
     bwd = dists.min(dim=0)[0].mean()
 
     return (fwd + bwd) / 2.0
@@ -309,24 +269,12 @@ def chamfer_distance(pred_pts, gt_pts):
 # ──────────────────────────────────────────────
 
 def frechet_distance(P, Q):
-    """
-    Discrete Fréchet distance between two polylines.
-
-    Args:
-        P: (K, 2) first polyline
-        Q: (K, 2) second polyline
-
-    Returns:
-        Scalar Fréchet distance.
-    """
     n, m = P.shape[0], Q.shape[0]
     if n == 0 or m == 0:
         return torch.tensor(0.0)
 
-    # Distance matrix
     D = torch.cdist(P.unsqueeze(0).float(), Q.unsqueeze(0).float()).squeeze(0)
 
-    # DP table
     dp = torch.full((n, m), float('inf'), device=P.device)
     dp[0, 0] = D[0, 0]
 
@@ -350,13 +298,9 @@ def frechet_distance(P, Q):
 
 class SurgicalGeMapCriterion(nn.Module):
     """
-    Combined loss for Surgical-GeMap training.
-
-    Performs Hungarian matching, then computes:
-    - Focal classification loss on all N queries
-    - Point L1 loss on matched queries
-    - Direction cosine loss on matched queries
-    - Geometric loss on matched queries
+    Combined loss for Surgical-GeMap training with:
+    - Bi-Directional Min-Matching (orientation invariant)
+    - Auxiliary Decoder Layer Supervision across all decoder layers
     """
 
     def __init__(self, num_classes=4, N=30, K=20,
@@ -381,29 +325,17 @@ class SurgicalGeMapCriterion(nn.Module):
         self.dir_weight = dir_weight
         self.geo_weight = geo_weight
 
-    def forward(self, pred_logits, pred_pts, gt_labels, gt_pts, num_instances):
-        """
-        Args:
-            pred_logits: (B, N, num_classes)
-            pred_pts: (B, N, K, 2) predicted normalized coordinates
-            gt_labels: (B, N) padded GT labels
-            gt_pts: (B, N, K, 2) padded GT polylines
-            num_instances: (B,) real instance counts
-
-        Returns:
-            loss_dict: dict of individual loss terms
-            total_loss: weighted sum
-        """
+    def _compute_single_layer_loss(self, pred_logits, pred_pts, gt_labels, gt_pts, num_instances):
+        """Compute loss for one decoder layer's predictions."""
         device = pred_logits.device
         B = pred_logits.shape[0]
 
-        # ── Hungarian matching ──
+        # ── Bi-Directional Hungarian matching ──
         matches = self.matcher(pred_logits, pred_pts, gt_labels, gt_pts, num_instances)
 
-        # ── Classification loss (all queries) ──
-        # Build target: matched queries get GT class, unmatched get 0 (background)
+        # ── Classification loss ──
         target_classes = torch.zeros(B, self.N, dtype=torch.long, device=device)
-        for b, (pred_idx, gt_idx) in enumerate(matches):
+        for b, (pred_idx, gt_idx, is_rev) in enumerate(matches):
             if len(pred_idx) > 0:
                 target_classes[b, pred_idx.to(device)] = gt_labels[b, gt_idx.to(device)]
 
@@ -412,31 +344,34 @@ class SurgicalGeMapCriterion(nn.Module):
             target_classes.reshape(-1)
         )
 
-        # ── Gather matched predictions and GT ──
+        # ── Gather matched predictions and orientation-adjusted GT ──
         matched_pred_pts = []
         matched_gt_pts = []
-        for b, (pred_idx, gt_idx) in enumerate(matches):
+
+        for b, (pred_idx, gt_idx, is_rev) in enumerate(matches):
             if len(pred_idx) > 0:
-                matched_pred_pts.append(pred_pts[b, pred_idx.to(device)])
-                matched_gt_pts.append(gt_pts[b, gt_idx.to(device)].to(device))
+                pred_pts_matched = pred_pts[b, pred_idx.to(device)]
+                gt_pts_b = gt_pts[b, gt_idx.to(device)].to(device)
+
+                # Flip GT points if matched in reverse direction
+                for i in range(len(is_rev)):
+                    if is_rev[i]:
+                        gt_pts_b[i] = torch.flip(gt_pts_b[i], dims=[0])
+
+                matched_pred_pts.append(pred_pts_matched)
+                matched_gt_pts.append(gt_pts_b)
 
         if matched_pred_pts:
-            matched_pred = torch.cat(matched_pred_pts, dim=0)  # (M_total, K, 2)
+            matched_pred = torch.cat(matched_pred_pts, dim=0)
             matched_gt = torch.cat(matched_gt_pts, dim=0)
         else:
             matched_pred = torch.zeros(0, self.K, 2, device=device)
             matched_gt = torch.zeros(0, self.K, 2, device=device)
 
-        # ── Point L1 loss ──
         loss_pts = self.pts_loss(matched_pred, matched_gt)
-
-        # ── Direction cosine loss ──
         loss_dir = self.dir_loss(matched_pred, matched_gt)
-
-        # ── Geometric loss ──
         loss_geo = self.geo_loss(matched_pred, matched_gt)
 
-        # ── Total ──
         total = (
             self.cls_weight * loss_cls +
             self.pts_weight * loss_pts +
@@ -453,3 +388,26 @@ class SurgicalGeMapCriterion(nn.Module):
         }
 
         return loss_dict, total
+
+    def forward(self, pred_logits, pred_pts, gt_labels, gt_pts, num_instances):
+        """
+        Supports single layer or list of intermediate outputs for auxiliary supervision.
+        """
+        if isinstance(pred_logits, list):
+            # Auxiliary supervision: compute loss across all decoder layers
+            total_loss = 0.0
+            last_dict = None
+            for layer_logits, layer_pts in zip(pred_logits, pred_pts):
+                layer_dict, layer_loss = self._compute_single_layer_loss(
+                    layer_logits, layer_pts, gt_labels, gt_pts, num_instances
+                )
+                total_loss += layer_loss
+                last_dict = layer_dict
+
+            # Average loss dict across layers
+            last_dict['loss_total'] = total_loss.item()
+            return last_dict, total_loss
+        else:
+            return self._compute_single_layer_loss(
+                pred_logits, pred_pts, gt_labels, gt_pts, num_instances
+            )

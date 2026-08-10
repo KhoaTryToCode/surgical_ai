@@ -464,27 +464,32 @@ class SurgicalGeMap(nn.Module):
         # ── Build queries ──
         query, ref_pts = self._build_query(B, device)
 
-        # ── Decoder layers with iterative refinement ──
+        # ── Decoder layers with iterative refinement & auxiliary outputs ──
+        intermediate_logits = []
+        intermediate_pts = []
+
         for layer, refine_head in zip(self.decoder_layers, self.point_refine_heads):
             query = layer(query, spatial_tokens, spatial_pos)
 
             # Point refinement
             offsets = refine_head(query)  # (B, N*K, 2)
-            # inverse_sigmoid for numerically stable update
             ref_pts_raw = self._inverse_sigmoid(ref_pts)
             new_ref_pts = (ref_pts_raw + offsets).sigmoid()
-            ref_pts = new_ref_pts.detach()  # detach for next layer
 
-        # ── Final predictions ──
-        # Classification: pool each instance's K point queries → single vector
-        query_per_instance = query.reshape(B, self.N, self.K, self.embed_dim)
-        instance_features = query_per_instance.mean(dim=2)  # (B, N, D)
-        pred_logits = self.cls_head(instance_features)       # (B, N, num_classes)
+            # Predict class and points for this layer
+            layer_pts = new_ref_pts.reshape(B, self.N, self.K, 2)
+            query_per_inst = query.reshape(B, self.N, self.K, self.embed_dim).mean(dim=2)
+            layer_logits = self.cls_head(query_per_inst)
 
-        # Point coordinates: use refined reference points
-        pred_pts = ref_pts.reshape(B, self.N, self.K, 2)  # (B, N, K, 2)
+            intermediate_logits.append(layer_logits)
+            intermediate_pts.append(layer_pts)
 
-        return pred_logits, pred_pts
+            ref_pts = new_ref_pts.detach()  # detach for next layer input
+
+        if self.training:
+            return intermediate_logits, intermediate_pts
+        else:
+            return intermediate_logits[-1], intermediate_pts[-1]
 
     @staticmethod
     def _inverse_sigmoid(x, eps=1e-5):
