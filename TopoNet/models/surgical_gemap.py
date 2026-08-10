@@ -42,10 +42,15 @@ class SwinTinyBackbone(nn.Module):
             x: (B, 3, H, W) input images
 
         Returns:
-            List of 4 feature maps at increasing strides.
+            List of 4 feature maps at increasing strides in NCHW format.
         """
         features = self.model(x)
-        return features  # [C2, C3, C4, C5]
+        out_features = []
+        for f in features:
+            if f.dim() == 4 and f.shape[-1] in self.out_channels:
+                f = f.permute(0, 3, 1, 2).contiguous()
+            out_features.append(f)
+        return out_features
 
 
 # ──────────────────────────────────────────────
