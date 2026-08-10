@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-from pytorch_metric_learning import losses
 from torch import nn
 import torch.nn.functional as F
 
