@@ -5,6 +5,8 @@ import cv2
 import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
+import sys
+# pyrefly: ignore [missing-import]
 from transformers import AutoImageProcessor, Mask2FormerForUniversalSegmentation
 
 # ── Setup paths ──
@@ -17,7 +19,9 @@ for p in [SCRIPT_DIR, os.path.join(EXP_DIR, 'models'), os.path.join(REPO_ROOT, '
         sys.path.insert(0, p)
 
 try:
+    # pyrefly: ignore [missing-import]
     from utils.prepare_dataset import get_split
+    # pyrefly: ignore [missing-import]
     from utils.dataset import load_image, load_mask
 except ImportError:
     from shared.utils.prepare_dataset import get_split

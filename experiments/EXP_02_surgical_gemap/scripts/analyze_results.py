@@ -5,6 +5,7 @@ import numpy as np
 from pathlib import Path
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+import sys
 
 # ── Setup paths ──
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -16,7 +17,9 @@ for p in [SCRIPT_DIR, os.path.join(EXP_DIR, 'models'), os.path.join(REPO_ROOT, '
         sys.path.insert(0, p)
 
 try:
+    # pyrefly: ignore [missing-import]
     from utils import prepare_dataset
+    # pyrefly: ignore [missing-import]
     from utils.dataset import load_image, load_mask
 except ImportError:
     from shared.utils import prepare_dataset

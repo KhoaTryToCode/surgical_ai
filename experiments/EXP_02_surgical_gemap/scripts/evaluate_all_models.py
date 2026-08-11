@@ -33,9 +33,13 @@ for p in [SCRIPT_DIR, os.path.join(EXP_DIR, 'models'), os.path.join(REPO_ROOT, '
         sys.path.insert(0, p)
 
 try:
+    # pyrefly: ignore [missing-import]
     from utils.vector_dataset import VectorLandmarkDataset, rasterize_normalized_polylines
+    # pyrefly: ignore [missing-import]
     from utils.pixel_to_vector import prediction_mask_to_vectors
+    # pyrefly: ignore [missing-import]
     from utils.metrics import evaluation
+    # pyrefly: ignore [missing-import]
     from utils import prepare_dataset
 except ImportError:
     from shared.utils.vector_dataset import VectorLandmarkDataset, rasterize_normalized_polylines
@@ -44,6 +48,7 @@ except ImportError:
     from shared.utils import prepare_dataset
 
 try:
+    # pyrefly: ignore [missing-import]
     from vector_losses import chamfer_distance, frechet_distance
 except ImportError:
     from models.vector_losses import chamfer_distance, frechet_distance
