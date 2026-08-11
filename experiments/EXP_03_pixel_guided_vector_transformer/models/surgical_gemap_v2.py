@@ -74,10 +74,10 @@ class FPNPixelDecoder(nn.Module):
             nn.Conv2d(out_channels, out_channels // 2, 3, padding=1),
             nn.BatchNorm2d(out_channels // 2),
             nn.ReLU(inplace=True),
-            nn.ConvUpsample(out_channels // 2, out_channels // 4, scale_factor=2),
+            ConvUpsample(out_channels // 2, out_channels // 4, scale_factor=2),
             nn.BatchNorm2d(out_channels // 4),
             nn.ReLU(inplace=True),
-            nn.ConvUpsample(out_channels // 4, num_classes, scale_factor=2),
+            ConvUpsample(out_channels // 4, num_classes, scale_factor=2),
         )
 
     def forward(self, features):
