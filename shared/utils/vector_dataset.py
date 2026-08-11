@@ -237,11 +237,11 @@ class VectorLandmarkDataset(Dataset):
         - img_path: str — original image path
     """
 
-    def __init__(self, file_names, N=30, K=20, img_size=1024,
-                 transform=None, mode='train'):
+    def __init__(self, file_names, N=30, K=20, num_pts=None, max_polylines=None,
+                 img_size=1024, transform=None, mode='train'):
         self.file_names = file_names
-        self.N = N  # max polyline queries
-        self.K = K  # points per polyline
+        self.N = max_polylines if max_polylines is not None else N
+        self.K = num_pts if num_pts is not None else K
         self.img_size = img_size
         self.mode = mode
 

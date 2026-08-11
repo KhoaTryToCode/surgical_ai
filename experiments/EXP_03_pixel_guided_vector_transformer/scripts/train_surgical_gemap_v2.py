@@ -308,8 +308,8 @@ def main():
     train_files, test_files, val_files = prepare_dataset.get_split(args.data_path)
     print(f"Train: {len(train_files)} | Val: {len(val_files)} | Test: {len(test_files)}")
 
-    train_dataset = VectorLandmarkDataset(train_files, num_pts=args.num_points, max_polylines=args.num_queries)
-    val_dataset = VectorLandmarkDataset(val_files, num_pts=args.num_points, max_polylines=args.num_queries)
+    train_dataset = VectorLandmarkDataset(train_files, N=args.num_queries, K=args.num_points)
+    val_dataset = VectorLandmarkDataset(val_files, N=args.num_queries, K=args.num_points)
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=2, pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=2, pin_memory=True)
