@@ -25,14 +25,18 @@ from tqdm import tqdm
 from pathlib import Path
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-if SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, SCRIPT_DIR)
+EXP_DIR = os.path.dirname(SCRIPT_DIR)
+REPO_ROOT = os.path.dirname(os.path.dirname(EXP_DIR))
+
+for p in [SCRIPT_DIR, os.path.join(EXP_DIR, 'models'), os.path.join(REPO_ROOT, 'shared')]:
+    if os.path.exists(p) and p not in sys.path:
+        sys.path.insert(0, p)
 
 from utils.vector_dataset import VectorLandmarkDataset, rasterize_normalized_polylines
 from utils.pixel_to_vector import prediction_mask_to_vectors
 from utils.metrics import evaluation
 from utils import prepare_dataset
-from models.vector_losses import chamfer_distance, frechet_distance
+from vector_losses import chamfer_distance, frechet_distance
 
 try:
     from medpy.metric import assd

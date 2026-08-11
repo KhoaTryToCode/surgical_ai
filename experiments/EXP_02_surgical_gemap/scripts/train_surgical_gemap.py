@@ -27,8 +27,12 @@ from pathlib import Path
 
 # ── Setup paths ──
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-if SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, SCRIPT_DIR)
+EXP_DIR = os.path.dirname(SCRIPT_DIR)
+REPO_ROOT = os.path.dirname(os.path.dirname(EXP_DIR))
+
+for p in [SCRIPT_DIR, os.path.join(EXP_DIR, 'models'), os.path.join(REPO_ROOT, 'shared')]:
+    if os.path.exists(p) and p not in sys.path:
+        sys.path.insert(0, p)
 
 from utils.vector_dataset import (
     VectorLandmarkDataset,
@@ -36,8 +40,8 @@ from utils.vector_dataset import (
 )
 from utils.metrics import evaluation
 from utils import prepare_dataset
-from models.surgical_gemap import SurgicalGeMap
-from models.vector_losses import (
+from surgical_gemap import SurgicalGeMap
+from vector_losses import (
     SurgicalGeMapCriterion,
     chamfer_distance,
     frechet_distance,
