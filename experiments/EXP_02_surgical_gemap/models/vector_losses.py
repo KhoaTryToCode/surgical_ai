@@ -5,6 +5,7 @@ Adapted from GeMap (ECCV 2024) losses without mmdet/mmcv dependencies.
 All losses operate on normalized [0, 1] 2D polyline coordinates.
 """
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
