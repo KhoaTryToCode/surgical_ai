@@ -168,6 +168,51 @@ def geometric_regularization_loss(pred_pts):
 
 
 # ──────────────────────────────────────────────
+#  Vector Metrics for Evaluation
+# ──────────────────────────────────────────────
+
+def chamfer_distance(pred_pts, gt_pts):
+    if pred_pts.dim() == 3:
+        pred_pts = pred_pts.reshape(-1, 2)
+    if gt_pts.dim() == 3:
+        gt_pts = gt_pts.reshape(-1, 2)
+
+    if pred_pts.shape[0] == 0 or gt_pts.shape[0] == 0:
+        return torch.tensor(0.0)
+
+    dists = torch.cdist(pred_pts.float(), gt_pts.float(), p=2)
+
+    fwd = dists.min(dim=1)[0].mean()
+    bwd = dists.min(dim=0)[0].mean()
+
+    return (fwd + bwd) / 2.0
+
+
+def frechet_distance(P, Q):
+    n, m = P.shape[0], Q.shape[0]
+    if n == 0 or m == 0:
+        return torch.tensor(0.0)
+
+    D = torch.cdist(P.unsqueeze(0).float(), Q.unsqueeze(0).float()).squeeze(0)
+
+    dp = torch.full((n, m), float('inf'), device=P.device)
+    dp[0, 0] = D[0, 0]
+
+    for i in range(1, n):
+        dp[i, 0] = max(dp[i - 1, 0].item(), D[i, 0].item())
+    for j in range(1, m):
+        dp[0, j] = max(dp[0, j - 1].item(), D[0, j].item())
+    for i in range(1, n):
+        for j in range(1, m):
+            dp[i, j] = max(
+                min(dp[i - 1, j].item(), dp[i, j - 1].item(), dp[i - 1, j - 1].item()),
+                D[i, j].item()
+            )
+
+    return dp[n - 1, m - 1]
+
+
+# ──────────────────────────────────────────────
 #  Dual-Representation Criterion (Surgical-GeMap v2)
 # ──────────────────────────────────────────────
 

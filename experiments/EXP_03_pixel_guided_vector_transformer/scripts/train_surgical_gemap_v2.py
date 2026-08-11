@@ -48,8 +48,11 @@ try:
         frechet_distance,
     )
 except ImportError:
-    from models.surgical_gemap_v2 import SurgicalGeMapV2
-    from models.vector_losses import (
+    models_dir = os.path.join(EXP_DIR, 'models')
+    if models_dir not in sys.path:
+        sys.path.insert(0, models_dir)
+    from surgical_gemap_v2 import SurgicalGeMapV2
+    from vector_losses import (
         SurgicalGeMapV2Criterion,
         chamfer_distance,
         frechet_distance,
