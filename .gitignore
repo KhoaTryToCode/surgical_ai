@@ -1,0 +1,21 @@
+# Heavy Data & Model Weights Isolation
+data/*
+!data/.gitkeep
+checkpoints/*
+!checkpoints/.gitkeep
+*.pth
+*.pt
+*.onnx
+*.tar.gz
+
+# Python & System
+__pycache__/
+*.pyc
+.venv/
+env/
+.DS_Store
+
+# Execution Logs & Heavy Results
+*.log
+wandb/
+runs/

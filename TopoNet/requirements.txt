@@ -1,9 +1,0 @@
-pybind11
-pytorch-metric-learning
-medpy
-surface-distance @ git+https://github.com/google-deepmind/surface-distance.git
-timm
-einops
-scikit-image
-opencv-python
-tqdm
