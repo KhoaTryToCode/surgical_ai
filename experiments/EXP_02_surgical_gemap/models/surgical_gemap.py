@@ -362,10 +362,9 @@ class SurgicalGeMap(nn.Module):
         # Point-level queries: (K, D) — shared across all instances
         self.point_query = nn.Embedding(K, embed_dim)
 
-        # ── Initial reference points ──
-        # Learnable initial positions for each query point
-        self.reference_points = nn.Embedding(N * K, 2)
-        nn.init.uniform_(self.reference_points.weight, 0.0, 1.0)
+        # ── Dynamic Reference Point Head ──
+        # Predicts initial (N, K, 2) control points directly from instance queries
+        self.ref_point_head = nn.Linear(embed_dim, K * 2)
 
         # ── Transformer Decoder ──
         self.decoder_layers = nn.ModuleList([
@@ -396,7 +395,7 @@ class SurgicalGeMap(nn.Module):
 
     def _init_weights(self):
         """Initialize classification and regression heads."""
-        for module in [self.cls_head]:
+        for module in [self.cls_head, self.ref_point_head]:
             for m in module.modules():
                 if isinstance(m, nn.Linear):
                     nn.init.xavier_uniform_(m.weight)
@@ -412,24 +411,25 @@ class SurgicalGeMap(nn.Module):
 
     def _build_query(self, B, device):
         """
-        Construct initial polyline queries by combining instance-level
-        and point-level embeddings.
+        Construct initial polyline queries and dynamically predict
+        initial reference points from instance queries.
 
         Returns:
             query: (B, N*K, D)
             ref_pts: (B, N*K, 2) initial reference point positions
         """
-        # Instance embedding: (N, D) → (N, 1, D) → (N, K, D)
-        inst_emb = self.instance_query.weight.unsqueeze(1).expand(-1, self.K, -1)
-        # Point embedding: (K, D) → (1, K, D) → (N, K, D)
-        pt_emb = self.point_query.weight.unsqueeze(0).expand(self.N, -1, -1)
-        # Combined: (N, K, D) → (N*K, D)
-        query = (inst_emb + pt_emb).reshape(self.N * self.K, self.embed_dim)
+        # Instance embedding: (N, D)
+        inst_emb = self.instance_query.weight
+        # Point embedding: (K, D)
+        pt_emb = self.point_query.weight
+
+        # Combined query: (N, K, D) → (N*K, D) → (B, N*K, D)
+        query = (inst_emb.unsqueeze(1) + pt_emb.unsqueeze(0)).reshape(self.N * self.K, self.embed_dim)
         query = query.unsqueeze(0).expand(B, -1, -1)  # (B, N*K, D)
 
-        # Reference points: (N*K, 2) → (B, N*K, 2)
-        ref_pts = self.reference_points.weight.sigmoid()
-        ref_pts = ref_pts.unsqueeze(0).expand(B, -1, -1)
+        # Dynamic initial reference points: (N, D) → (N, K*2) → (B, N*K, 2)
+        ref_pts = self.ref_point_head(inst_emb).sigmoid().reshape(self.N * self.K, 2)
+        ref_pts = ref_pts.unsqueeze(0).expand(B, -1, -1)  # (B, N*K, 2)
 
         return query, ref_pts
 
