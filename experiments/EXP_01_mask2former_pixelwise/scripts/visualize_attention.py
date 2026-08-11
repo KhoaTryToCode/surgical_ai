@@ -7,8 +7,21 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoImageProcessor, Mask2FormerForUniversalSegmentation
 
-from utils.prepare_dataset import get_split
-from utils.dataset import load_image, load_mask
+# ── Setup paths ──
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+EXP_DIR = os.path.dirname(SCRIPT_DIR)
+REPO_ROOT = os.path.dirname(os.path.dirname(EXP_DIR))
+
+for p in [SCRIPT_DIR, os.path.join(EXP_DIR, 'models'), os.path.join(REPO_ROOT, 'shared'), REPO_ROOT]:
+    if os.path.exists(p) and p not in sys.path:
+        sys.path.insert(0, p)
+
+try:
+    from utils.prepare_dataset import get_split
+    from utils.dataset import load_image, load_mask
+except ImportError:
+    from shared.utils.prepare_dataset import get_split
+    from shared.utils.dataset import load_image, load_mask
 
 def disable_masked_attention(model):
     """Disables Masked Attention in Transformer Decoder for Full Global Attention mode."""

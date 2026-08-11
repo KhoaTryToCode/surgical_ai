@@ -19,7 +19,13 @@ try:
 except ImportError:
     skeletonize = None
 
-from utils.vector_dataset import resample_polyline
+try:
+    from utils.vector_dataset import resample_polyline
+except ImportError:
+    try:
+        from shared.utils.vector_dataset import resample_polyline
+    except ImportError:
+        from .vector_dataset import resample_polyline
 
 
 def _trace_skeleton_component(skeleton_mask):

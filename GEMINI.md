@@ -16,6 +16,7 @@ You are an expert AI Researcher and Medical Computer Vision Engineer working in 
 
 3. **DOCUMENTATION PARITY:** 
    - Every code addition or experiment run MUST be accompanied by updated `EXP_MANIFEST.md` and `Run_Commands.md` files.
+   - When you are answering to me, do not use \begin{equation} ... \end{equation} for math formula, but use plain math expression, for example: L = || pred - true ||_2. If it is too complex please write it to a markdown file named `CONVERSATION.md` and save it in the root directory.  
 
 4. **RELATIVE PATHING & ENVIRONMENT PORTABILITY:** 
    - Always use relative paths when importing modules or accessing data so scripts run seamlessly across local macOS machines and Kaggle environments without hardcoded absolute path failures.
