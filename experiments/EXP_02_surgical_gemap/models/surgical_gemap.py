@@ -142,6 +142,42 @@ class PositionalEncoding2D(nn.Module):
         return self.pe[:, :, :x.shape[2], :x.shape[3]]
 
 
+class PointPositionalEncoding2D(nn.Module):
+    """Sinusoidal 2D positional encoding for continuous reference point coordinates [0, 1]."""
+
+    def __init__(self, embed_dim=256, temperature=10000):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.num_pos_feats = embed_dim // 2
+        self.temperature = temperature
+        self.mlp = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(embed_dim, embed_dim),
+        )
+
+    def forward(self, pts):
+        """
+        Args:
+            pts: (B, N*K, 2) normalized coordinates in [0, 1]
+
+        Returns:
+            (B, N*K, embed_dim) positional embeddings
+        """
+        device = pts.device
+        dim_t = torch.arange(self.num_pos_feats, dtype=torch.float32, device=device)
+        dim_t = self.temperature ** (2 * torch.div(dim_t, 2, rounding_mode='floor') / self.num_pos_feats)
+
+        x_embed = pts[:, :, 0:1] * 2 * math.pi / dim_t
+        y_embed = pts[:, :, 1:2] * 2 * math.pi / dim_t
+
+        pos_x = torch.stack((x_embed[:, :, 0::2].sin(), x_embed[:, :, 1::2].cos()), dim=-1).flatten(-2)
+        pos_y = torch.stack((y_embed[:, :, 0::2].sin(), y_embed[:, :, 1::2].cos()), dim=-1).flatten(-2)
+
+        pos = torch.cat((pos_x, pos_y), dim=-1)
+        return self.mlp(pos)
+
+
 # ──────────────────────────────────────────────
 #  Geometry-Decoupled Attention (GDA)
 # ──────────────────────────────────────────────
@@ -161,39 +197,37 @@ class GeometryDecoupledAttention(nn.Module):
         self.num_instances = num_instances
         self.num_pts = num_pts
 
-        # Intra-instance attention (points within same polyline)
+        # Intra-instance attention (along K points per polyline)
         self.intra_attn = nn.MultiheadAttention(
             embed_dim, num_heads, dropout=dropout, batch_first=True
         )
         self.intra_norm1 = nn.LayerNorm(embed_dim)
         self.intra_ffn = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim * 4),
+            nn.Linear(embed_dim, embed_dim * 2),
             nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.Linear(embed_dim * 4, embed_dim),
+            nn.Linear(embed_dim * 2, embed_dim),
         )
         self.intra_norm2 = nn.LayerNorm(embed_dim)
 
-        # Inter-instance attention (between polylines)
+        # Inter-instance attention (along N polylines)
         self.inter_attn = nn.MultiheadAttention(
             embed_dim, num_heads, dropout=dropout, batch_first=True
         )
         self.inter_norm1 = nn.LayerNorm(embed_dim)
         self.inter_ffn = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim * 4),
+            nn.Linear(embed_dim, embed_dim * 2),
             nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.Linear(embed_dim * 4, embed_dim),
+            nn.Linear(embed_dim * 2, embed_dim),
         )
         self.inter_norm2 = nn.LayerNorm(embed_dim)
 
     def forward(self, query):
         """
         Args:
-            query: (B, N*K, D) flattened polyline queries
+            query: (B, N*K, D)
 
         Returns:
-            (B, N*K, D) updated queries
+            (B, N*K, D) updated query with geometry-decoupled attention
         """
         B, NK, D = query.shape
         N = self.num_instances
@@ -230,7 +264,7 @@ class SurgicalGeMapDecoderLayer(nn.Module):
     """
     Single decoder layer:
     1. Geometry-Decoupled Self-Attention (GDA)
-    2. Cross-Attention to spatial tokens
+    2. Cross-Attention with 2D Query Positional Embedding
     3. FFN
     """
 
@@ -260,12 +294,13 @@ class SurgicalGeMapDecoderLayer(nn.Module):
         )
         self.ffn_norm = nn.LayerNorm(embed_dim)
 
-    def forward(self, query, spatial_tokens, spatial_pos=None):
+    def forward(self, query, spatial_tokens, spatial_pos=None, query_pos=None):
         """
         Args:
             query: (B, N*K, D)
             spatial_tokens: (B, HW, D) flattened spatial features
             spatial_pos: (B, HW, D) positional encoding for spatial tokens
+            query_pos: (B, N*K, D) positional encoding for reference points
 
         Returns:
             (B, N*K, D) updated queries
@@ -273,9 +308,10 @@ class SurgicalGeMapDecoderLayer(nn.Module):
         # 1. Geometry-Decoupled Self-Attention
         query = self.gda(query)
 
-        # 2. Cross-Attention
+        # 2. Cross-Attention with 2D Query Positional Embedding
+        q = query + query_pos if query_pos is not None else query
         k = spatial_tokens + spatial_pos if spatial_pos is not None else spatial_tokens
-        cross_out, _ = self.cross_attn(query, k, spatial_tokens)
+        cross_out, _ = self.cross_attn(q, k, spatial_tokens)
         query = self.cross_norm(query + cross_out)
 
         # 3. FFN
@@ -353,9 +389,10 @@ class SurgicalGeMap(nn.Module):
             out_channels=embed_dim
         )
 
-        # ── Positional Encoding ──
+        # ── Positional Encodings ──
         self.pos_enc = PositionalEncoding2D(embed_dim, max_h=img_size // 4,
                                             max_w=img_size // 4)
+        self.ref_point_pos_enc = PointPositionalEncoding2D(embed_dim)
 
         # ── Learnable polyline queries ──
         # Instance-level queries: (N, D)
@@ -449,12 +486,10 @@ class SurgicalGeMap(nn.Module):
         # ── Backbone ──
         features = self.backbone(x)
 
-        # ── FPN ──
-        fused = self.pixel_decoder(features)  # (B, D, H/4, W/4) -> (B, 256, 256, 256)
+        # ── FPN Pixel Decoder (stride 4, 256x256) ──
+        fused = self.pixel_decoder(features)  # (B, D, 256, 256)
 
         # ── Downsample for Cross-Attention (prevents OOM) ──
-        # 256x256 = 65,536 tokens causes GPU OOM in MultiheadAttention.
-        # Downsampling to 64x64 = 4,096 tokens reduces attention VRAM by 256x!
         spatial_feat = F.adaptive_avg_pool2d(fused, (64, 64))  # (B, D, 64, 64)
 
         # ── Spatial tokens ──
@@ -470,10 +505,23 @@ class SurgicalGeMap(nn.Module):
         intermediate_pts = []
 
         for layer, refine_head in zip(self.decoder_layers, self.point_refine_heads):
-            query = layer(query, spatial_tokens, spatial_pos)
+            # 1. 2D Sinusoidal Positional Encoding for current ref_pts (DAB-DETR)
+            query_pos = self.ref_point_pos_enc(ref_pts)
 
-            # Point refinement
-            offsets = refine_head(query)  # (B, N*K, 2)
+            # 2. Decoder layer (GDA + Cross-Attention + FFN)
+            query = layer(query, spatial_tokens, spatial_pos, query_pos=query_pos)
+
+            # 3. Point-Sampled Feature Extraction from high-res FPN (stride 4)
+            # Grid sample expects coordinates in [-1, 1]
+            grid = ref_pts.unsqueeze(2) * 2.0 - 1.0  # (B, N*K, 1, 2)
+            point_feats = F.grid_sample(
+                fused, grid, mode='bilinear', padding_mode='border', align_corners=False
+            ).squeeze(3).permute(0, 2, 1)  # (B, N*K, D)
+
+            # 4. Point refinement with combined global query + local point features
+            offsets = refine_head(query + point_feats)  # (B, N*K, 2)
+            offsets = torch.tanh(offsets) * 0.15        # Bounded step size (max 15% per layer)
+
             ref_pts_raw = self._inverse_sigmoid(ref_pts)
             new_ref_pts = (ref_pts_raw + offsets).sigmoid()
 
