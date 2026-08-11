@@ -58,31 +58,41 @@ class HungarianMatcher(nn.Module):
                 ))
                 continue
 
-            # Extract valid GT for this sample
-            gt_cls_b = gt_labels[b, :M]     # (M,)
-            gt_pts_b_fwd = gt_pts[b, :M]    # (M, K, 2)
-            gt_pts_b_rev = torch.flip(gt_pts_b_fwd, dims=[1])  # (M, K, 2) reversed
+            # Force float32 for cost matrix computation to avoid AMP float16 overflow
+            with torch.amp.autocast('cuda', enabled=False):
+                pred_logits_f32 = pred_logits[b].float()
+                pred_pts_f32 = pred_pts[b].float()
 
-            # Classification cost: negative probability of GT class
-            pred_prob = pred_logits[b].softmax(-1)  # (N, num_classes)
-            cls_cost = -pred_prob[:, gt_cls_b]       # (N, M)
+                # Extract valid GT for this sample
+                gt_cls_b = gt_labels[b, :M]     # (M,)
+                gt_pts_b_fwd = gt_pts[b, :M].float()    # (M, K, 2)
+                gt_pts_b_rev = torch.flip(gt_pts_b_fwd, dims=[1])  # (M, K, 2) reversed
 
-            # Point L1 cost: forward vs reverse
-            pts_cost_fwd = torch.cdist(
-                pred_pts[b].flatten(1), gt_pts_b_fwd.flatten(1), p=1
-            ) / (pred_pts.shape[2] * 2)
+                # Classification cost: negative probability of GT class
+                pred_prob = pred_logits_f32.softmax(-1)  # (N, num_classes)
+                cls_cost = -pred_prob[:, gt_cls_b]       # (N, M)
 
-            pts_cost_rev = torch.cdist(
-                pred_pts[b].flatten(1), gt_pts_b_rev.flatten(1), p=1
-            ) / (pred_pts.shape[2] * 2)
+                # Point L1 cost: forward vs reverse
+                pts_cost_fwd = torch.cdist(
+                    pred_pts_f32.flatten(1), gt_pts_b_fwd.flatten(1), p=1
+                ) / (pred_pts.shape[2] * 2)
 
-            # Bi-directional min matching
-            pts_cost_stacked = torch.stack([pts_cost_fwd, pts_cost_rev], dim=-1)  # (N, M, 2)
-            pts_cost, is_rev_matrix = torch.min(pts_cost_stacked, dim=-1)          # (N, M), (N, M)
+                pts_cost_rev = torch.cdist(
+                    pred_pts_f32.flatten(1), gt_pts_b_rev.flatten(1), p=1
+                ) / (pred_pts.shape[2] * 2)
 
-            # Total cost
-            cost = self.cls_weight * cls_cost + self.pts_weight * pts_cost
+                # Bi-directional min matching
+                pts_cost_stacked = torch.stack([pts_cost_fwd, pts_cost_rev], dim=-1)  # (N, M, 2)
+                pts_cost, is_rev_matrix = torch.min(pts_cost_stacked, dim=-1)          # (N, M), (N, M)
+
+                # Total cost
+                cost = self.cls_weight * cls_cost + self.pts_weight * pts_cost
+
             cost = cost.detach().cpu().numpy()
+
+            # Guard against any remaining NaN/Inf
+            if not np.isfinite(cost).all():
+                cost = np.nan_to_num(cost, nan=1e6, posinf=1e6, neginf=-1e6)
 
             row_ind, col_ind = linear_sum_assignment(cost)
             is_rev_matched = is_rev_matrix[row_ind, col_ind].bool()
