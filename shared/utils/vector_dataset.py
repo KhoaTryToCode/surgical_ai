@@ -89,7 +89,7 @@ def _classify_label(label_str: str) -> int:
     return 0
 
 
-def load_json_vectors(path: str, K: int = 20):
+def load_json_vectors(path: str, K: int = 20, default_h: int = 1080, default_w: int = 1920):
     """
     Extract polyline vectors from a JSON annotation file.
 
@@ -101,8 +101,8 @@ def load_json_vectors(path: str, K: int = 20):
     with open(path, 'r') as f:
         data = json.load(f)
 
-    img_h = data.get('imageHeight', 1080)
-    img_w = data.get('imageWidth', 1920)
+    img_h = data.get('imageHeight', default_h)
+    img_w = data.get('imageWidth', default_w)
 
     polylines = []
     classes = []
@@ -122,24 +122,25 @@ def load_json_vectors(path: str, K: int = 20):
     return polylines, classes, img_h, img_w
 
 
-def load_xml_vectors(path: str, K: int = 20):
+def load_xml_vectors(path: str, K: int = 20, default_h: int = 1080, default_w: int = 1920):
     """
     Extract polyline vectors from an XML annotation file.
 
     Returns:
         polylines: list of (K, 2) np.ndarray in pixel coordinates
         classes: list of int class labels {1, 2, 3}
-        img_h, img_w: fixed to 1080×1920 (XML format convention)
+        img_h, img_w: image dimensions from fallback
     """
     tree = ET.parse(path)
     root = tree.getroot()
 
-    img_h, img_w = 1080, 1920
+    img_h, img_w = default_h, default_w
     polylines = []
     classes = []
 
     for contour in root.findall('contour'):
-        ctype = contour.find('contourType').text.strip()
+        ctype_elem = contour.find('contourType')
+        ctype = ctype_elem.text.strip() if ctype_elem is not None else ''
 
         if ctype == 'Ridge':
             cls = 1
@@ -271,9 +272,9 @@ class VectorLandmarkDataset(Dataset):
         xml_path = os.path.splitext(base_path)[0] + '.xml'
 
         if os.path.exists(json_path):
-            polylines, classes, ann_h, ann_w = load_json_vectors(json_path, self.K)
+            polylines, classes, ann_h, ann_w = load_json_vectors(json_path, self.K, default_h=orig_h, default_w=orig_w)
         elif os.path.exists(xml_path):
-            polylines, classes, ann_h, ann_w = load_xml_vectors(xml_path, self.K)
+            polylines, classes, ann_h, ann_w = load_xml_vectors(xml_path, self.K, default_h=orig_h, default_w=orig_w)
         else:
             polylines, classes = [], []
             ann_h, ann_w = orig_h, orig_w
