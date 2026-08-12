@@ -3,11 +3,12 @@ Surgical-BeMapTR: Pure Vectorized Landmark Segmentation Model for Laparoscopic S
 
 Combines:
 1. BeMapNet (CVPR 2023): Piecewise Bézier Curve parameterization <k=3, n=3> (10 control handles)
-   and Bernstein basis matrix multiplication (P = B * C) for smooth curve restoration.
+   with End-to-End Endpoint Linear Interpolation (lerp) + Curvature Offsets,
+   restored via Bernstein basis matrix multiplication (P = B * C).
 2. MapTRv2 (TPAMI 2024): Hierarchical Queries (q_ins + q_pt), Decoupled Self-Attention (GDA),
    2D Sinusoidal Point Positional Encoding (query_pos), and Point-Sampled grid_sample FPN feature extraction.
 
-Pure Vector Architecture: Outputs ordered polyline control points (no secondary pixel head required).
+Guarantees smooth, ordered, continuous anatomical vector curves (no zig-zag star loops!).
 """
 
 import math
@@ -53,7 +54,6 @@ def compute_piecewise_bernstein_matrix(k=3, n=3, m_total=20, device=None):
         row_end = row_start + pts_per_piece
         B_global[row_start:row_end, start_ctrl:end_ctrl] = B_single
 
-    # Resample rows to exact m_total size if needed
     if B_global.shape[0] != m_total:
         indices = torch.linspace(0, B_global.shape[0] - 1, m_total, device=device).long()
         B_global = B_global[indices]
@@ -246,7 +246,7 @@ class SurgicalBeMapTRDecoderLayer(nn.Module):
 
 
 class PiecewiseBezierHead(nn.Module):
-    """Predicts offsets for Piecewise Bézier control points (n*k + 1 points)."""
+    """Predicts curvature offsets for Piecewise Bézier control points."""
     def __init__(self, embed_dim=256):
         super().__init__()
         self.mlp = nn.Sequential(
@@ -309,10 +309,14 @@ class SurgicalBeMapTR(nn.Module):
         self.instance_query = nn.Embedding(N, embed_dim)
         self.point_query = nn.Embedding(self.num_ctrl_pts, embed_dim)
 
-        # 4. Dynamic Reference Point Head
-        self.ref_point_head = nn.Linear(embed_dim, self.num_ctrl_pts * 2)
+        # 4. Endpoint Head: Predicts (x_start, y_start, x_end, y_end) per instance
+        self.endpoint_head = nn.Linear(embed_dim, 4)
 
-        # 5. Transformer Decoder Layers
+        # 5. Precomputed lerp time steps t in [0, 1] for 10 control points
+        t_steps = torch.linspace(0.0, 1.0, self.num_ctrl_pts).unsqueeze(1)  # (10, 1)
+        self.register_buffer('t_steps', t_steps)
+
+        # 6. Transformer Decoder Layers
         self.decoder_layers = nn.ModuleList([
             SurgicalBeMapTRDecoderLayer(
                 embed_dim=embed_dim, num_heads=num_heads,
@@ -331,7 +335,7 @@ class SurgicalBeMapTR(nn.Module):
             nn.Linear(embed_dim, num_classes),
         )
 
-        # 6. Precomputed Bernstein Basis Matrix B of shape (K_dense, num_ctrl_pts)
+        # 7. Precomputed Bernstein Basis Matrix B of shape (K_dense, num_ctrl_pts)
         B_matrix = compute_piecewise_bernstein_matrix(
             k=self.bezier_k, n=self.bezier_n, m_total=self.K_dense
         )
@@ -340,7 +344,7 @@ class SurgicalBeMapTR(nn.Module):
         self._init_weights()
 
     def _init_weights(self):
-        for module in [self.cls_head, self.ref_point_head]:
+        for module in [self.cls_head, self.endpoint_head]:
             for m in module.modules():
                 if isinstance(m, nn.Linear):
                     nn.init.xavier_uniform_(m.weight)
@@ -354,25 +358,28 @@ class SurgicalBeMapTR(nn.Module):
                     if m.bias is not None:
                         nn.init.zeros_(m.bias)
 
-    def _build_query(self, B, device):
-        inst_emb = self.instance_query.weight
-        pt_emb = self.point_query.weight
+    def _build_initial_control_points(self, inst_emb, B):
+        """
+        Predicts ordered initial control points C^0 via lerp(P_start, P_end)
+        Returns:
+            ref_pts: (B, N * num_ctrl_pts, 2) in [0, 1]
+        """
+        endpoints = self.endpoint_head(inst_emb).sigmoid()  # (N, 4) -> [x_start, y_start, x_end, y_end]
+        p_start = endpoints[:, :2]  # (N, 2)
+        p_end = endpoints[:, 2:]    # (N, 2)
 
-        query = (inst_emb.unsqueeze(1) + pt_emb.unsqueeze(0)).reshape(self.N * self.num_ctrl_pts, self.embed_dim)
-        query = query.unsqueeze(0).expand(B, -1, -1)
+        # lerp: C_j = (1 - t_j) * P_start + t_j * P_end
+        # t_steps is (10, 1), p_start is (N, 2) -> ctrl_pts is (N, 10, 2)
+        ctrl_base = (1.0 - self.t_steps.unsqueeze(0)) * p_start.unsqueeze(1) + self.t_steps.unsqueeze(0) * p_end.unsqueeze(1)
 
-        ref_pts = self.ref_point_head(inst_emb).sigmoid().reshape(self.N * self.num_ctrl_pts, 2)
-        ref_pts = ref_pts.unsqueeze(0).expand(B, -1, -1)
-
-        return query, ref_pts
+        ref_pts = ctrl_base.reshape(self.N * self.num_ctrl_pts, 2)
+        return ref_pts.unsqueeze(0).expand(B, -1, -1)
 
     def restore_curve(self, ctrl_pts):
         """
         Multiplies control points by Bernstein basis matrix: P = B * C.
         ctrl_pts: (..., num_ctrl_pts, 2) -> returns (..., K_dense, 2)
         """
-        # B_matrix is (K_dense, num_ctrl_pts)
-        # ctrl_pts is (B, N, num_ctrl_pts, 2)
         return torch.matmul(self.B_matrix, ctrl_pts)
 
     def forward(self, x):
@@ -388,8 +395,14 @@ class SurgicalBeMapTR(nn.Module):
         spatial_tokens = spatial_feat.flatten(2).permute(0, 2, 1)
         spatial_pos = self.pos_enc(spatial_feat).flatten(2).permute(0, 2, 1).expand(B, -1, -1)
 
-        # ── 3. Build Queries ──
-        query, ref_pts = self._build_query(B, device)
+        # ── 3. Build Hierarchical Queries & Ordered Base Control Points ──
+        inst_emb = self.instance_query.weight
+        pt_emb = self.point_query.weight
+
+        query = (inst_emb.unsqueeze(1) + pt_emb.unsqueeze(0)).reshape(self.N * self.num_ctrl_pts, self.embed_dim)
+        query = query.unsqueeze(0).expand(B, -1, -1)
+
+        ref_pts = self._build_initial_control_points(inst_emb, B)
 
         # ── 4. Decoder Layers with Iterative Refinement & Bernstein Restoration ──
         intermediate_logits = []
@@ -406,9 +419,9 @@ class SurgicalBeMapTR(nn.Module):
                 fused, grid, mode='bilinear', padding_mode='border', align_corners=False
             ).squeeze(3).permute(0, 2, 1)
 
-            # Refinement offsets bounded by tanh
+            # Curvature offsets bounded by tanh
             offsets = refine_head(query + point_feats)
-            offsets = torch.tanh(offsets) * 0.15
+            offsets = torch.tanh(offsets) * 0.10
 
             ref_pts_raw = self._inverse_sigmoid(ref_pts)
             new_ref_pts = (ref_pts_raw + offsets).sigmoid()
@@ -423,7 +436,7 @@ class SurgicalBeMapTR(nn.Module):
             intermediate_ctrl_pts.append(layer_ctrl_pts)
             intermediate_restored_pts.append(layer_restored_pts)
 
-            ref_pts = new_ref_pts.detach()
+            ref_pts = new_ref_pts
 
         if self.training:
             return intermediate_logits, intermediate_ctrl_pts, intermediate_restored_pts
