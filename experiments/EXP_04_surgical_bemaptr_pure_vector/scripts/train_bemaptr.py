@@ -99,14 +99,19 @@ def parse_args():
 #  Prediction Extraction & Evaluation Helpers
 # ──────────────────────────────────────────────
 
-def extract_predictions(pred_logits, pred_restored_pts, conf_threshold=0.3):
+def extract_predictions(pred_logits, pred_restored_pts, conf_threshold=0.05):
+    """
+    Extracts candidate polylines for evaluation.
+    Selects all non-background queries (class 1, 2, or 3) where top predicted class != 0 (Background)
+    and probability exceeds conf_threshold (default 0.05).
+    """
     probs = F.softmax(pred_logits, dim=-1)
-    conf, classes = torch.max(probs[:, 1:], dim=-1)
-    classes = classes + 1
+    pred_cls = torch.argmax(probs, dim=-1)
+    top_prob = probs.max(dim=-1)[0]
 
-    keep = conf > conf_threshold
+    keep = (pred_cls > 0) & (top_prob > conf_threshold)
     polylines = pred_restored_pts[keep].detach().cpu().numpy()
-    cls_list = classes[keep].detach().cpu().numpy().tolist()
+    cls_list = pred_cls[keep].detach().cpu().numpy().tolist()
 
     return polylines, cls_list
 
