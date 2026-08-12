@@ -112,14 +112,21 @@ class FocalLoss(nn.Module):
 #  Direction Cosine Loss
 # ──────────────────────────────────────────────
 
-def direction_cosine_loss(pred_pts, gt_pts):
+def direction_cosine_loss(pred_pts, gt_pts, eps=1e-5):
+    """
+    Numerically stable Cosine Similarity Loss on edge vectors.
+    Uses sqrt(sum(x^2) + eps) inside norm to avoid 0/0 NaN autograd derivatives.
+    """
     pred_dirs = pred_pts[:, 1:, :] - pred_pts[:, :-1, :]
     gt_dirs = gt_pts[:, 1:, :] - gt_pts[:, :-1, :]
 
-    pred_dirs_norm = F.normalize(pred_dirs, p=2, dim=-1, eps=1e-6)
-    gt_dirs_norm = F.normalize(gt_dirs, p=2, dim=-1, eps=1e-6)
+    pred_norm = torch.sqrt((pred_dirs ** 2).sum(dim=-1, keepdim=True) + eps)
+    gt_norm = torch.sqrt((gt_dirs ** 2).sum(dim=-1, keepdim=True) + eps)
 
-    cos_sim = (pred_dirs_norm * gt_dirs_norm).sum(dim=-1)
+    pred_unit = pred_dirs / pred_norm
+    gt_unit = gt_dirs / gt_norm
+
+    cos_sim = (pred_unit * gt_unit).sum(dim=-1)
     return (1.0 - cos_sim).mean()
 
 
@@ -203,18 +210,16 @@ class SurgicalBeMapTRCriterion(nn.Module):
         # Hungarian matching evaluated on restored curve points
         matches = self.matcher(pred_logits, pred_restored_pts, gt_labels, gt_pts, num_instances)
 
-        target_cls = torch.zeros_like(pred_logits)
+        target_cls_labels = torch.zeros((B, self.N), dtype=torch.long, device=device)
         matched_pred_restored = []
         matched_gt_pts = []
 
         total_gt_instances = sum(num_instances).item()
-        if total_gt_instances == 0:
-            total_gt_instances = 1
 
         for b, (pred_idx, gt_idx, is_rev) in enumerate(matches):
             if len(pred_idx) > 0:
-                gt_classes = gt_labels[b, gt_idx.to(device)]
-                target_cls[b, pred_idx.to(device), gt_classes] = 1.0
+                gt_classes = gt_labels[b, gt_idx.to(device)].long()
+                target_cls_labels[b, pred_idx.to(device)] = gt_classes
 
                 pred_pts_b = pred_restored_pts[b, pred_idx.to(device)]
                 gt_pts_b = gt_pts[b, gt_idx.to(device)].to(device)
@@ -226,7 +231,8 @@ class SurgicalBeMapTRCriterion(nn.Module):
                 matched_pred_restored.append(pred_pts_b)
                 matched_gt_pts.append(gt_pts_b)
 
-        loss_cls = self.focal_loss(pred_logits, target_cls)
+        # CrossEntropyLoss: dim 1 is num_classes=4 (0: Background, 1: Ridge, 2: Silhouette, 3: Ligament)
+        loss_cls = F.cross_entropy(pred_logits.permute(0, 2, 1), target_cls_labels)
 
         if len(matched_pred_restored) > 0:
             all_pred_curve = torch.cat(matched_pred_restored, dim=0)
