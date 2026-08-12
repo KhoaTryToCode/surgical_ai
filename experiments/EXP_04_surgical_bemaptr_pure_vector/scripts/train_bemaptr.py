@@ -119,7 +119,7 @@ def extract_predictions(pred_logits, pred_restored_pts, conf_threshold=0.05):
 def compute_pixel_metrics(polylines_list, cls_list, gt_mask_4ch, img_size=1024):
     """Rasterizes predicted restored polylines to compute Dice, IoU, and ASSD."""
     pred_mask = rasterize_normalized_polylines(
-        polylines_list, cls_list, H=img_size, W=img_size, thickness=35
+        polylines_list, cls_list, H=img_size, W=img_size, thickness=19
     )
 
     gt_4ch = gt_mask_4ch.cpu().numpy()

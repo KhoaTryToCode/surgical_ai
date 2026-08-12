@@ -194,7 +194,7 @@ def rasterize_polylines(polylines, classes, H=1024, W=1024,
 
 
 def rasterize_normalized_polylines(polylines_norm, classes, H=1024, W=1024,
-                                   thickness=35):
+                                   thickness=19):
     """
     Rasterize normalized [0,1] polylines into pixel mask.
 
