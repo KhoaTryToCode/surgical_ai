@@ -76,8 +76,11 @@ def inspect_and_visualize(ckpt_path, data_path, output_dir='val_visualizations',
     device = torch.device(device if torch.cuda.is_available() else 'cpu')
     print(f"Device: {device}")
 
-    # 1. Load Checkpoint
-    checkpoint = torch.load(ckpt_path, map_location=device)
+    # 1. Load Checkpoint (with weights_only=False for PyTorch 2.6 compatibility)
+    try:
+        checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
+    except TypeError:
+        checkpoint = torch.load(ckpt_path, map_location=device)
     print(f"Loaded Epoch {checkpoint.get('epoch', 'N/A')} checkpoint with Best Val Dice: {checkpoint.get('best_dice', 0.0):.4f}")
 
     # 2. Build Model
