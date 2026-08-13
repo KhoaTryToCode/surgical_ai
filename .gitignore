@@ -8,6 +8,12 @@ checkpoints/*
 *.onnx
 *.tar.gz
 
+# Cloned External Repositories & Literature PDFs
+repos/*
+!repos/.gitkeep
+papers/*
+!papers/.gitkeep
+
 # Python & System
 __pycache__/
 *.pyc
@@ -19,3 +25,4 @@ env/
 *.log
 wandb/
 runs/
+

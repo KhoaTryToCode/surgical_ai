@@ -1,14 +1,16 @@
 """
-Surgical-BeMapTR: Pure Vectorized Landmark Segmentation Model for Laparoscopic Surgery.
+Surgical-BeMapTR v2: Pure Vectorized Landmark Segmentation Model for Laparoscopic Surgery.
 
-Combines:
-1. BeMapNet (CVPR 2023): Piecewise Bézier Curve parameterization <k=3, n=3> (10 control handles)
-   with End-to-End Endpoint Linear Interpolation (lerp) + Curvature Offsets,
-   restored via Bernstein basis matrix multiplication (P = B * C).
-2. MapTRv2 (TPAMI 2024): Hierarchical Queries (q_ins + q_pt), Decoupled Self-Attention (GDA),
-   2D Sinusoidal Point Positional Encoding (query_pos), and Point-Sampled grid_sample FPN feature extraction.
+Comprehensive architecture addressing three root causes of poor predictions:
+1. BeMapNet Spatial Centroid Coordinate Head (einsum + GAP) — replaces MLP offset regression
+2. PyTorch-native Deformable Cross-Attention (grid_sample around ref points) — replaces vanilla attention
+3. Multi-scale FPN features for rich spatial context — replaces single-scale 64x64 pooling
 
-Guarantees smooth, ordered, continuous anatomical vector curves (no zig-zag star loops!).
+Architecture references:
+- BeMapNet (CVPR 2023): Spatial voting coordinate prediction via coords_head + einsum + GAP
+  [repos/BeMapNet/bemapnet/models/output_head/bezier_outputs.py]
+- MapTRv2 (TPAMI 2024): Hierarchical queries, GDA, deformable attention, iterative refinement
+  [repos/MapTR/projects/mmdet3d_plugin/maptr/modules/geometry_kernel_attention.py]
 """
 
 import math
@@ -24,8 +26,8 @@ import timm
 
 def compute_bernstein_basis(n=3, m=20, device=None):
     """
-    Computes Bernstein Basis Coefficient Matrix B of shape (m, n + 1) for a single Bézier curve of degree n.
-    b_{i, n}(t) = binom(n, i) * t^i * (1 - t)^(n - i),  t in [0, 1]
+    Computes Bernstein Basis Coefficient Matrix B of shape (m, n+1).
+    b_{i,n}(t) = C(n,i) * t^i * (1-t)^(n-i), t in [0, 1]
     """
     t = torch.linspace(0.0, 1.0, m, device=device).unsqueeze(1)  # (m, 1)
     B = []
@@ -33,16 +35,16 @@ def compute_bernstein_basis(n=3, m=20, device=None):
         binom = math.comb(n, i)
         poly = binom * (t ** i) * ((1.0 - t) ** (n - i))
         B.append(poly)
-    return torch.cat(B, dim=1)  # (m, n + 1)
+    return torch.cat(B, dim=1)  # (m, n+1)
 
 
 def compute_piecewise_bernstein_matrix(k=3, n=3, m_total=20, device=None):
     """
-    Computes global Bernstein matrix B_global of shape (m_total, n*k + 1) for a piecewise Bézier curve <k, n>.
-    With k=3 pieces of degree n=3, there are 10 control points in total.
+    Computes global Bernstein matrix B_global of shape (m_total, n*k+1)
+    for piecewise Bezier curve <k, n>.
     """
     pts_per_piece = max(2, m_total // k)
-    B_single = compute_bernstein_basis(n=n, m=pts_per_piece, device=device)  # (m_piece, n+1)
+    B_single = compute_bernstein_basis(n=n, m=pts_per_piece, device=device)
 
     num_control_pts = n * k + 1
     B_global = torch.zeros(k * pts_per_piece, num_control_pts, device=device)
@@ -58,7 +60,7 @@ def compute_piecewise_bernstein_matrix(k=3, n=3, m_total=20, device=None):
         indices = torch.linspace(0, B_global.shape[0] - 1, m_total, device=device).long()
         B_global = B_global[indices]
 
-    return B_global  # (m_total, n*k + 1)
+    return B_global  # (m_total, n*k+1)
 
 
 # ──────────────────────────────────────────────
@@ -87,10 +89,12 @@ class SwinTinyBackbone(nn.Module):
 
 
 # ──────────────────────────────────────────────
-#  FPN Pixel Decoder
+#  FPN Pixel Decoder (Multi-Scale Output)
 # ──────────────────────────────────────────────
 
 class FPNPixelDecoder(nn.Module):
+    """FPN that returns ALL scale levels for multi-scale deformable attention."""
+
     def __init__(self, in_channels_list=[96, 192, 384, 768], out_channels=256):
         super().__init__()
         self.lateral_convs = nn.ModuleList([
@@ -109,37 +113,16 @@ class FPNPixelDecoder(nn.Module):
                 laterals[i], size=target_size, mode='bilinear', align_corners=False
             )
         outs = [conv(lat) for conv, lat in zip(self.output_convs, laterals)]
-        return outs[0]  # finest FPN map (B, 256, 256, 256) at stride 4
+        return outs  # ALL levels: [P2, P3, P4, P5]
 
 
 # ──────────────────────────────────────────────
-#  Positional Encodings
+#  Point Positional Encoding (2D Sinusoidal)
 # ──────────────────────────────────────────────
-
-class PositionalEncoding2D(nn.Module):
-    def __init__(self, d_model, max_h=256, max_w=256):
-        super().__init__()
-        self.d_model = d_model
-        pe = torch.zeros(d_model, max_h, max_w)
-        half_d = d_model // 2
-
-        pos_h = torch.arange(0, max_h).unsqueeze(1).float()
-        div_h = torch.exp(torch.arange(0, half_d, 2).float() * -(math.log(10000.0) / half_d))
-        pe[0:half_d:2, :, :] = torch.sin(pos_h * div_h).transpose(0, 1).unsqueeze(2).expand(-1, -1, max_w)
-        pe[1:half_d:2, :, :] = torch.cos(pos_h * div_h).transpose(0, 1).unsqueeze(2).expand(-1, -1, max_w)
-
-        pos_w = torch.arange(0, max_w).unsqueeze(1).float()
-        div_w = torch.exp(torch.arange(0, half_d, 2).float() * -(math.log(10000.0) / half_d))
-        pe[half_d::2, :, :] = torch.sin(pos_w * div_w).transpose(0, 1).unsqueeze(1).expand(-1, max_h, -1)
-        pe[half_d + 1::2, :, :] = torch.cos(pos_w * div_w).transpose(0, 1).unsqueeze(1).expand(-1, max_h, -1)
-
-        self.register_buffer('pe', pe.unsqueeze(0))
-
-    def forward(self, x):
-        return self.pe[:, :, :x.shape[2], :x.shape[3]]
-
 
 class PointPositionalEncoding2D(nn.Module):
+    """Encodes 2D reference point (x, y) in [0,1] as sinusoidal positional embedding."""
+
     def __init__(self, embed_dim=256, temperature=10000):
         super().__init__()
         self.embed_dim = embed_dim
@@ -167,10 +150,107 @@ class PointPositionalEncoding2D(nn.Module):
 
 
 # ──────────────────────────────────────────────
+#  Deformable Cross-Attention (PyTorch-native)
+# ──────────────────────────────────────────────
+
+class DeformableCrossAttention(nn.Module):
+    """
+    PyTorch-native deformable cross-attention via F.grid_sample.
+
+    Instead of attending to all spatial tokens equally (vanilla attention),
+    each query samples K features at learned offsets around its reference point,
+    from multiple FPN scale levels. This provides focused, high-resolution
+    local context — matching MapTR's GeometryKernelAttention mechanism.
+
+    Reference: repos/MapTR/.../geometry_kernel_attention.py
+    """
+
+    def __init__(self, embed_dim=256, num_levels=3, num_points=8, dropout=0.1):
+        super().__init__()
+        self.num_levels = num_levels
+        self.num_points = num_points
+        total_pts = num_levels * num_points
+
+        # Per-query predicted sampling offsets around reference point
+        self.sampling_offsets = nn.Linear(embed_dim, total_pts * 2)
+        # Per-query attention weights over all sampled features
+        self.attention_weights = nn.Linear(embed_dim, total_pts)
+        # Per-level value projection (1x1 conv on FPN feature maps)
+        self.value_projs = nn.ModuleList([
+            nn.Conv2d(embed_dim, embed_dim, 1) for _ in range(num_levels)
+        ])
+        self.output_proj = nn.Linear(embed_dim, embed_dim)
+        self.dropout = nn.Dropout(dropout)
+
+        self._init_weights()
+
+    def _init_weights(self):
+        nn.init.zeros_(self.sampling_offsets.weight)
+        nn.init.zeros_(self.sampling_offsets.bias)
+        nn.init.zeros_(self.attention_weights.bias)
+        nn.init.xavier_uniform_(self.output_proj.weight)
+        nn.init.zeros_(self.output_proj.bias)
+
+    def forward(self, query, multi_scale_feats, ref_pts):
+        """
+        Args:
+            query: (B, Q, D)
+            multi_scale_feats: list of (B, D, H_l, W_l) for each FPN level
+            ref_pts: (B, Q, 2) in [0, 1]
+        Returns:
+            (B, Q, D)
+        """
+        B, Q, D = query.shape
+        L = min(self.num_levels, len(multi_scale_feats))
+        P = self.num_points
+
+        # Predict sampling offsets: small displacements around reference point
+        offsets = self.sampling_offsets(query).reshape(B, Q, L, P, 2)
+        offsets = offsets.tanh() * 0.1  # local neighborhood +/-10% of image
+
+        # Attention weights over all (level x point) samples
+        weights = self.attention_weights(query)
+        weights = weights.reshape(B, Q, L * P).softmax(-1)
+
+        # Sample features from each FPN level
+        all_samples = []
+        for lvl in range(L):
+            feat = self.value_projs[lvl](multi_scale_feats[lvl])  # (B, D, H_l, W_l)
+
+            # Sampling locations: ref_pt + offset, clamped to [0,1], converted to [-1,1]
+            locs = ref_pts.unsqueeze(2) + offsets[:, :, lvl, :, :]  # (B, Q, P, 2)
+            grid = locs.clamp(0, 1) * 2.0 - 1.0  # [0,1] -> [-1,1] for grid_sample
+            grid = grid.reshape(B, Q * P, 1, 2)
+
+            s = F.grid_sample(
+                feat, grid, mode='bilinear',
+                padding_mode='border', align_corners=False
+            )  # (B, D, Q*P, 1)
+            s = s.squeeze(-1).permute(0, 2, 1)  # (B, Q*P, D)
+            s = s.reshape(B, Q, P, D)
+            all_samples.append(s)
+
+        # Concatenate across levels: (B, Q, L*P, D)
+        sampled = torch.cat(all_samples, dim=2)
+
+        # Weighted aggregation
+        weights = weights.unsqueeze(-1)  # (B, Q, L*P, 1)
+        out = (sampled * weights).sum(dim=2)  # (B, Q, D)
+
+        return self.dropout(self.output_proj(out))
+
+
+# ──────────────────────────────────────────────
 #  Geometry-Decoupled Attention (GDA)
 # ──────────────────────────────────────────────
 
 class GeometryDecoupledAttention(nn.Module):
+    """
+    MapTRv2 Geometry-Decoupled Attention.
+    Intra-instance attention: points within the same polyline communicate.
+    Inter-instance attention: polyline-level features communicate across instances.
+    """
+
     def __init__(self, num_instances=30, num_pts=10, embed_dim=256, num_heads=8, dropout=0.1):
         super().__init__()
         self.num_instances = num_instances
@@ -215,17 +295,28 @@ class GeometryDecoupledAttention(nn.Module):
 
 
 # ──────────────────────────────────────────────
-#  Transformer Decoder Layer & Piecewise Head
+#  Transformer Decoder Layer
 # ──────────────────────────────────────────────
 
 class SurgicalBeMapTRDecoderLayer(nn.Module):
-    def __init__(self, embed_dim=256, num_heads=8, num_instances=30, num_pts=10, dropout=0.1):
+    """
+    Single decoder layer combining:
+    1. GDA self-attention (intra + inter instance reasoning)
+    2. Deformable cross-attention (focused sampling around reference points)
+    3. FFN
+    """
+
+    def __init__(self, embed_dim=256, num_heads=8, num_instances=30, num_pts=10,
+                 num_levels=3, num_sample_points=8, dropout=0.1):
         super().__init__()
         self.gda = GeometryDecoupledAttention(
             num_instances=num_instances, num_pts=num_pts,
             embed_dim=embed_dim, num_heads=num_heads, dropout=dropout
         )
-        self.cross_attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout, batch_first=True)
+        self.deform_cross_attn = DeformableCrossAttention(
+            embed_dim=embed_dim, num_levels=num_levels,
+            num_points=num_sample_points, dropout=dropout
+        )
         self.cross_norm = nn.LayerNorm(embed_dim)
         self.ffn = nn.Sequential(
             nn.Linear(embed_dim, embed_dim * 4),
@@ -235,42 +326,103 @@ class SurgicalBeMapTRDecoderLayer(nn.Module):
         )
         self.ffn_norm = nn.LayerNorm(embed_dim)
 
-    def forward(self, query, spatial_tokens, spatial_pos=None, query_pos=None):
+    def forward(self, query, multi_scale_feats, ref_pts, query_pos=None):
+        # 1. GDA self-attention
         query = self.gda(query)
+        # 2. Deformable cross-attention (ref-point-guided feature sampling)
         q = query + query_pos if query_pos is not None else query
-        k = spatial_tokens + spatial_pos if spatial_pos is not None else spatial_tokens
-        cross_out, _ = self.cross_attn(q, k, spatial_tokens)
+        cross_out = self.deform_cross_attn(q, multi_scale_feats, ref_pts)
         query = self.cross_norm(query + cross_out)
+        # 3. FFN
         query = self.ffn_norm(query + self.ffn(query))
         return query
 
 
-class PiecewiseBezierHead(nn.Module):
-    """Predicts curvature offsets for Piecewise Bézier control points."""
-    def __init__(self, embed_dim=256):
+# ──────────────────────────────────────────────
+#  Spatial Centroid Coordinate Head (BeMapNet)
+# ──────────────────────────────────────────────
+
+class SpatialCentroidCoordHead(nn.Module):
+    """
+    BeMapNet-style spatial voting coordinate prediction.
+
+    Instead of regressing (x, y) from a 1D vector (MLP approach),
+    predicts coordinates via spatial voting over a 2D coordinate feature map:
+
+    1. Coordinate feature map: learnable encoding of normalized (x, y) grid positions
+    2. Voting features: per-point query -> spatial weighting features
+    3. einsum(voting_feats, coords_feats) -> spatial heatmap
+    4. GAP(heatmap) -> centroid (x, y)
+
+    Reference: repos/BeMapNet/bemapnet/models/output_head/bezier_outputs.py (Lines 57-84)
+    """
+
+    def __init__(self, coord_dim=64, feat_h=64, feat_w=64):
         super().__init__()
-        self.mlp = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim),
+        self.coord_dim = coord_dim
+
+        # Normalized coordinate grid: (1, 2, H, W) with x in [0,1] and y in [0,1]
+        coords = self._make_coordinate_grid(feat_h, feat_w)
+        self.register_buffer('coords', coords)
+
+        # Learnable coordinate encoder: 2D position -> coord_dim features
+        # Exactly mirrors BeMapNet's coords_head = FFN(2, 256, _C, 3, 'conv')
+        self.coords_encoder = nn.Sequential(
+            nn.Conv2d(2, coord_dim, 1),
             nn.ReLU(inplace=True),
-            nn.Linear(embed_dim, 2),
+            nn.Conv2d(coord_dim, coord_dim, 1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(coord_dim, coord_dim, 1),
         )
 
-    def forward(self, query_per_point):
-        return self.mlp(query_per_point)
+        self.gap = nn.AdaptiveAvgPool2d((1, 1))
+
+    @staticmethod
+    def _make_coordinate_grid(h, w):
+        """Creates normalized coordinate grid, exactly as in BeMapNet compute_locations()."""
+        xs = torch.linspace(0, 1, w)
+        ys = torch.linspace(0, 1, h)
+        yy, xx = torch.meshgrid(ys, xs, indexing='ij')
+        return torch.stack([xx, yy], dim=0).unsqueeze(0)  # (1, 2, H, W)
+
+    def forward(self, vote_feats):
+        """
+        Args:
+            vote_feats: (B, Q_xy, C) where Q_xy = num_points * 2
+                        (pairs of voting features for x and y per control point)
+        Returns:
+            coords: (B, num_points, 2) — predicted (x, y) for each control point
+        """
+        B = vote_feats.shape[0]
+        Q_xy = vote_feats.shape[1]
+
+        # Coordinate feature map: (B, C, H, W) — encodes spatial position
+        coords_feats = self.coords_encoder(self.coords.expand(B, -1, -1, -1))
+
+        # Spatial voting: dot product of voting features with coordinate features
+        # -> heatmap indicating where each control point should be
+        heatmap = torch.einsum("bqc,bchw->bqhw", vote_feats, coords_feats)
+
+        # GAP: extract centroid from heatmap
+        centroid = self.gap(heatmap).reshape(B, Q_xy)
+
+        # Reshape: pair consecutive scalars as (x, y)
+        return centroid.reshape(B, Q_xy // 2, 2)
 
 
 # ──────────────────────────────────────────────
-#  Full Surgical-BeMapTR Model
+#  Full Surgical-BeMapTR v2 Model
 # ──────────────────────────────────────────────
 
 class SurgicalBeMapTR(nn.Module):
     """
-    Pure Vectorized Surgical Landmark Segmentation Model (Surgical-BeMapTR).
+    Pure Vectorized Surgical Landmark Segmentation Model (Surgical-BeMapTR v2).
+
     Inputs: RGB image (B, 3, 1024, 1024)
     Outputs:
         pred_logits: (B, N, num_classes) classification logits
-        pred_bezier_ctrl: (B, N, num_ctrl_pts, 2) Piecewise Bézier control points in [0, 1]
-        pred_restored_pts: (B, N, K_dense, 2) Bernstein restored dense curve points in [0, 1]
+        pred_ctrl_pts: (B, N, num_ctrl_pts, 2) Piecewise Bezier control points in [0, 1]
+        pred_restored_pts: (B, N, K_dense, 2) Bernstein-restored dense curve points in [0, 1]
     """
 
     def __init__(self,
@@ -283,6 +435,10 @@ class SurgicalBeMapTR(nn.Module):
                  embed_dim=256,
                  num_heads=8,
                  num_decoder_layers=6,
+                 num_deform_levels=3,
+                 num_sample_points=8,
+                 coord_feat_dim=64,
+                 coord_feat_size=64,
                  dropout=0.1,
                  pretrained_backbone=True):
         super().__init__()
@@ -291,51 +447,65 @@ class SurgicalBeMapTR(nn.Module):
         self.K_dense = K_dense
         self.bezier_k = bezier_k
         self.bezier_n = bezier_n
-        self.num_ctrl_pts = bezier_n * bezier_k + 1  # 10 control points for <3, 3>
+        self.num_ctrl_pts = bezier_n * bezier_k + 1  # 10 for <3,3>
         self.num_classes = num_classes
         self.embed_dim = embed_dim
+        self.num_deform_levels = num_deform_levels
 
-        # 1. Swin-Tiny Backbone + FPN
+        # ── 1. Backbone + Multi-Scale FPN ──
         self.backbone = SwinTinyBackbone(pretrained=pretrained_backbone, img_size=img_size)
         self.pixel_decoder = FPNPixelDecoder(
             in_channels_list=self.backbone.out_channels, out_channels=embed_dim
         )
 
-        # 2. Positional Encodings
-        self.pos_enc = PositionalEncoding2D(embed_dim, max_h=img_size // 4, max_w=img_size // 4)
+        # ── 2. Positional Encoding for reference points ──
         self.ref_point_pos_enc = PointPositionalEncoding2D(embed_dim)
 
-        # 3. Hierarchical Queries
+        # ── 3. Hierarchical Queries (MapTRv2) ──
         self.instance_query = nn.Embedding(N, embed_dim)
         self.point_query = nn.Embedding(self.num_ctrl_pts, embed_dim)
 
-        # 4. Endpoint Head: Predicts (x_start, y_start, x_end, y_end) per instance
-        self.endpoint_head = nn.Linear(embed_dim, 4)
+        # ── 4. Initial Reference Point Head ──
+        # Each (instance, point) pair predicts its initial (x, y) location
+        self.ref_point_init = nn.Linear(embed_dim, 2)
 
-        # 5. Precomputed lerp time steps t in [0, 1] for 10 control points
-        t_steps = torch.linspace(0.0, 1.0, self.num_ctrl_pts).unsqueeze(1)  # (10, 1)
-        self.register_buffer('t_steps', t_steps)
-
-        # 6. Transformer Decoder Layers
+        # ── 5. Transformer Decoder Layers ──
         self.decoder_layers = nn.ModuleList([
             SurgicalBeMapTRDecoderLayer(
                 embed_dim=embed_dim, num_heads=num_heads,
-                num_instances=N, num_pts=self.num_ctrl_pts, dropout=dropout,
+                num_instances=N, num_pts=self.num_ctrl_pts,
+                num_levels=num_deform_levels, num_sample_points=num_sample_points,
+                dropout=dropout,
             )
             for _ in range(num_decoder_layers)
         ])
 
-        self.point_refine_heads = nn.ModuleList([
-            PiecewiseBezierHead(embed_dim) for _ in range(num_decoder_layers)
+        # ── 6. Per-Layer Voting Heads (query -> spatial voting features) ──
+        # Each layer has its own voting head (like MapTR's per-layer reg_branches)
+        self.voting_heads = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(embed_dim, embed_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(embed_dim, 2 * coord_feat_dim),
+            )
+            for _ in range(num_decoder_layers)
         ])
 
+        # ── 7. Shared Spatial Centroid Head (coordinate feature map + GAP) ──
+        self.spatial_coord_head = SpatialCentroidCoordHead(
+            coord_dim=coord_feat_dim,
+            feat_h=coord_feat_size,
+            feat_w=coord_feat_size,
+        )
+
+        # ── 8. Classification Head ──
         self.cls_head = nn.Sequential(
             nn.Linear(embed_dim, embed_dim),
             nn.ReLU(inplace=True),
             nn.Linear(embed_dim, num_classes),
         )
 
-        # 7. Precomputed Bernstein Basis Matrix B of shape (K_dense, num_ctrl_pts)
+        # ── 9. Bernstein Basis Matrix ──
         B_matrix = compute_piecewise_bernstein_matrix(
             k=self.bezier_k, n=self.bezier_n, m_total=self.K_dense
         )
@@ -344,35 +514,33 @@ class SurgicalBeMapTR(nn.Module):
         self._init_weights()
 
     def _init_weights(self):
-        for module in [self.cls_head, self.endpoint_head]:
-            for m in module.modules():
+        # Classification head
+        for m in self.cls_head.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+        # Reference point init head
+        nn.init.xavier_uniform_(self.ref_point_init.weight)
+        nn.init.zeros_(self.ref_point_init.bias)
+        # Voting heads: xavier init
+        for voting_head in self.voting_heads:
+            for m in voting_head.modules():
                 if isinstance(m, nn.Linear):
                     nn.init.xavier_uniform_(m.weight)
                     if m.bias is not None:
                         nn.init.zeros_(m.bias)
 
-        for head in self.point_refine_heads:
-            for m in head.modules():
-                if isinstance(m, nn.Linear):
-                    nn.init.zeros_(m.weight)
-                    if m.bias is not None:
-                        nn.init.zeros_(m.bias)
-
-    def _build_initial_control_points(self, inst_emb, B):
+    def _build_initial_ref_pts(self, B, device):
         """
-        Predicts ordered initial control points C^0 via lerp(P_start, P_end)
-        Returns:
-            ref_pts: (B, N * num_ctrl_pts, 2) in [0, 1]
+        Predict initial reference points for each (instance, control_point) pair.
+        Each point gets a unique initial (x, y) position from the learned embeddings.
         """
-        endpoints = self.endpoint_head(inst_emb).sigmoid()  # (N, 4) -> [x_start, y_start, x_end, y_end]
-        p_start = endpoints[:, :2]  # (N, 2)
-        p_end = endpoints[:, 2:]    # (N, 2)
-
-        # lerp: C_j = (1 - t_j) * P_start + t_j * P_end
-        # t_steps is (10, 1), p_start is (N, 2) -> ctrl_pts is (N, 10, 2)
-        ctrl_base = (1.0 - self.t_steps.unsqueeze(0)) * p_start.unsqueeze(1) + self.t_steps.unsqueeze(0) * p_end.unsqueeze(1)
-
-        ref_pts = ctrl_base.reshape(self.N * self.num_ctrl_pts, 2)
+        inst_emb = self.instance_query.weight       # (N, D)
+        pt_emb = self.point_query.weight             # (K, D)
+        combined = inst_emb.unsqueeze(1) + pt_emb.unsqueeze(0)  # (N, K, D)
+        ref_pts = self.ref_point_init(combined).sigmoid()       # (N, K, 2) in [0,1]
+        ref_pts = ref_pts.reshape(self.N * self.num_ctrl_pts, 2)
         return ref_pts.unsqueeze(0).expand(B, -1, -1)
 
     def restore_curve(self, ctrl_pts):
@@ -386,64 +554,60 @@ class SurgicalBeMapTR(nn.Module):
         B = x.shape[0]
         device = x.device
 
-        # ── 1. Backbone & FPN ──
+        # ── 1. Backbone + Multi-Scale FPN ──
         features = self.backbone(x)
-        fused = self.pixel_decoder(features)  # (B, 256, 256, 256)
+        fpn_levels = self.pixel_decoder(features)  # [P2, P3, P4, P5]
+        deform_feats = fpn_levels[:self.num_deform_levels]  # First 3 levels
 
-        # ── 2. Spatial Tokens ──
-        spatial_feat = F.adaptive_avg_pool2d(fused, (64, 64))
-        spatial_tokens = spatial_feat.flatten(2).permute(0, 2, 1)
-        spatial_pos = self.pos_enc(spatial_feat).flatten(2).permute(0, 2, 1).expand(B, -1, -1)
+        # ── 2. Build Hierarchical Queries ──
+        inst_emb = self.instance_query.weight   # (N, D)
+        pt_emb = self.point_query.weight        # (K, D)
+        query = (inst_emb.unsqueeze(1) + pt_emb.unsqueeze(0))
+        query = query.reshape(self.N * self.num_ctrl_pts, self.embed_dim)
+        query = query.unsqueeze(0).expand(B, -1, -1)   # (B, N*K, D)
 
-        # ── 3. Build Hierarchical Queries & Ordered Base Control Points ──
-        inst_emb = self.instance_query.weight
-        pt_emb = self.point_query.weight
+        # ── 3. Initial Reference Points ──
+        ref_pts = self._build_initial_ref_pts(B, device)  # (B, N*K, 2)
 
-        query = (inst_emb.unsqueeze(1) + pt_emb.unsqueeze(0)).reshape(self.N * self.num_ctrl_pts, self.embed_dim)
-        query = query.unsqueeze(0).expand(B, -1, -1)
-
-        ref_pts = self._build_initial_control_points(inst_emb, B)
-
-        # ── 4. Decoder Layers with Iterative Refinement & Bernstein Restoration ──
+        # ── 4. Decoder Layers with Spatial Centroid Coordinate Prediction ──
         intermediate_logits = []
         intermediate_ctrl_pts = []
         intermediate_restored_pts = []
 
-        for layer, refine_head in zip(self.decoder_layers, self.point_refine_heads):
+        for i, layer in enumerate(self.decoder_layers):
+            # Positional encoding from current reference points
             query_pos = self.ref_point_pos_enc(ref_pts)
-            query = layer(query, spatial_tokens, spatial_pos, query_pos=query_pos)
 
-            # High-resolution Point-Sampled FPN Feature Extraction
-            grid = ref_pts.unsqueeze(2) * 2.0 - 1.0  # (B, N*num_ctrl_pts, 1, 2) in [-1, 1]
-            point_feats = F.grid_sample(
-                fused, grid, mode='bilinear', padding_mode='border', align_corners=False
-            ).squeeze(3).permute(0, 2, 1)
+            # Decoder layer: GDA self-attention + Deformable cross-attention + FFN
+            query = layer(query, deform_feats, ref_pts, query_pos=query_pos)
 
-            # Curvature offsets bounded by tanh
-            offsets = refine_head(query + point_feats)
-            offsets = torch.tanh(offsets) * 0.10
+            # ── Spatial Centroid Coordinate Prediction ──
+            # Per-point voting features: (B, N*K, 2*C)
+            vote_feats = self.voting_heads[i](query)
+            C = vote_feats.shape[-1] // 2
+            # Reshape for spatial centroid: (B, N*K*2, C)
+            vote_feats = vote_feats.reshape(B, self.N * self.num_ctrl_pts * 2, C)
+            # Spatial voting -> control point coordinates
+            point_coords = self.spatial_coord_head(vote_feats)  # (B, N*K, 2)
 
-            ref_pts_raw = self._inverse_sigmoid(ref_pts)
-            new_ref_pts = (ref_pts_raw + offsets).sigmoid()
+            # Reshape and Bernstein restore
+            layer_ctrl = point_coords.reshape(B, self.N, self.num_ctrl_pts, 2)
+            layer_restored = self.restore_curve(layer_ctrl)  # (B, N, K_dense, 2)
 
-            layer_ctrl_pts = new_ref_pts.reshape(B, self.N, self.num_ctrl_pts, 2)
-            layer_restored_pts = self.restore_curve(layer_ctrl_pts)
-
-            query_per_inst = query.reshape(B, self.N, self.num_ctrl_pts, self.embed_dim).mean(dim=2)
-            layer_logits = self.cls_head(query_per_inst)
+            # Classification (mean-pool over control points per instance)
+            query_inst = query.reshape(
+                B, self.N, self.num_ctrl_pts, self.embed_dim
+            ).mean(dim=2)  # (B, N, D)
+            layer_logits = self.cls_head(query_inst)  # (B, N, num_classes)
 
             intermediate_logits.append(layer_logits)
-            intermediate_ctrl_pts.append(layer_ctrl_pts)
-            intermediate_restored_pts.append(layer_restored_pts)
+            intermediate_ctrl_pts.append(layer_ctrl)
+            intermediate_restored_pts.append(layer_restored)
 
-            ref_pts = new_ref_pts
+            # Update reference points for next layer (detach like official MapTR)
+            ref_pts = point_coords.detach()
 
         if self.training:
             return intermediate_logits, intermediate_ctrl_pts, intermediate_restored_pts
         else:
             return intermediate_logits[-1], intermediate_ctrl_pts[-1], intermediate_restored_pts[-1]
-
-    @staticmethod
-    def _inverse_sigmoid(x, eps=1e-5):
-        x = x.clamp(eps, 1 - eps)
-        return torch.log(x / (1 - x))
