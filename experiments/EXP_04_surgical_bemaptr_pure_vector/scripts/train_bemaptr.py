@@ -253,7 +253,7 @@ def validate(model, dataloader, device, img_size=1024):
         B = images.shape[0]
         for b in range(B):
             polylines, classes = extract_predictions(
-                pred_logits[b], pred_restored_pts[b], conf_threshold=0.3
+                pred_logits[b], pred_restored_pts[b], conf_threshold=0.1
             )
 
             dice, iou, assd_val = compute_pixel_metrics(
