@@ -83,12 +83,19 @@ def inspect_and_visualize(ckpt_path, data_path, output_dir='val_visualizations',
         checkpoint = torch.load(ckpt_path, map_location=device)
     print(f"Loaded Epoch {checkpoint.get('epoch', 'N/A')} checkpoint with Best Val Dice: {checkpoint.get('best_dice', 0.0):.4f}")
 
-    # 2. Build Model
+    # 2. Build Model (auto-detecting coord_feat_size from checkpoint)
+    state_dict = checkpoint['model_state_dict']
+    coord_feat_size = 64
+    if 'spatial_coord_head.coords' in state_dict:
+        coord_feat_size = state_dict['spatial_coord_head.coords'].shape[-1]
+    print(f"Auto-detected spatial coord grid size: {coord_feat_size}x{coord_feat_size}")
+
     model = SurgicalBeMapTR(
         img_size=1024, num_classes=4, N=30, K_dense=20,
-        bezier_k=3, bezier_n=3, embed_dim=256, pretrained_backbone=False
+        bezier_k=3, bezier_n=3, embed_dim=256, coord_feat_size=coord_feat_size,
+        pretrained_backbone=False
     ).to(device)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    model.load_state_dict(state_dict)
     model.eval()
 
     # 3. Load Validation Split
