@@ -87,6 +87,7 @@ def parse_args():
     parser.add_argument('--num_points', type=int, default=20, help='Dense points per polyline (K)')
     parser.add_argument('--embed_dim', type=int, default=256, help='Transformer embedding dimension')
     parser.add_argument('--num_decoder_layers', type=int, default=6, help='Number of decoder layers')
+    parser.add_argument('--coord_feat_size', type=int, default=64, help='Spatial centroid grid size (64, 128, or 256)')
     parser.add_argument('--wandb_project', type=str, default='liver-landmark-segmentation-ablation')
     parser.add_argument('--wandb_entity', type=str, default=None)
     parser.add_argument('--wandb_key', type=str, default=None)
@@ -316,7 +317,8 @@ def main():
     model = SurgicalBeMapTR(
         img_size=1024, num_classes=4, N=args.num_queries, K_dense=args.num_points,
         bezier_k=3, bezier_n=3, embed_dim=args.embed_dim,
-        num_decoder_layers=args.num_decoder_layers, pretrained_backbone=True
+        num_decoder_layers=args.num_decoder_layers, coord_feat_size=args.coord_feat_size,
+        pretrained_backbone=True
     ).to(device)
 
     criterion = SurgicalBeMapTRCriterion(
