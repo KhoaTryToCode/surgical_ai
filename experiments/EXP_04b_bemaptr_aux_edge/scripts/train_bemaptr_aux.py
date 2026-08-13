@@ -101,6 +101,7 @@ def parse_args():
     parser.add_argument('--wandb_entity', type=str, default=None)
     parser.add_argument('--wandb_key', type=str, default=None)
     parser.add_argument('--output_dir', type=str, default='checkpoints_bemaptr_aux')
+    parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume training from')
     parser.add_argument('--seed', type=int, default=42)
     return parser.parse_args()
 
@@ -325,11 +326,21 @@ def main():
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
     scaler = torch.amp.GradScaler('cuda', enabled=device.type == 'cuda')
 
-    os.makedirs(args.output_dir, exist_ok=True)
+    start_epoch = 1
     best_dice = 0.0
 
+    if args.resume and os.path.exists(args.resume):
+        print(f"Resuming training from checkpoint: {args.resume}")
+        checkpoint = torch.load(args.resume, map_location=device, weights_only=False)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        if 'optimizer_state_dict' in checkpoint:
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_epoch = checkpoint.get('epoch', 0) + 1
+        best_dice = checkpoint.get('best_dice', 0.0)
+        print(f"Resumed from epoch {start_epoch-1} with best Dice: {best_dice:.4f}")
+
     print("\nStarting Surgical-BeMapTR v3 Training (Auxiliary Pixel Edge Guidance)...")
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(start_epoch, args.epochs + 1):
         t0 = time.time()
         train_losses = train_one_epoch(model, criterion, train_loader, optimizer, scheduler, scaler, device, epoch, aux_weight=args.aux_weight)
         val_metrics = validate(model, val_loader, device)
@@ -344,6 +355,16 @@ def main():
 
         if HAS_WANDB and wandb.run is not None:
             wandb.log({'epoch': epoch, **train_losses, **val_metrics})
+
+        # Save latest checkpoint after every epoch for seamless recovery
+        latest_ckpt_path = os.path.join(args.output_dir, 'latest_surgical_bemaptr_aux.pth')
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'best_dice': best_dice,
+            'val_metrics': val_metrics,
+        }, latest_ckpt_path)
 
         if val_metrics['val_dice'] > best_dice:
             best_dice = val_metrics['val_dice']
