@@ -16,12 +16,13 @@ def analyze_dataset_gt_points(dataset_dir: str):
     Scans raw JSON landmark annotations to analyze point count distributions
     and evaluate Spline Arc-Length Resampling fidelity across candidate K values.
     """
-    print(f"🔍 Analyzing dataset ground-truth annotations in '{dataset_dir}'...")
-    json_files = glob.glob(os.path.join(dataset_dir, "**", "*.json"), recursive=True)
-    if not json_files:
-        # Fallback search under labels/ directory
-        json_files = glob.glob(os.path.join(dataset_dir, "labels", "*.json"))
-        
+    json_files = []
+    for root, _, files in os.walk(dataset_dir, followlinks=True):
+        for f in files:
+            if f.endswith(".json"):
+                json_files.append(os.path.join(root, f))
+    json_files = sorted(json_files)
+
     if not json_files:
         print(f"⚠️ No JSON annotation files found under '{dataset_dir}'. Returning default K=20.")
         return {"recommended_K": 20, "point_stats": {"min": 10, "median": 20, "max": 50}}
