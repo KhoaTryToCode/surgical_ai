@@ -70,6 +70,7 @@ def main():
     model = Surgical3DVectorTransformer(config).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=config.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
 
     # 3. Training Loop
     best_loss = float("inf")
@@ -91,12 +92,15 @@ def main():
             }
 
             optimizer.zero_grad()
-            outputs = model(images, depth, targets=targets)
-            loss = outputs["loss"]
+            with torch.cuda.amp.autocast(enabled=(device.type == "cuda")):
+                outputs = model(images, depth, targets=targets)
+                loss = outputs["loss"]
             
-            loss.backward()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
 
             epoch_loss += loss.item()
             for k, v in outputs["loss_dict"].items():
