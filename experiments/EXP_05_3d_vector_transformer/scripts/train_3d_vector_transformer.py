@@ -69,6 +69,9 @@ def main():
     if use_wandb:
         try:
             import wandb
+            api_key = os.environ.get("WANDB_API_KEY", "83f4544a22543e319c6009abceaac90b634c68a3")
+            if api_key:
+                wandb.login(key=api_key)
             wandb.init(
                 project=args.wandb_project,
                 name=args.wandb_run_name,
