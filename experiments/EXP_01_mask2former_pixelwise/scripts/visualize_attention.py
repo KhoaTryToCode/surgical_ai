@@ -222,14 +222,32 @@ def visualize_sample_and_attention_dashboard(
     print(f"✅ Full 9-Layer Attention Dashboard Saved to '{output_png}'!")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Visualize Mask2Former Predictions & Attention Dashboards")
     parser.add_argument("--sample_idx", type=int, default=0, help="Validation sample index")
+    parser.add_argument("--image_name", type=str, default=None, help="Target image filename (e.g. Patient_40_09270.jpg)")
+    parser.add_argument("--target_patient", type=str, default=None, help="Target patient ID (e.g. Patient_40)")
     parser.add_argument("--data_path", type=str, default="/kaggle/working/L3D")
     parser.add_argument("--masked_ckpt", type=str, default="/kaggle/working/results_ablation/swin_maskedattn/best_swin_maskedattn.pth")
     parser.add_argument("--full_ckpt", type=str, default="/kaggle/working/results_ablation/swin_fullattn/best_swin_fullattn.pth")
     parser.add_argument("--output_png", type=str, default="/kaggle/working/attention_dashboard_9layers.png")
     parser.add_argument("--overview_png", type=str, default="/kaggle/working/sample_prediction_overview.png")
     args = parser.parse_args()
+
+    # Search for target image index if image_name or target_patient is specified
+    if args.image_name or args.target_patient:
+        train_files, test_files, val_files = get_split(args.data_path)
+        search_list = val_files if len(val_files) > 0 else (test_files if len(test_files) > 0 else train_files)
+        target_kw = args.image_name if args.image_name else args.target_patient
+        found_idx = None
+        for i, fpath in enumerate(search_list):
+            if target_kw.lower() in str(fpath).lower():
+                found_idx = i
+                print(f"🎯 Matched '{target_kw}' to sample index {found_idx}: {fpath}")
+                break
+        if found_idx is not None:
+            args.sample_idx = found_idx
+        else:
+            print(f"⚠️ Target '{target_kw}' not found in dataset split. Falling back to sample_idx {args.sample_idx}.")
 
     visualize_sample_and_attention_dashboard(
         sample_idx=args.sample_idx,
