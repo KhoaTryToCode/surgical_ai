@@ -157,6 +157,11 @@ class HierarchicalMaskedDecoder3D(nn.Module):
                 # Expand instance mask to all K points per instance: (B, N, H_f*W_f) -> (B, N, K, H_f*W_f)
                 mask_bool = (mask_ds < 0.0).flatten(2).unsqueeze(2).repeat(1, 1, K, 1) # (B, N, K, H_f*W_f)
                 mask_bool = mask_bool.view(B, N * K, H_f * W_f) # (B, N*K, H_f*W_f)
+
+                # Safeguard: If all positions are masked out for a query, unmask them to prevent softmax([-inf]) = NaN
+                all_masked = mask_bool.all(dim=-1, keepdim=True)
+                mask_bool = mask_bool & (~all_masked)
+
                 # Repeat for num_heads=8
                 attn_mask = mask_bool.repeat_interleave(8, dim=0) # (B * 8, N*K, H_f*W_f)
 

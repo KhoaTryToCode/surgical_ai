@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -29,22 +30,28 @@ class HungarianMatcher3D(nn.Module):
         B, N, K, _ = pred_polylines.shape
         indices = []
 
+        # Force Float32 precision for Hungarian matching calculation to avoid FP16 underflow/overflow
+        pred_cls_f = pred_cls.float()
+        pred_poly_f = pred_polylines.float()
+        target_poly_f = target_polylines.float()
+
         for b in range(B):
             valid = valid_mask[b]
             gt_c = target_cls[b][valid] # (num_valid,)
-            gt_p = target_polylines[b][valid] # (num_valid, K, 3)
+            gt_p = target_poly_f[b][valid] # (num_valid, K, 3)
             num_valid = len(gt_c)
 
             if num_valid == 0:
                 indices.append((torch.tensor([], dtype=torch.long), torch.tensor([], dtype=torch.long)))
                 continue
 
-            # 1. Classification Cost (Softmax probability of GT class)
-            prob = F.softmax(pred_cls[b], dim=-1) # (N, num_classes+1)
+            # 1. Classification Cost (Softmax probability of GT class in Float32)
+            prob = F.softmax(pred_cls_f[b], dim=-1) # (N, num_classes+1)
             cost_cls = -prob[:, gt_c] # (N, num_valid)
 
             # 2. Bidirectional 3D Position Cost
-            p_pred = pred_polylines[b] # (N, K, 3)
+            p_pred = pred_poly_f[b] # (N, K, 3)
+            
             # Forward ordering (1..K)
             diff_fwd = p_pred.unsqueeze(1) - gt_p.unsqueeze(0) # (N, num_valid, K, 3)
             cost_fwd = torch.mean(torch.abs(diff_fwd), dim=(-2, -1)) # (N, num_valid)
@@ -59,6 +66,9 @@ class HungarianMatcher3D(nn.Module):
             # Total Matching Cost
             total_cost = self.cost_cls * cost_cls + self.cost_pos * cost_pos
             total_cost_np = total_cost.cpu().numpy()
+            
+            # Sanitize matrix to remove NaNs/Infs before passing to scipy
+            total_cost_np = np.nan_to_num(total_cost_np, nan=1e5, posinf=1e5, neginf=-1e5)
 
             # Hungarian Bipartite Assignment
             pred_idx, gt_idx = linear_sum_assignment(total_cost_np)
@@ -113,7 +123,7 @@ class Vector3DLossSuite(nn.Module):
             pred_poly_l = outputs_polylines[l]       # (B, N, K, 3)
             pred_mask_l = outputs_masks[l]           # (B, N, H, W)
 
-            # 1. Run Hungarian Matcher for layer l
+            # 1. Run Hungarian Matcher for layer l in Float32
             matched_indices = self.matcher(pred_cls_l, pred_poly_l, target_cls, target_polylines, valid_mask)
 
             # Compute Classification Loss
@@ -133,8 +143,8 @@ class Vector3DLossSuite(nn.Module):
                     continue
 
                 num_matched_total += len(pred_idx)
-                p_matched = pred_poly_l[b, pred_idx] # (M, K, 3)
-                gt_matched = target_polylines[b, gt_idx] # (M, K, 3)
+                p_matched = pred_poly_l[b, pred_idx].float() # (M, K, 3)
+                gt_matched = target_polylines[b, gt_idx].float() # (M, K, 3)
 
                 # 2. Bidirectional Smooth L1 Position Loss
                 fwd_diff = F.smooth_l1_loss(p_matched, gt_matched, reduction='none').mean(dim=(-2, -1)) # (M,)
@@ -147,22 +157,24 @@ class Vector3DLossSuite(nn.Module):
 
                 l_pos_layer += torch.minimum(fwd_diff, rev_diff).sum()
 
-                # 3. Cosine Tangent Alignment Loss
+                # 3. Cosine Tangent Alignment Loss with Safe Norm Epsilon
                 p_tangents = p_matched[:, 1:] - p_matched[:, :-1] # (M, K-1, 3)
                 gt_tangents = gt_aligned[:, 1:] - gt_aligned[:, :-1] # (M, K-1, 3)
                 
-                cos_sim = F.cosine_similarity(p_tangents, gt_tangents, dim=-1) # (M, K-1)
+                p_norm = torch.linalg.norm(p_tangents, dim=-1, keepdim=True).clamp(min=1e-6)
+                gt_norm = torch.linalg.norm(gt_tangents, dim=-1, keepdim=True).clamp(min=1e-6)
+                cos_sim = (p_tangents * gt_tangents).sum(dim=-1) / (p_norm * gt_norm).squeeze(-1)
+                cos_sim = torch.clamp(cos_sim, -1.0, 1.0)
                 l_tan_layer += (1.0 - cos_sim).mean(dim=-1).sum()
 
                 # 4. 1D Discrete Laplacian Curvature Loss
-                # Discrete 2nd derivative: p_{j+1} - 2*p_j + p_{j-1}
                 p_laplacian = p_matched[:, 2:] - 2.0 * p_matched[:, 1:-1] + p_matched[:, :-2]
                 gt_laplacian = gt_aligned[:, 2:] - 2.0 * gt_aligned[:, 1:-1] + gt_aligned[:, :-2]
                 l_curv_layer += F.mse_loss(p_laplacian, gt_laplacian, reduction='none').mean(dim=(-2, -1)).sum()
 
                 # 5. Auxiliary 2D Mask Loss (BCE + Dice)
-                m_matched = pred_mask_l[b, pred_idx] # (M, H, W)
-                gt_m_matched = target_masks[b, gt_idx] # (M, H, W)
+                m_matched = pred_mask_l[b, pred_idx].float() # (M, H, W)
+                gt_m_matched = target_masks[b, gt_idx].float() # (M, H, W)
                 
                 bce = F.binary_cross_entropy_with_logits(m_matched, gt_m_matched)
                 dice = self._dice_loss(m_matched, gt_m_matched)
