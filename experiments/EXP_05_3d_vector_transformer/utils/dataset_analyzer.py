@@ -1,4 +1,11 @@
 import os
+import sys
+
+# Add experiment directory to sys.path
+EXP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if EXP_DIR not in sys.path:
+    sys.path.append(EXP_DIR)
+
 import glob
 import json
 import numpy as np
