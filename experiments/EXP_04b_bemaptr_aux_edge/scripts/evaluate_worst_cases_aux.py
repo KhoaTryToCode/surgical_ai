@@ -198,7 +198,7 @@ def evaluate_and_plot(ckpt_path, data_path, output_dir, target_patient='Patient_
 
     print(f"\nFound {len(target_results)} target patient samples for '{target_patient}'.")
 
-    def save_4panel_figure(item, title_prefix, out_filename):
+    def save_5panel_figure(item, title_prefix, out_filename):
         raw_img = cv2.imread(item['path'])
         raw_img = cv2.cvtColor(raw_img, cv2.COLOR_BGR2RGB)
         raw_img = cv2.resize(raw_img, (1024, 1024))
@@ -218,23 +218,27 @@ def evaluate_and_plot(ckpt_path, data_path, output_dir, target_patient='Patient_
 
         error_map = create_error_map(item['pred_raster'], item['pixel_masks'])
 
-        fig, axes = plt.subplots(1, 4, figsize=(22, 6))
+        fig, axes = plt.subplots(1, 5, figsize=(26, 5.5))
 
         axes[0].imshow(raw_img)
-        axes[0].set_title(f"{title_prefix}\n{item['filename']}", fontsize=10)
+        axes[0].set_title(f"{title_prefix}\n{item['filename']}", fontsize=9)
         axes[0].axis('off')
 
         axes[1].imshow(vis_gt)
-        axes[1].set_title(f"Ground Truth ({M} lines)\n(Green:Ridge, Blue:Silh, Orange:Lig)", fontsize=10)
+        axes[1].set_title(f"Ground Truth ({M} lines)\n(Green:Ridge, Blue:Silh, Orange:Lig)", fontsize=9)
         axes[1].axis('off')
 
         axes[2].imshow(vis_pred)
-        axes[2].set_title(f"Surgical-BeMapTR v3 Pred ({len(item['pred_classes'])} lines)\nDice: {item['dice']:.4f} | IoU: {item['iou']:.4f}", fontsize=10)
+        axes[2].set_title(f"BeMapTR v3 Vector Pred\nDice: {item['dice']:.4f} | IoU: {item['iou']:.4f}", fontsize=9)
         axes[2].axis('off')
 
-        axes[3].imshow(error_map)
-        axes[3].set_title("Error Map\n(Green:Match, Red:FP, Yellow:FN)", fontsize=10)
+        axes[3].imshow(aux_vis)
+        axes[3].set_title("Branch B Aux Edge Heatmap\n(Pixel-Level Activations)", fontsize=9)
         axes[3].axis('off')
+
+        axes[4].imshow(error_map)
+        axes[4].set_title("Error Map\n(Green:Match, Red:FP, Yellow:FN)", fontsize=9)
+        axes[4].axis('off')
 
         plt.tight_layout()
         out_path = os.path.join(output_dir, out_filename)
@@ -245,12 +249,12 @@ def evaluate_and_plot(ckpt_path, data_path, output_dir, target_patient='Patient_
     # 1. Plot Target Patient Cases (e.g. Patient_40 TopoNet Failure Cases)
     print("\n--- Plotting Target Patient Failure Analysis ---")
     for idx, item in enumerate(target_results[:5]):
-        save_4panel_figure(item, f"Target Case {idx+1}", f"target_{target_patient}_{idx+1}_{item['filename']}.png")
+        save_5panel_figure(item, f"Target Case {idx+1}", f"target_{target_patient}_{idx+1}_{item['filename']}.png")
 
     # 2. Plot Top-K Worst Cases of EXP_04b overall
     print(f"\n--- Plotting Top-{top_k_worst} Worst Predictions of EXP_04b ---")
     for rank, item in enumerate(results_sorted[:top_k_worst]):
-        save_4panel_figure(item, f"Rank {rank+1} Worst", f"worst_rank_{rank+1}_{item['filename']}.png")
+        save_5panel_figure(item, f"Rank {rank+1} Worst", f"worst_rank_{rank+1}_{item['filename']}.png")
 
     print(f"\n✅ All analysis figures saved to: {output_dir}\n")
 
