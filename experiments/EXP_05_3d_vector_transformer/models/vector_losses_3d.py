@@ -100,9 +100,13 @@ class Vector3DLossSuite(nn.Module):
         self.lambda_mask = lambda_mask
 
     def _dice_loss(self, pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
+        """
+        Computes 1.0 - Dice for each instance (M, H, W).
+        Returns per-instance loss tensor of shape (M,).
+        """
         pred_sigmoid = torch.sigmoid(pred)
-        intersection = (pred_sigmoid * target).sum()
-        union = pred_sigmoid.sum() + target.sum()
+        intersection = (pred_sigmoid * target).sum(dim=(-2, -1))
+        union = pred_sigmoid.sum(dim=(-2, -1)) + target.sum(dim=(-2, -1))
         return 1.0 - (2.0 * intersection + eps) / (union + eps)
 
     def forward(self, outputs_cls: list, outputs_polylines: list, outputs_masks: list, targets: dict):
@@ -175,13 +179,13 @@ class Vector3DLossSuite(nn.Module):
                 gt_laplacian = gt_aligned[:, 2:] - 2.0 * gt_aligned[:, 1:-1] + gt_aligned[:, :-2]
                 l_curv_layer += F.mse_loss(p_laplacian, gt_laplacian, reduction='none').mean(dim=(-2, -1)).sum()
 
-                # 5. Auxiliary 2D Mask Loss (BCE + Dice)
+                # 5. Auxiliary 2D Mask Loss (BCE + Dice per instance)
                 m_matched = pred_mask_l[b, pred_idx].float() # (M, H, W)
                 gt_m_matched = target_masks[b, gt_idx].float() # (M, H, W)
                 
-                bce = F.binary_cross_entropy_with_logits(m_matched, gt_m_matched)
-                dice = self._dice_loss(m_matched, gt_m_matched)
-                l_mask_layer += (bce + dice)
+                bce_per_inst = F.binary_cross_entropy_with_logits(m_matched, gt_m_matched, reduction='none').mean(dim=(-2, -1)) # (M,)
+                dice_per_inst = self._dice_loss(m_matched, gt_m_matched) # (M,)
+                l_mask_layer += (bce_per_inst + dice_per_inst).sum()
 
             norm_factor = max(num_matched_total, 1)
             l_pos_layer = l_pos_layer / norm_factor
