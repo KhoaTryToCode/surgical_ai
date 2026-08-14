@@ -21,6 +21,9 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=config.batch_size, help="Batch size")
     parser.add_argument("--lr", type=float, default=config.learning_rate, help="Learning rate")
     parser.add_argument("--save_dir", type=str, default="checkpoints/EXP_05", help="Checkpoint save directory")
+    parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases experiment tracking")
+    parser.add_argument("--wandb_project", type=str, default="Surgical_AI_3D_Vector", help="W&B project name")
+    parser.add_argument("--wandb_run_name", type=str, default="EXP_05_Swin_3D_Vector_Transformer", help="W&B run name")
     return parser.parse_args()
 
 def main():
@@ -30,6 +33,21 @@ def main():
     print("=" * 70)
     print(f"📁 Dataset Directory: {args.dataset_dir}")
     print(f"⚙️ Hyperparameters: Batch Size={args.batch_size}, LR={args.lr}, Epochs={args.epochs}")
+
+    # Initialize Weights & Biases if requested
+    use_wandb = args.wandb or ("WANDB_API_KEY" in os.environ)
+    if use_wandb:
+        try:
+            import wandb
+            wandb.init(
+                project=args.wandb_project,
+                name=args.wandb_run_name,
+                config=vars(args)
+            )
+            print(f"📊 Weights & Biases initialized: Project='{args.wandb_project}', Run='{args.wandb_run_name}'")
+        except Exception as e:
+            print(f"⚠️ Could not initialize wandb: {e}")
+            use_wandb = False
 
     # Device selection (CUDA -> MPS -> CPU)
     if torch.cuda.is_available():
@@ -128,6 +146,22 @@ def main():
         print(f"Epoch [{epoch:2d}/{args.epochs:2d}] ({elapsed:.1f}s) | Total Loss: {avg_loss:.4f} | "
               f"Cls: {epoch_loss_dict['l_cls']:.3f} | Pos3D: {epoch_loss_dict['l_pos']:.3f} | "
               f"Tan: {epoch_loss_dict['l_tan']:.3f} | Mask: {epoch_loss_dict['l_mask']:.3f}", flush=True)
+
+        if use_wandb:
+            try:
+                import wandb
+                wandb.log({
+                    "epoch": epoch,
+                    "train/total_loss": avg_loss,
+                    "train/l_cls": epoch_loss_dict['l_cls'],
+                    "train/l_pos": epoch_loss_dict['l_pos'],
+                    "train/l_tan": epoch_loss_dict['l_tan'],
+                    "train/l_curv": epoch_loss_dict['l_curv'],
+                    "train/l_mask": epoch_loss_dict['l_mask'],
+                    "train/learning_rate": optimizer.param_groups[0]['lr']
+                })
+            except Exception:
+                pass
 
         # Save Best Checkpoint
         if avg_loss < best_loss:
