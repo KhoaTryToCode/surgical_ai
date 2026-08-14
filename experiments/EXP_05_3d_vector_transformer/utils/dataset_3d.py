@@ -26,10 +26,16 @@ class Surgical3DVectorDataset(Dataset):
         self.num_points = num_points
         self.mode = mode
 
-        # Find image files
-        self.img_files = sorted(glob.glob(os.path.join(dataset_dir, "images", "*.jpg")))
-        if not self.img_files:
-            self.img_files = sorted(glob.glob(os.path.join(dataset_dir, "**", "*.jpg"), recursive=True))
+        # Find image files for current split (mode = train, val, test)
+        split_dir = os.path.join(dataset_dir, mode)
+        if os.path.exists(split_dir):
+            self.img_files = sorted(glob.glob(os.path.join(split_dir, "images", "*.jpg")))
+            if not self.img_files:
+                self.img_files = sorted(glob.glob(os.path.join(split_dir, "**", "*.jpg"), recursive=True))
+        else:
+            self.img_files = sorted(glob.glob(os.path.join(dataset_dir, "images", "*.jpg")))
+            if not self.img_files:
+                self.img_files = sorted(glob.glob(os.path.join(dataset_dir, "**", "*.jpg"), recursive=True))
 
         self.transform_img = T.Compose([
             T.ToTensor(),

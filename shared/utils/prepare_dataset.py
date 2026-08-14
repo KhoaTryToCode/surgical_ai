@@ -1,91 +1,97 @@
 import os
 import sys
 import argparse
-import zipfile
-import shutil
 from pathlib import Path
 
-def setup_dataset(target_dir: str, source_dir: str = None) -> str:
+def setup_dataset(target_dir: str = "/kaggle/working/L3D") -> str:
     """
-    Sets up dataset symlinks or extracts zip files into target_dir (e.g., /kaggle/working/L3D).
-    Searches /kaggle/input and local data directories automatically if source_dir is not provided.
+    Sets up symlinks for train, val, and test splits into target_dir (/kaggle/working/L3D):
+      /kaggle/working/L3D/train/images -> .../Train/images
+      /kaggle/working/L3D/train/labels -> .../Train/labels
+      /kaggle/working/L3D/val/images   -> .../Val/images
+      /kaggle/working/L3D/val/labels   -> .../Val/labels
+      /kaggle/working/L3D/test/images  -> .../Test/images
+      /kaggle/working/L3D/test/labels  -> .../Test/labels
     """
     target_path = Path(target_dir).resolve()
     target_path.mkdir(parents=True, exist_ok=True)
+    print(f"📦 Setting up dataset symlinks in '{target_path}'...")
 
-    print(f"📦 Setting up dataset target directory: '{target_path}'")
+    splits = ["train", "val", "test"]
+    subdirs = ["images", "labels"]
 
-    # Locate source directory
-    if source_dir and os.path.exists(source_dir):
-        src_path = Path(source_dir).resolve()
-    else:
-        candidates = [
-            Path("/kaggle/input/laparoscopic-liver-landmarks"),
-            Path("/kaggle/input/laparoscopic-liver"),
-            Path("/kaggle/input/l3d"),
-            Path("./data/laparoscopic_liver"),
-            Path("./data"),
+    # Candidate source map for Kaggle inputs
+    known_mappings = {
+        ("train", "images"): [
+            "/kaggle/input/datasets/khoatrytopublish/l3d-train/Train/images",
+            "/kaggle/input/l3d-train/Train/images",
+            "/kaggle/input/laparoscopic-liver-landmarks/train/images",
+            "data/laparoscopic_liver/train/images",
+        ],
+        ("train", "labels"): [
+            "/kaggle/input/datasets/khoatrytopublish/l3d-train/Train/labels",
+            "/kaggle/input/l3d-train/Train/labels",
+            "/kaggle/input/laparoscopic-liver-landmarks/train/labels",
+            "data/laparoscopic_liver/train/labels",
+        ],
+        ("val", "images"): [
+            "/kaggle/input/datasets/khoatrytopublish/l3d-val/Val/images",
+            "/kaggle/input/l3d-val/Val/images",
+            "/kaggle/input/laparoscopic-liver-landmarks/val/images",
+            "data/laparoscopic_liver/val/images",
+        ],
+        ("val", "labels"): [
+            "/kaggle/input/datasets/khoatrytopublish/l3d-val/Val/labels",
+            "/kaggle/input/l3d-val/Val/labels",
+            "/kaggle/input/laparoscopic-liver-landmarks/val/labels",
+            "data/laparoscopic_liver/val/labels",
+        ],
+        ("test", "images"): [
+            "/kaggle/input/datasets/khoatrytopublish/l3d-test/Test/images",
+            "/kaggle/input/l3d-test/Test/images",
+            "/kaggle/input/laparoscopic-liver-landmarks/test/images",
+            "data/laparoscopic_liver/test/images",
+        ],
+        ("test", "labels"): [
+            "/kaggle/input/datasets/khoatrytopublish/l3d-test/Test/labels",
+            "/kaggle/input/l3d-test/Test/labels",
+            "/kaggle/input/laparoscopic-liver-landmarks/test/labels",
+            "data/laparoscopic_liver/test/labels",
         ]
-        src_path = None
-        for c in candidates:
-            if c.exists():
-                src_path = c
-                break
+    }
 
-        if src_path is None and os.path.exists("/kaggle/input"):
-            # Search /kaggle/input for any dataset folder containing images or labels or zips
-            for root, dirs, files in os.walk("/kaggle/input"):
-                if "images" in dirs or "labels" in dirs or "annotations" in dirs:
-                    src_path = Path(root)
+    for split in splits:
+        for sub in subdirs:
+            target_sub = target_path / split / sub
+            target_sub.parent.mkdir(parents=True, exist_ok=True)
+            
+            if target_sub.exists() or target_sub.is_symlink():
+                continue
+
+            src_matched = None
+            for candidate in known_mappings.get((split, sub), []):
+                if os.path.exists(candidate):
+                    src_matched = candidate
                     break
-                for f in files:
-                    if f.endswith(".zip"):
-                        src_path = Path(root)
+
+            # Fallback dynamic search if specific path is not found directly
+            if not src_matched and os.path.exists("/kaggle/input"):
+                for root, dirs, _ in os.walk("/kaggle/input", followlinks=True):
+                    root_lower = root.lower()
+                    if sub in root_lower and split in root_lower:
+                        src_matched = root
                         break
-                if src_path:
-                    break
 
-    if src_path is None:
-        print(f"⚠️ Source dataset directory not found in /kaggle/input or local data/. Created empty '{target_path}'.")
-        return str(target_path)
-
-    print(f"🔍 Found dataset source at: '{src_path}'")
-
-    # Handle ZIP archives if present
-    zip_files = list(src_path.glob("*.zip"))
-    if zip_files:
-        for zf in zip_files:
-            print(f"⚡ Extracting '{zf.name}' into '{target_path}'...")
-            with zipfile.ZipFile(zf, 'r') as zip_ref:
-                zip_ref.extractall(target_path)
-
-    # Symlink subdirectories (images, labels, annotations, depth, train, val, test)
-    subdirs_to_link = ["images", "labels", "annotations", "depth", "train", "val", "test"]
-    
-    # Check top-level subdirectories in src_path
-    for item in src_path.iterdir():
-        if item.is_dir():
-            target_sub = target_path / item.name
-            if not target_sub.exists():
+            if src_matched:
                 try:
-                    os.symlink(item, target_sub)
-                    print(f"🔗 Created symlink: '{target_sub}' ──► '{item}'")
+                    os.symlink(src_matched, target_sub)
+                    print(f"🔗 Created symlink: '{target_sub}' ──► '{src_matched}'")
                 except Exception as e:
-                    # Fallback to copytree if symlink fails
-                    try:
-                        shutil.copytree(item, target_sub)
-                        print(f"📁 Copied directory: '{target_sub}'")
-                    except Exception as copy_err:
-                        print(f"⚠️ Could not link/copy '{item.name}': {copy_err}")
-        elif item.is_file() and not item.name.endswith(".zip"):
-            target_file = target_path / item.name
-            if not target_file.exists():
-                try:
-                    os.symlink(item, target_file)
-                except Exception:
-                    shutil.copy2(item, target_file)
+                    print(f"⚠️ Failed to create symlink '{target_sub}': {e}")
+            else:
+                print(f"⚠️ Source directory for {split}/{sub} not found under /kaggle/input.")
 
-    print(f"✅ Dataset preparation completed successfully for '{target_path}'.")
+    print(f"✅ Symlink setup completed in '{target_path}'.")
     return str(target_path)
 
 def get_split(path):
@@ -119,25 +125,11 @@ def get_split(path):
             elif set_lower in ["val", "validation"]:
                 val_file_names = _collect_files(img_dir)
 
-    # Fallback for Kaggle input structures if dataset_path symlinks failed
-    if len(train_file_names) == 0 and os.path.exists('/kaggle/input'):
-        for root, _, filenames in os.walk('/kaggle/input', followlinks=True):
-            if os.path.basename(root).lower() == 'images':
-                parent_dir = os.path.basename(os.path.dirname(root)).lower()
-                collected = sorted([Path(root) / f for f in filenames if Path(f).suffix.lower() in valid_exts])
-                if 'train' in parent_dir and len(train_file_names) == 0:
-                    train_file_names = collected
-                elif ('val' in parent_dir or 'validation' in parent_dir) and len(val_file_names) == 0:
-                    val_file_names = collected
-                elif 'test' in parent_dir and len(test_file_names) == 0:
-                    test_file_names = collected
-
     return train_file_names, test_file_names, val_file_names
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Prepare Surgical Dataset symlinks / target directory")
-    parser.add_argument("--target_dir", type=str, default="/kaggle/working/L3D", help="Target dataset path to set up")
-    parser.add_argument("--source_dir", type=str, default=None, help="Source dataset path (optional)")
+    parser = argparse.ArgumentParser(description="Prepare Surgical Dataset symlinks")
+    parser.add_argument("--target_dir", type=str, default="/kaggle/working/L3D", help="Target path to create symlinks for")
     args = parser.parse_args()
 
-    setup_dataset(target_dir=args.target_dir, source_dir=args.source_dir)
+    setup_dataset(target_dir=args.target_dir)
