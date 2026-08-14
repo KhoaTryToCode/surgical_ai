@@ -29,33 +29,46 @@ def parse_args():
     parser.add_argument("--wandb_run_name", type=str, default="EXP_05_Swin_3D_Vector_Transformer", help="W&B run name")
     return parser.parse_args()
 
-def compute_mask_iou_dice(pred_masks: torch.Tensor, target_masks: torch.Tensor, eps: float = 1e-5):
+def compute_mask_metrics(pred_masks: torch.Tensor, target_masks: torch.Tensor, eps: float = 1e-5):
     """
-    Computes continuous 2D Mask Soft-IoU and Soft-Dice Coefficient (0.0 to 1.0)
-    using sigmoid probabilities for smooth metric tracking from Epoch 1 onwards.
+    Computes BOTH Hard (thresholded > 0.5) and Soft (continuous sigmoid) 2D Mask IoU & Dice metrics.
     pred_masks: (B, N, H, W) raw logits
     target_masks: (B, N, H, W) binary GT masks
     """
     with torch.no_grad():
         probs = torch.sigmoid(pred_masks.float())
+        hard_pred = (probs > 0.5).float()
         gt_bin = (target_masks.float() > 0.5).float()
 
-        intersection = (probs * gt_bin).sum(dim=(-2, -1)) # (B, N)
-        union = probs.sum(dim=(-2, -1)) + gt_bin.sum(dim=(-2, -1)) - intersection
-
-        soft_iou = (intersection + eps) / (union + eps)
-        soft_dice = (2.0 * intersection + eps) / (probs.sum(dim=(-2, -1)) + gt_bin.sum(dim=(-2, -1)) + eps)
-
-        # Average over active landmark masks
         active = (gt_bin.sum(dim=(-2, -1)) > 0)
-        if active.sum() > 0:
-            mean_iou = soft_iou[active].mean().item()
-            mean_dice = soft_dice[active].mean().item()
-        else:
-            mean_iou = soft_iou.mean().item()
-            mean_dice = soft_dice.mean().item()
 
-    return mean_iou, mean_dice
+        # 1. Hard Metrics (Standard Paper Benchmark)
+        hard_inter = (hard_pred * gt_bin).sum(dim=(-2, -1))
+        hard_union = hard_pred.sum(dim=(-2, -1)) + gt_bin.sum(dim=(-2, -1)) - hard_inter
+        hard_iou = (hard_inter + eps) / (hard_union + eps)
+        hard_dice = (2.0 * hard_inter + eps) / (hard_pred.sum(dim=(-2, -1)) + gt_bin.sum(dim=(-2, -1)) + eps)
+
+        # 2. Soft Metrics (Continuous Optimization Tracking)
+        soft_inter = (probs * gt_bin).sum(dim=(-2, -1))
+        soft_union = probs.sum(dim=(-2, -1)) + gt_bin.sum(dim=(-2, -1)) - soft_inter
+        soft_iou = (soft_inter + eps) / (soft_union + eps)
+        soft_dice = (2.0 * soft_inter + eps) / (probs.sum(dim=(-2, -1)) + gt_bin.sum(dim=(-2, -1)) + eps)
+
+        if active.sum() > 0:
+            m_hard_iou = hard_iou[active].mean().item()
+            m_hard_dice = hard_dice[active].mean().item()
+            m_soft_iou = soft_iou[active].mean().item()
+            m_soft_dice = soft_dice[active].mean().item()
+        else:
+            m_hard_iou = hard_iou.mean().item()
+            m_hard_dice = hard_dice.mean().item()
+            m_soft_iou = soft_iou.mean().item()
+            m_soft_dice = soft_dice.mean().item()
+
+    return {
+        "hard_iou": m_hard_iou, "hard_dice": m_hard_dice,
+        "soft_iou": m_soft_iou, "soft_dice": m_soft_dice
+    }
 
 def main():
     args = parse_args()
@@ -149,8 +162,7 @@ def main():
     for epoch in range(1, args.epochs + 1):
         model.train()
         epoch_loss = 0.0
-        epoch_iou = 0.0
-        epoch_dice = 0.0
+        train_metrics = {"hard_iou": 0.0, "hard_dice": 0.0, "soft_iou": 0.0, "soft_dice": 0.0}
         epoch_loss_dict = {"l_cls": 0.0, "l_pos": 0.0, "l_tan": 0.0, "l_curv": 0.0, "l_mask": 0.0}
         start_time = time.time()
 
@@ -185,33 +197,31 @@ def main():
             for k, v in outputs["loss_dict"].items():
                 epoch_loss_dict[k] += v
 
-            # Compute batch IoU & Dice metrics
-            b_iou, b_dice = compute_mask_iou_dice(outputs["pred_masks"], targets["target_masks"])
-            epoch_iou += b_iou
-            epoch_dice += b_dice
+            # Compute batch Hard & Soft metrics
+            b_m = compute_mask_metrics(outputs["pred_masks"], targets["target_masks"])
+            for mk in train_metrics:
+                train_metrics[mk] += b_m[mk]
 
-            pbar.set_postfix({"loss": f"{loss.item():.4f}", "iou": f"{b_iou*100:.1f}%"})
+            pbar.set_postfix({"loss": f"{loss.item():.4f}", "iou": f"{b_m['hard_iou']*100:.1f}%"})
 
         scheduler.step()
         elapsed = time.time() - start_time
         avg_train_loss = epoch_loss / max(len(loader), 1)
-        avg_train_iou = epoch_iou / max(len(loader), 1)
-        avg_train_dice = epoch_dice / max(len(loader), 1)
+        for mk in train_metrics:
+            train_metrics[mk] /= max(len(loader), 1)
 
         for k in epoch_loss_dict:
             epoch_loss_dict[k] /= max(len(loader), 1)
 
         # 4. Validation Loop
         avg_val_loss = avg_train_loss
-        avg_val_iou = avg_train_iou
-        avg_val_dice = avg_train_dice
+        val_metrics = dict(train_metrics)
         val_loss_dict = dict(epoch_loss_dict)
 
         if val_loader is not None and len(val_loader) > 0:
             model.eval()
             val_epoch_loss = 0.0
-            val_epoch_iou = 0.0
-            val_epoch_dice = 0.0
+            val_metrics = {"hard_iou": 0.0, "hard_dice": 0.0, "soft_iou": 0.0, "soft_dice": 0.0}
             val_epoch_loss_dict = {"l_cls": 0.0, "l_pos": 0.0, "l_tan": 0.0, "l_curv": 0.0, "l_mask": 0.0}
             
             with torch.no_grad():
@@ -238,19 +248,20 @@ def main():
                     for k, v in val_outputs["loss_dict"].items():
                         val_epoch_loss_dict[k] += v
 
-                    v_iou, v_dice = compute_mask_iou_dice(val_outputs["pred_masks"], targets["target_masks"])
-                    val_epoch_iou += v_iou
-                    val_epoch_dice += v_dice
+                    v_m = compute_mask_metrics(val_outputs["pred_masks"], targets["target_masks"])
+                    for mk in val_metrics:
+                        val_metrics[mk] += v_m[mk]
 
             avg_val_loss = val_epoch_loss / max(len(val_loader), 1)
-            avg_val_iou = val_epoch_iou / max(len(val_loader), 1)
-            avg_val_dice = val_epoch_dice / max(len(val_loader), 1)
+            for mk in val_metrics:
+                val_metrics[mk] /= max(len(val_loader), 1)
+
             for k in val_epoch_loss_dict:
                 val_loss_dict[k] = val_epoch_loss_dict[k] / max(len(val_loader), 1)
 
         print(f"Epoch [{epoch:2d}/{args.epochs:2d}] ({elapsed:.1f}s) | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | "
-              f"Val IoU: {avg_val_iou*100:.1f}% | Val Dice: {avg_val_dice*100:.1f}% | "
-              f"Val Pos3D: {val_loss_dict['l_pos']:.3f} | Val Tan: {val_loss_dict['l_tan']:.3f}", flush=True)
+              f"Val Hard IoU: {val_metrics['hard_iou']*100:.1f}% | Val Soft IoU: {val_metrics['soft_iou']*100:.1f}% | "
+              f"Val Hard Dice: {val_metrics['hard_dice']*100:.1f}% | Val Soft Dice: {val_metrics['soft_dice']*100:.1f}%", flush=True)
 
         if use_wandb:
             try:
@@ -258,16 +269,20 @@ def main():
                 wandb.log({
                     "epoch": epoch,
                     "train/total_loss": avg_train_loss,
-                    "train/mask_iou_pct": avg_train_iou * 100.0,
-                    "train/mask_dice_pct": avg_train_dice * 100.0,
+                    "train/hard_iou_pct": train_metrics["hard_iou"] * 100.0,
+                    "train/hard_dice_pct": train_metrics["hard_dice"] * 100.0,
+                    "train/soft_iou_pct": train_metrics["soft_iou"] * 100.0,
+                    "train/soft_dice_pct": train_metrics["soft_dice"] * 100.0,
                     "train/l_cls": epoch_loss_dict['l_cls'],
                     "train/l_pos": epoch_loss_dict['l_pos'],
                     "train/l_tan": epoch_loss_dict['l_tan'],
                     "train/l_curv": epoch_loss_dict['l_curv'],
                     "train/l_mask": epoch_loss_dict['l_mask'],
                     "val/total_loss": avg_val_loss,
-                    "val/mask_iou_pct": avg_val_iou * 100.0,
-                    "val/mask_dice_pct": avg_val_dice * 100.0,
+                    "val/hard_iou_pct": val_metrics["hard_iou"] * 100.0,
+                    "val/hard_dice_pct": val_metrics["hard_dice"] * 100.0,
+                    "val/soft_iou_pct": val_metrics["soft_iou"] * 100.0,
+                    "val/soft_dice_pct": val_metrics["soft_dice"] * 100.0,
                     "val/l_cls": val_loss_dict['l_cls'],
                     "val/l_pos": val_loss_dict['l_pos'],
                     "val/l_tan": val_loss_dict['l_tan'],
