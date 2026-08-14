@@ -62,27 +62,41 @@ def main():
 
     os.makedirs(args.save_dir, exist_ok=True)
 
-    # 1. Dataset & DataLoader
+    # 1. Dataset & DataLoader (Train & Val)
     if not os.path.exists(args.dataset_dir):
         print(f"⚠️ Warning: Dataset path '{args.dataset_dir}' does not exist yet.")
         print("💡 Make sure to run dataset preparation script first: python shared/utils/prepare_dataset.py --target_dir /kaggle/working/L3D")
         return
 
-    dataset = Surgical3DVectorDataset(
+    train_dataset = Surgical3DVectorDataset(
         dataset_dir=args.dataset_dir,
         num_instances=config.num_instances,
         num_points=config.num_points,
         mode="train"
     )
-    print(f"📊 Training Dataset Size: {len(dataset)} images")
+    val_dataset = Surgical3DVectorDataset(
+        dataset_dir=args.dataset_dir,
+        num_instances=config.num_instances,
+        num_points=config.num_points,
+        mode="val"
+    )
+    print(f"📊 Training Dataset Size: {len(train_dataset)} images | Validation Dataset Size: {len(val_dataset)} images")
 
     loader = DataLoader(
-        dataset,
+        train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=config.num_workers,
-        drop_last=True if len(dataset) > args.batch_size else False
+        drop_last=True if len(train_dataset) > args.batch_size else False
     )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=config.num_workers,
+        drop_last=False
+    ) if len(val_dataset) > 0 else None
 
     # 2. Instantiate Model & Optimizer
     model = Surgical3DVectorTransformer(config).to(device)
@@ -95,8 +109,8 @@ def main():
     else:
         scaler = torch.cuda.amp.GradScaler(enabled=use_cuda_amp)
 
-    # 3. Training Loop
-    best_loss = float("inf")
+    # 3. Training & Validation Loop
+    best_val_loss = float("inf")
     
     for epoch in range(1, args.epochs + 1):
         model.train()
@@ -104,7 +118,7 @@ def main():
         epoch_loss_dict = {"l_cls": 0.0, "l_pos": 0.0, "l_tan": 0.0, "l_curv": 0.0, "l_mask": 0.0}
         start_time = time.time()
 
-        pbar = tqdm(loader, desc=f"Epoch {epoch:2d}/{args.epochs:2d}", leave=False)
+        pbar = tqdm(loader, desc=f"Epoch {epoch:2d}/{args.epochs:2d} [Train]", leave=False)
         for batch_idx, batch in enumerate(pbar):
             images = batch["image"].to(device)
             depth = batch["depth"].to(device)
@@ -139,45 +153,88 @@ def main():
 
         scheduler.step()
         elapsed = time.time() - start_time
-        avg_loss = epoch_loss / max(len(loader), 1)
+        avg_train_loss = epoch_loss / max(len(loader), 1)
         for k in epoch_loss_dict:
             epoch_loss_dict[k] /= max(len(loader), 1)
 
-        print(f"Epoch [{epoch:2d}/{args.epochs:2d}] ({elapsed:.1f}s) | Total Loss: {avg_loss:.4f} | "
-              f"Cls: {epoch_loss_dict['l_cls']:.3f} | Pos3D: {epoch_loss_dict['l_pos']:.3f} | "
-              f"Tan: {epoch_loss_dict['l_tan']:.3f} | Mask: {epoch_loss_dict['l_mask']:.3f}", flush=True)
+        # 4. Validation Loop
+        avg_val_loss = avg_train_loss
+        val_loss_dict = dict(epoch_loss_dict)
+
+        if val_loader is not None and len(val_loader) > 0:
+            model.eval()
+            val_epoch_loss = 0.0
+            val_epoch_loss_dict = {"l_cls": 0.0, "l_pos": 0.0, "l_tan": 0.0, "l_curv": 0.0, "l_mask": 0.0}
+            
+            with torch.no_grad():
+                val_pbar = tqdm(val_loader, desc=f"Epoch {epoch:2d}/{args.epochs:2d} [Val]", leave=False)
+                for batch in val_pbar:
+                    images = batch["image"].to(device)
+                    depth = batch["depth"].to(device)
+                    targets = {
+                        "target_classes": batch["target_classes"].to(device),
+                        "target_polylines": batch["target_polylines"].to(device),
+                        "target_masks": batch["target_masks"].to(device),
+                        "valid_mask": batch["valid_mask"].to(device)
+                    }
+                    if hasattr(torch, "amp") and hasattr(torch.amp, "autocast"):
+                        autocast_ctx = torch.amp.autocast("cuda", enabled=use_cuda_amp)
+                    else:
+                        autocast_ctx = torch.cuda.amp.autocast(enabled=use_cuda_amp)
+
+                    with autocast_ctx:
+                        val_outputs = model(images, depth, targets=targets)
+                        v_loss = val_outputs["loss"]
+
+                    val_epoch_loss += v_loss.item()
+                    for k, v in val_outputs["loss_dict"].items():
+                        val_epoch_loss_dict[k] += v
+
+            avg_val_loss = val_epoch_loss / max(len(val_loader), 1)
+            for k in val_epoch_loss_dict:
+                val_loss_dict[k] = val_epoch_loss_dict[k] / max(len(val_loader), 1)
+
+        print(f"Epoch [{epoch:2d}/{args.epochs:2d}] ({elapsed:.1f}s) | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | "
+              f"Val Cls: {val_loss_dict['l_cls']:.3f} | Val Pos3D: {val_loss_dict['l_pos']:.3f} | "
+              f"Val Tan: {val_loss_dict['l_tan']:.3f} | Val Mask: {val_loss_dict['l_mask']:.3f}", flush=True)
 
         if use_wandb:
             try:
                 import wandb
                 wandb.log({
                     "epoch": epoch,
-                    "train/total_loss": avg_loss,
+                    "train/total_loss": avg_train_loss,
                     "train/l_cls": epoch_loss_dict['l_cls'],
                     "train/l_pos": epoch_loss_dict['l_pos'],
                     "train/l_tan": epoch_loss_dict['l_tan'],
                     "train/l_curv": epoch_loss_dict['l_curv'],
                     "train/l_mask": epoch_loss_dict['l_mask'],
-                    "train/learning_rate": optimizer.param_groups[0]['lr']
+                    "val/total_loss": avg_val_loss,
+                    "val/l_cls": val_loss_dict['l_cls'],
+                    "val/l_pos": val_loss_dict['l_pos'],
+                    "val/l_tan": val_loss_dict['l_tan'],
+                    "val/l_curv": val_loss_dict['l_curv'],
+                    "val/l_mask": val_loss_dict['l_mask'],
+                    "learning_rate": optimizer.param_groups[0]['lr']
                 })
             except Exception:
                 pass
 
-        # Save Best Checkpoint
-        if avg_loss < best_loss:
-            best_loss = avg_loss
+        # Save Best Checkpoint on Validation Loss
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
             ckpt_path = os.path.join(args.save_dir, "best_surgical_3d_vector.pth")
             torch.save({
                 "epoch": epoch,
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
-                "best_loss": best_loss,
+                "best_val_loss": best_val_loss,
                 "config": config
             }, ckpt_path)
-            print(f"  💾 Best model checkpoint saved to '{ckpt_path}'")
+            print(f"  💾 Best validation checkpoint saved to '{ckpt_path}'")
 
     print("=" * 70)
-    print(f"✅ EXP_05 Training Finished cleanly! Best Loss = {best_loss:.4f}")
+    print(f"✅ EXP_05 Training Finished cleanly! Best Val Loss = {best_val_loss:.4f}")
     print("=" * 70)
 
 if __name__ == "__main__":
