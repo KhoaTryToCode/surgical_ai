@@ -49,7 +49,7 @@ class EXP05Config:
     lambda_pos: float = 5.0         # Bidirectional 3D Smooth L1 Position Loss weight
     lambda_tan: float = 2.0         # Cosine Tangent Edge Alignment Loss weight
     lambda_curv: float = 1.0        # Discrete 1D Laplacian Curvature Loss weight
-    lambda_mask: float = 5.0        # Auxiliary 2D Mask BCE + Dice Loss weight
+    lambda_mask: float = 2.0        # Auxiliary 2D Mask BCE + Dice Loss weight (Matching Mask2Former)
     
     # Training & Execution
     batch_size: int = 4

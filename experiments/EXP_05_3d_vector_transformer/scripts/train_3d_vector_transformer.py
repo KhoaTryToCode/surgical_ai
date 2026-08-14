@@ -145,9 +145,24 @@ def main():
         drop_last=False
     ) if len(val_dataset) > 0 else None
 
-    # 2. Instantiate Model & Optimizer
+    # 2. Instantiate Model & Optimizer (Backbone LR = 0.1x to prevent pre-trained weight drift)
     model = Surgical3DVectorTransformer(config).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=config.weight_decay)
+    
+    backbone_params = []
+    head_params = []
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        if "backbone" in name:
+            backbone_params.append(param)
+        else:
+            head_params.append(param)
+
+    optimizer = torch.optim.AdamW([
+        {"params": backbone_params, "lr": args.lr * 0.1},
+        {"params": head_params, "lr": args.lr}
+    ], weight_decay=config.weight_decay)
+    
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
     
     use_cuda_amp = (device.type == "cuda")

@@ -52,13 +52,12 @@ class HierarchicalDecoderLayer(nn.Module):
         """
         B, NK, C = queries.shape
 
-        # 1. Intra-Curve Self-Attention (Reshaped to B*N, K, C)
-        # Assuming NK = N * K
+        # 1. Intra-Curve Self-Attention
         q_norm = self.norm1(queries)
         sa_out, _ = self.self_attn(q_norm, q_norm, q_norm)
         queries = queries + sa_out
 
-        # 2. Memory-Efficient Shared Cross-Attention (B, NK, C) x (B, H_f*W_f, C)
+        # 2. Memory-Efficient Shared Cross-Attention
         q_norm2 = self.norm2(queries)
         ca_out, _ = self.cross_attn(q_norm2, memory, memory, attn_mask=attn_mask)
         queries = queries + ca_out
@@ -69,8 +68,8 @@ class HierarchicalDecoderLayer(nn.Module):
 
 class HierarchicalMaskedDecoder3D(nn.Module):
     """
-    Multi-Layer Hierarchical Masked Decoder with Memory-Optimized Dual Prediction Heads.
-    Uses Stride-16 feature maps (64x64 = 4096 spatial tokens) for 4x cross-attention memory reduction.
+    Multi-Layer Hierarchical Masked Decoder with Mask2Former Dot-Product 2D Mask Heads
+    and Memory-Optimized Dual Prediction Heads.
     """
     def __init__(self, embed_dim: int = 256, num_instances: int = 10, num_points: int = 20, 
                  num_classes: int = 4, num_layers: int = 6):
@@ -105,11 +104,12 @@ class HierarchicalMaskedDecoder3D(nn.Module):
             ) for _ in range(num_layers)
         ])
 
-        self.mask_heads = nn.ModuleList([
+        # Mask2Former Dot-Product Mask Embed Projections
+        self.mask_embed_proj = nn.ModuleList([
             nn.Sequential(
-                nn.Conv2d(embed_dim, embed_dim, kernel_size=3, padding=1),
+                nn.Linear(embed_dim, embed_dim),
                 nn.GELU(),
-                nn.Conv2d(embed_dim, 1, kernel_size=1)
+                nn.Linear(embed_dim, embed_dim)
             ) for _ in range(num_layers)
         ])
 
@@ -122,12 +122,16 @@ class HierarchicalMaskedDecoder3D(nn.Module):
         B, N, K, _ = initial_anchors_3d.shape
         C = self.embed_dim
         
-        # Select high-resolution feature map (stride_idx=1 for Stride-8 = 128x128 = 16,384 tokens)
+        # Select feature map for cross-attention memory (stride_idx=1 for Stride-8)
         feat_map = fused_features[stride_idx] if stride_idx < len(fused_features) else fused_features[1]
         _, _, H_f, W_f = feat_map.shape
 
         # Flatten visual feature map for cross-attention memory: (B, H_f*W_f, C)
         memory = feat_map.flatten(2).permute(0, 2, 1).contiguous()
+
+        # High-resolution pixel features at Stride-4 (256x256) for Dot-Product Mask Head
+        feat_stride4 = fused_features[0]
+        _, _, H_m, W_m = feat_stride4.shape
 
         # Initialize Dual-Index Query Tokens Q_{i,j}
         inst_indices = torch.arange(N, device=initial_anchors_3d.device)
@@ -177,9 +181,9 @@ class HierarchicalMaskedDecoder3D(nn.Module):
             delta_p = self.point_3d_heads[l](queries_reshaped) * 0.2 # (B, N, K, 3)
             current_anchors = torch.clamp(current_anchors + delta_p, -1.0, 1.0)
 
-            # 3. 2D Mask Head (Generating 2D mask M_l)
-            inst_feat_expanded = inst_feat.view(B * N, C, 1, 1).expand(-1, -1, H_f, W_f)
-            mask_logits_stride = self.mask_heads[l](inst_feat_expanded).view(B, N, H_f, W_f)
+            # 3. Mask2Former Dot-Product 2D Mask Head: M_i = MLP(q_i) . F_stride4
+            mask_embed = self.mask_embed_proj[l](inst_feat) # (B, N, C)
+            mask_logits_stride = torch.einsum("bnc,bchw->bnhw", mask_embed, feat_stride4) # (B, N, H_m, W_m)
             current_mask_logits = F.interpolate(mask_logits_stride, size=(1024, 1024), mode='bilinear', align_corners=False) # (B, N, 1024, 1024)
 
             outputs_cls.append(cls_logits)
