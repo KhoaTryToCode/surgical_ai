@@ -2,6 +2,24 @@ import os
 from dataclasses import dataclass, field
 from typing import List
 
+def resolve_dataset_dir() -> str:
+    candidate_paths = [
+        "/kaggle/working/L3D",
+        "/kaggle/input/laparoscopic-liver-landmarks",
+        "/kaggle/input/laparoscopic-liver",
+        "/kaggle/input/l3d",
+        "data/laparoscopic_liver",
+        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", "laparoscopic_liver")
+    ]
+    for p in candidate_paths:
+        if os.path.exists(p):
+            return p
+    if os.path.exists("/kaggle/input"):
+        for root, dirs, _ in os.walk("/kaggle/input"):
+            if "images" in dirs or "labels" in dirs:
+                return root
+    return candidate_paths[0]
+
 @dataclass
 class EXP05Config:
     # Experiment metadata
@@ -40,13 +58,7 @@ class EXP05Config:
     num_epochs: int = 50
     mask_stroke_thickness: int = 35 # GT Mask rasterization stroke thickness at 1024x1024
     
-    # Data paths resolution (Local macOS fallback vs Kaggle)
-    dataset_dir: str = field(default_factory=lambda: (
-        "/kaggle/working/L3D" if os.path.exists("/kaggle/working/L3D")
-        else (
-            "data/laparoscopic_liver" if os.path.exists("data/laparoscopic_liver")
-            else os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", "laparoscopic_liver")
-        )
-    ))
+    # Data paths resolution (Auto-resolves Kaggle vs Local)
+    dataset_dir: str = field(default_factory=resolve_dataset_dir)
 
 config = EXP05Config()
