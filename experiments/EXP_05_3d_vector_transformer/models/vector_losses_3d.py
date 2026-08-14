@@ -126,8 +126,11 @@ class Vector3DLossSuite(nn.Module):
             # 1. Run Hungarian Matcher for layer l in Float32
             matched_indices = self.matcher(pred_cls_l, pred_poly_l, target_cls, target_polylines, valid_mask)
 
-            # Compute Classification Loss
-            l_cls_layer = F.cross_entropy(pred_cls_l.view(-1, pred_cls_l.size(-1)), target_cls.view(-1), reduction='mean')
+            # Compute Classification Loss with DETR/Mask2Former Background Weighting (0.1 for no-object class 0)
+            num_classes_total = pred_cls_l.size(-1)
+            cls_weights = torch.ones(num_classes_total, device=pred_cls_l.device)
+            cls_weights[0] = 0.1 # Downweight background class 0 to prevent background query dominance
+            l_cls_layer = F.cross_entropy(pred_cls_l.view(-1, num_classes_total), target_cls.view(-1), weight=cls_weights, reduction='mean')
             
             l_pos_layer = 0.0
             l_tan_layer = 0.0
