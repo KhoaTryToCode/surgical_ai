@@ -29,30 +29,31 @@ def parse_args():
     parser.add_argument("--wandb_run_name", type=str, default="EXP_05_Swin_3D_Vector_Transformer", help="W&B run name")
     return parser.parse_args()
 
-def compute_mask_iou_dice(pred_masks: torch.Tensor, target_masks: torch.Tensor, threshold: float = 0.0, eps: float = 1e-6):
+def compute_mask_iou_dice(pred_masks: torch.Tensor, target_masks: torch.Tensor, eps: float = 1e-5):
     """
-    Computes 2D Mask Intersection over Union (IoU) and Dice Coefficient (0.0 to 1.0).
-    pred_masks: (B, N, H, W) logits
+    Computes continuous 2D Mask Soft-IoU and Soft-Dice Coefficient (0.0 to 1.0)
+    using sigmoid probabilities for smooth metric tracking from Epoch 1 onwards.
+    pred_masks: (B, N, H, W) raw logits
     target_masks: (B, N, H, W) binary GT masks
     """
     with torch.no_grad():
-        pred_bin = (pred_masks > threshold).float()
-        gt_bin = (target_masks > 0.5).float()
+        probs = torch.sigmoid(pred_masks.float())
+        gt_bin = (target_masks.float() > 0.5).float()
 
-        intersection = (pred_bin * gt_bin).sum(dim=(-2, -1)) # (B, N)
-        union = pred_bin.sum(dim=(-2, -1)) + gt_bin.sum(dim=(-2, -1)) - intersection
+        intersection = (probs * gt_bin).sum(dim=(-2, -1)) # (B, N)
+        union = probs.sum(dim=(-2, -1)) + gt_bin.sum(dim=(-2, -1)) - intersection
 
-        iou = (intersection + eps) / (union + eps)
-        dice = (2.0 * intersection + eps) / (pred_bin.sum(dim=(-2, -1)) + gt_bin.sum(dim=(-2, -1)) + eps)
+        soft_iou = (intersection + eps) / (union + eps)
+        soft_dice = (2.0 * intersection + eps) / (probs.sum(dim=(-2, -1)) + gt_bin.sum(dim=(-2, -1)) + eps)
 
-        # Average over active masks
+        # Average over active landmark masks
         active = (gt_bin.sum(dim=(-2, -1)) > 0)
         if active.sum() > 0:
-            mean_iou = iou[active].mean().item()
-            mean_dice = dice[active].mean().item()
+            mean_iou = soft_iou[active].mean().item()
+            mean_dice = soft_dice[active].mean().item()
         else:
-            mean_iou = iou.mean().item()
-            mean_dice = dice.mean().item()
+            mean_iou = soft_iou.mean().item()
+            mean_dice = soft_dice.mean().item()
 
     return mean_iou, mean_dice
 
