@@ -62,8 +62,9 @@ class Surgical3DVectorTransformer(nn.Module):
         # Step 2: Generate Initial 3D Anchors from Stride-8 Feature Map
         initial_anchors = self.proposal_head(fused_features[1]) # (B, N, K, 3)
 
-        # Step 3: Decoder Iterative Refinement
-        outputs_cls, outputs_polylines, outputs_masks = self.decoder(fused_features, initial_anchors)
+        # Step 3: Decoder Iterative Refinement (Defaulting to Stride-8 High Precision for A100)
+        stride_idx = getattr(self.config, "decoder_stride_idx", 1)
+        outputs_cls, outputs_polylines, outputs_masks = self.decoder(fused_features, initial_anchors, stride_idx=stride_idx)
 
         output_dict = {
             "outputs_cls": outputs_cls,               # List of L tensors (B, N, num_classes+1)

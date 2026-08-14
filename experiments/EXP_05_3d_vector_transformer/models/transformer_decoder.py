@@ -113,20 +113,21 @@ class HierarchicalMaskedDecoder3D(nn.Module):
             ) for _ in range(num_layers)
         ])
 
-    def forward(self, fused_features: list, initial_anchors_3d: torch.Tensor):
+    def forward(self, fused_features: list, initial_anchors_3d: torch.Tensor, stride_idx: int = 1):
         """
         fused_features: List of 4 feature maps at strides {4, 8, 16, 32}
         initial_anchors_3d: (B, N, K, 3) initial 3D positions from proposal head
+        stride_idx: Feature map stride index (1: Stride-8 128x128 = 16,384 tokens for High Precision A100)
         """
         B, N, K, _ = initial_anchors_3d.shape
         C = self.embed_dim
         
-        # Use Stride-16 feature map for 4x cross-attention memory reduction (64x64 = 4096 tokens)
-        feat_stride16 = fused_features[2] 
-        _, _, H_f, W_f = feat_stride16.shape
+        # Select high-resolution feature map (stride_idx=1 for Stride-8 = 128x128 = 16,384 tokens)
+        feat_map = fused_features[stride_idx] if stride_idx < len(fused_features) else fused_features[1]
+        _, _, H_f, W_f = feat_map.shape
 
         # Flatten visual feature map for cross-attention memory: (B, H_f*W_f, C)
-        memory = feat_stride16.flatten(2).permute(0, 2, 1).contiguous()
+        memory = feat_map.flatten(2).permute(0, 2, 1).contiguous()
 
         # Initialize Dual-Index Query Tokens Q_{i,j}
         inst_indices = torch.arange(N, device=initial_anchors_3d.device)

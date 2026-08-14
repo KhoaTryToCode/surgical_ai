@@ -40,8 +40,9 @@ class EXP05Config:
     z_min: float = 0.1              # Canonical depth lower bound
     z_max: float = 1.0              # Canonical depth upper bound
     
-    # Backbone specs (Matching Mask2Former EXP_01)
+    # Backbone & Feature Pyramid specs (Matching Mask2Former EXP_01)
     mask2former_model_name: str = "facebook/mask2former-swin-tiny-ade-semantic"
+    decoder_stride_idx: int = 1     # 1: Stride-8 (128x128 = 16,384 tokens for High Precision A100), 2: Stride-16 (64x64)
     
     # Loss weights
     lambda_cls: float = 2.0         # Classification Focal Loss weight
