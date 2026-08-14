@@ -115,7 +115,7 @@ class Surgical3DVectorDataset(Dataset):
                 # Resample 2D polyline to K points
                 pts_2d_k = resample_polyline_arc_length(pts, K=self.num_points)
 
-                # Unproject 2D (u,v,d) to canonical 3D space [-1, 1]^3
+                # Unproject 2D (u,v,d) to canonical 3D space [-1, 1]^3 matching backbone pinhole math
                 u_norm = (pts_2d_k[:, 0] - 512.0) / 512.0
                 v_norm = (pts_2d_k[:, 1] - 512.0) / 512.0
                 
@@ -127,9 +127,18 @@ class Surgical3DVectorDataset(Dataset):
                     py = int(np.clip(pt[1], 0, dh - 1))
                     z_vals.append(depth_norm[py, px])
                 z_arr = np.array(z_vals, dtype=np.float32)
-                z_norm = z_arr * 2.0 - 1.0 # Scale depth to [-1, 1]
 
-                pts_3d_k = np.stack([u_norm, v_norm, z_norm], axis=1) # (K, 3)
+                # Canonical focal length (60 deg FOV -> f = 1.732)
+                f_canon = 1.0 / math.tan(math.radians(60.0 / 2.0))
+                z_canon = 0.1 + z_arr * 0.9
+                x_canon = (u_norm * z_canon) / f_canon
+                y_canon = (v_norm * z_canon) / f_canon
+
+                x_norm = np.clip(x_canon, -1.0, 1.0)
+                y_norm = np.clip(y_canon, -1.0, 1.0)
+                z_norm = z_canon * 2.0 - 1.0
+
+                pts_3d_k = np.stack([x_norm, y_norm, z_norm], axis=1) # (K, 3)
 
                 # Rasterize 2D mask
                 mask_2d = draw_polyline_mask(pts_2d_k, height=1024, width=1024, stroke_thickness=35)
