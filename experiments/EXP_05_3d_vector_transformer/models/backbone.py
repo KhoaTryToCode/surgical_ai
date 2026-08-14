@@ -135,13 +135,17 @@ class SurgicalBackbone3DLifting(nn.Module):
         if self.pixel_decoder is not None:
             try:
                 pixel_outputs = self.pixel_decoder(images)
-                if hasattr(pixel_outputs, "feature_maps") and pixel_outputs.feature_maps is not None:
+                if hasattr(pixel_outputs, "multi_scale_pixel_decoder_hidden_states") and pixel_outputs.multi_scale_pixel_decoder_hidden_states is not None:
+                    # 4 levels: mask_features (stride 4) + 3 multi-scale states (strides 8, 16, 32)
+                    features_2d = [pixel_outputs.mask_features] + list(pixel_outputs.multi_scale_pixel_decoder_hidden_states)
+                elif hasattr(pixel_outputs, "feature_maps") and pixel_outputs.feature_maps is not None:
                     features_2d = list(pixel_outputs.feature_maps)
                 elif hasattr(pixel_outputs, "decoder_hidden_states") and pixel_outputs.decoder_hidden_states is not None:
                     features_2d = list(pixel_outputs.decoder_hidden_states)
                 elif isinstance(pixel_outputs, (tuple, list)):
                     features_2d = list(pixel_outputs)
-            except Exception:
+            except Exception as e:
+                print(f"⚠️ Pixel decoder feature extraction exception: {e}")
                 features_2d = None
 
         if features_2d is None or len(features_2d) < 4:
