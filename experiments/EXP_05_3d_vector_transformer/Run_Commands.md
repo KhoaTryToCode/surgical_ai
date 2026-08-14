@@ -21,7 +21,7 @@ drive.mount('/content/drive')
 %cd /content
 !git clone https://github.com/KhoaTryToCode/surgical_ai.git || (cd surgical_ai && git pull)
 %cd /content/surgical_ai
-!pip install -q transformers scipy scikit-image opencv-python
+!pip install -q transformers scipy scikit-image opencv-python kagglehub
 ```
 
 ### Cell 3: Symlink Dataset to `/content/L3D`
