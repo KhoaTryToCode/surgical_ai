@@ -189,11 +189,12 @@ def validate(model, dataloader, criterion, device):
             except Exception:
                 pass
 
-        gt_poly_list = gt_pts[0, :num_instances[0]].cpu().numpy()
-        if len(pred_polylines) > 0 and len(gt_poly_list) > 0:
-            for p_pred in pred_polylines:
-                min_cd = min(chamfer_distance(p_pred, p_gt) for p_gt in gt_poly_list)
-                min_fd = min(frechet_distance(p_pred, p_gt) for p_gt in gt_poly_list)
+        pred_polylines_t = pred_restored_pts[0][keep]
+        gt_poly_t = gt_pts[0, :num_instances[0]]
+        if len(pred_polylines_t) > 0 and len(gt_poly_t) > 0:
+            for p_pred in pred_polylines_t:
+                min_cd = min(chamfer_distance(p_pred, p_gt).item() for p_gt in gt_poly_t)
+                min_fd = min(frechet_distance(p_pred, p_gt).item() for p_gt in gt_poly_t)
                 all_chamfer.append(min_cd)
                 all_frechet.append(min_fd)
 
