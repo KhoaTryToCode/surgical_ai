@@ -262,12 +262,10 @@ def main():
 
     criterion = SurgicalBeMapTRCriterion(
         num_classes=4,
-        weight_dict={
-            'loss_cls': 2.0,
-            'loss_pts': 5.0,
-            'loss_curve': 5.0,
-            'loss_dir': 2.0,
-        }
+        cls_weight=2.0,
+        pts_weight=5.0,
+        curve_weight=5.0,
+        dir_weight=2.0,
     ).to(device)
 
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
