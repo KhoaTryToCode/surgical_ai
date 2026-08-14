@@ -105,21 +105,14 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device):
         optimizer.zero_grad()
         intermediate_logits, intermediate_ctrl_pts, intermediate_restored_pts, aux_edge_logits = model(images)
 
-        targets = []
-        for b in range(images.shape[0]):
-            M = num_instances[b].item()
-            targets.append({
-                'pts': gt_pts[b, :M],
-                'labels': gt_labels[b, :M],
-            })
-
-        loss_dict = criterion(
+        loss_dict, vec_loss = criterion(
             intermediate_logits,
             intermediate_ctrl_pts,
             intermediate_restored_pts,
-            targets
+            gt_labels,
+            gt_pts,
+            num_instances
         )
-        vec_loss = loss_dict['loss_total']
         aux_loss = compute_aux_edge_loss(aux_edge_logits, pixel_masks)
         loss = vec_loss + 1.0 * aux_loss
 
@@ -159,18 +152,10 @@ def validate(model, dataloader, criterion, device):
 
         pred_logits, pred_ctrl_pts, pred_restored_pts, aux_edge_logits = model(images)
 
-        targets = []
-        for b in range(images.shape[0]):
-            M = num_instances[b].item()
-            targets.append({
-                'pts': gt_pts[b, :M],
-                'labels': gt_labels[b, :M],
-            })
-
-        loss_dict = criterion(
-            [pred_logits], [pred_ctrl_pts], [pred_restored_pts], targets
+        loss_dict, vec_loss = criterion(
+            [pred_logits], [pred_ctrl_pts], [pred_restored_pts],
+            gt_labels, gt_pts, num_instances
         )
-        vec_loss = loss_dict['loss_total']
         aux_loss = compute_aux_edge_loss(aux_edge_logits, pixel_masks)
         loss = vec_loss + 1.0 * aux_loss
         total_loss_epoch += loss.item()
