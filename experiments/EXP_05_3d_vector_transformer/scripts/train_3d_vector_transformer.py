@@ -86,7 +86,8 @@ def main():
         epoch_loss_dict = {"l_cls": 0.0, "l_pos": 0.0, "l_tan": 0.0, "l_curv": 0.0, "l_mask": 0.0}
         start_time = time.time()
 
-        for batch_idx, batch in enumerate(loader):
+        pbar = tqdm(loader, desc=f"Epoch {epoch:2d}/{args.epochs:2d}", leave=False)
+        for batch_idx, batch in enumerate(pbar):
             images = batch["image"].to(device)
             depth = batch["depth"].to(device)
             targets = {
@@ -116,6 +117,8 @@ def main():
             for k, v in outputs["loss_dict"].items():
                 epoch_loss_dict[k] += v
 
+            pbar.set_postfix({"loss": f"{loss.item():.4f}"})
+
         scheduler.step()
         elapsed = time.time() - start_time
         avg_loss = epoch_loss / max(len(loader), 1)
@@ -124,7 +127,7 @@ def main():
 
         print(f"Epoch [{epoch:2d}/{args.epochs:2d}] ({elapsed:.1f}s) | Total Loss: {avg_loss:.4f} | "
               f"Cls: {epoch_loss_dict['l_cls']:.3f} | Pos3D: {epoch_loss_dict['l_pos']:.3f} | "
-              f"Tan: {epoch_loss_dict['l_tan']:.3f} | Mask: {epoch_loss_dict['l_mask']:.3f}")
+              f"Tan: {epoch_loss_dict['l_tan']:.3f} | Mask: {epoch_loss_dict['l_mask']:.3f}", flush=True)
 
         # Save Best Checkpoint
         if avg_loss < best_loss:
