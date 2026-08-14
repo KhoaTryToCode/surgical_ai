@@ -1,26 +1,44 @@
 import os
 import sys
 import argparse
+import shutil
 from pathlib import Path
 
-def setup_dataset(target_dir: str = "/kaggle/working/L3D") -> str:
+def download_via_kagglehub(split_name: str) -> str:
     """
-    Sets up symlinks for train, val, and test splits into target_dir (/kaggle/working/L3D):
-      /kaggle/working/L3D/train/images -> .../Train/images
-      /kaggle/working/L3D/train/labels -> .../Train/labels
-      /kaggle/working/L3D/val/images   -> .../Val/images
-      /kaggle/working/L3D/val/labels   -> .../Val/labels
-      /kaggle/working/L3D/test/images  -> .../Test/images
-      /kaggle/working/L3D/test/labels  -> .../Test/labels
+    Downloads Kaggle dataset split via official kagglehub Python library.
+    split_name: 'train', 'val', or 'test'
+    """
+    try:
+        import kagglehub
+        handle = f"khoatrytopublish/l3d-{split_name}"
+        print(f"📥 Downloading Kaggle dataset '{handle}' via kagglehub...")
+        download_path = kagglehub.dataset_download(handle)
+        print(f"✅ Successfully downloaded '{handle}' to: '{download_path}'")
+        return download_path
+    except Exception as e:
+        print(f"⚠️ Could not download dataset via kagglehub ({e}).")
+        return None
+
+def setup_dataset(target_dir: str = "/content/L3D") -> str:
+    """
+    Sets up dataset symlinks for train, val, and test splits into target_dir:
+      target_dir/train/images -> .../Train/images
+      target_dir/train/labels -> .../Train/labels
+      target_dir/val/images   -> .../Val/images
+      target_dir/val/labels   -> .../Val/labels
+      target_dir/test/images  -> .../Test/images
+      target_dir/test/labels  -> .../Test/labels
+    If dataset directories are not present locally or in /kaggle/input, it downloads them from Kaggle.
     """
     target_path = Path(target_dir).resolve()
     target_path.mkdir(parents=True, exist_ok=True)
-    print(f"📦 Setting up dataset symlinks in '{target_path}'...")
+    print(f"📦 Setting up dataset directory structure in '{target_path}'...")
 
     splits = ["train", "val", "test"]
     subdirs = ["images", "labels"]
 
-    # Candidate source map for Kaggle inputs
+    # Known candidate paths across Kaggle notebook, local, and custom environments
     known_mappings = {
         ("train", "images"): [
             "/kaggle/input/datasets/khoatrytopublish/l3d-train/Train/images",
@@ -60,11 +78,13 @@ def setup_dataset(target_dir: str = "/kaggle/working/L3D") -> str:
         ]
     }
 
+    # First pass: try existing local paths
+    downloaded_cache = {}
     for split in splits:
         for sub in subdirs:
             target_sub = target_path / split / sub
             target_sub.parent.mkdir(parents=True, exist_ok=True)
-            
+
             if target_sub.exists() or target_sub.is_symlink():
                 continue
 
@@ -74,22 +94,32 @@ def setup_dataset(target_dir: str = "/kaggle/working/L3D") -> str:
                     src_matched = candidate
                     break
 
-            # Fallback dynamic search if specific path is not found directly
-            if not src_matched and os.path.exists("/kaggle/input"):
-                for root, dirs, _ in os.walk("/kaggle/input", followlinks=True):
-                    root_lower = root.lower()
-                    if sub in root_lower and split in root_lower:
-                        src_matched = root
-                        break
+            # If not found locally, download split via kagglehub
+            if not src_matched:
+                if split not in downloaded_cache:
+                    downloaded_cache[split] = download_via_kagglehub(split)
+                
+                dl_base = downloaded_cache[split]
+                if dl_base and os.path.exists(dl_base):
+                    # Search inside downloaded kagglehub folder for matching images/labels
+                    for root, dirs, _ in os.walk(dl_base, followlinks=True):
+                        if os.path.basename(root).lower() == sub:
+                            src_matched = root
+                            break
 
             if src_matched:
                 try:
                     os.symlink(src_matched, target_sub)
                     print(f"🔗 Created symlink: '{target_sub}' ──► '{src_matched}'")
                 except Exception as e:
-                    print(f"⚠️ Failed to create symlink '{target_sub}': {e}")
+                    # Fallback to copytree if symlink is not permitted
+                    try:
+                        shutil.copytree(src_matched, target_sub)
+                        print(f"📁 Copied folder: '{target_sub}'")
+                    except Exception as copy_err:
+                        print(f"⚠️ Could not link/copy '{target_sub}': {copy_err}")
             else:
-                print(f"⚠️ Source directory for {split}/{sub} not found under /kaggle/input.")
+                print(f"⚠️ Source directory for {split}/{sub} not found.")
 
     print(f"✅ Symlink setup completed in '{target_path}'.")
     return str(target_path)
@@ -128,8 +158,8 @@ def get_split(path):
     return train_file_names, test_file_names, val_file_names
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Prepare Surgical Dataset symlinks")
-    parser.add_argument("--target_dir", type=str, default="/kaggle/working/L3D", help="Target path to create symlinks for")
+    parser = argparse.ArgumentParser(description="Prepare Surgical Dataset symlinks & download from Kaggle")
+    parser.add_argument("--target_dir", type=str, default="/content/L3D", help="Target path to create symlinks for")
     args = parser.parse_args()
 
     setup_dataset(target_dir=args.target_dir)
