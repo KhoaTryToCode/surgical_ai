@@ -52,9 +52,15 @@ class SurgicalBackbone3DLifting(nn.Module):
         if HAS_TRANSFORMERS:
             try:
                 m2f = Mask2FormerForUniversalSegmentation.from_pretrained(mask2former_model_name)
-                self.pixel_decoder = m2f.model.pixel_decoder
+                if hasattr(m2f.model, "pixel_level_module"):
+                    self.pixel_decoder = m2f.model.pixel_level_module
+                elif hasattr(m2f.model, "pixel_decoder"):
+                    self.pixel_decoder = m2f.model.pixel_decoder
+                else:
+                    self.pixel_decoder = m2f.model
+                print(f"✅ Loaded Mask2Former backbone from '{mask2former_model_name}'")
             except Exception as e:
-                print(f"⚠️ Warning: Could not load '{mask2former_model_name}' directly ({e}). Initializing standard ConvNeXt/FPN fallback.")
+                print(f"⚠️ Warning: Could not load '{mask2former_model_name}' ({e}). Initializing ConvNeXt/FPN fallback.")
                 self.pixel_decoder = None
         else:
             self.pixel_decoder = None
@@ -64,7 +70,6 @@ class SurgicalBackbone3DLifting(nn.Module):
         pe_dim = 6 * 32 # 192 channels
 
         # 3. 1x1 Convolutions for 2D + 3D Feature Fusion across FPN levels
-        # Standard FPN channels C_2d = 256
         self.fuse_proj = nn.ModuleList([
             nn.Sequential(
                 nn.Conv2d(256 + pe_dim, embed_dim, kernel_size=1),
@@ -73,7 +78,7 @@ class SurgicalBackbone3DLifting(nn.Module):
             ) for _ in range(4)
         ])
 
-        # Fallback conv backbone if HuggingFace pretrained download fails
+        # Fallback conv backbone
         self.fallback_backbone = nn.Sequential(
             nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3),
             nn.BatchNorm2d(64),
@@ -126,21 +131,20 @@ class SurgicalBackbone3DLifting(nn.Module):
         B = images.size(0)
         
         # Extract 2D visual features
+        features_2d = None
         if self.pixel_decoder is not None:
             try:
-                pixel_decoder_outputs = self.pixel_decoder(images)
-                # Multi-scale features from pixel decoder
-                features_2d = pixel_decoder_outputs.feature_maps # List of 4 feature maps
+                pixel_outputs = self.pixel_decoder(images)
+                if hasattr(pixel_outputs, "feature_maps") and pixel_outputs.feature_maps is not None:
+                    features_2d = list(pixel_outputs.feature_maps)
+                elif hasattr(pixel_outputs, "decoder_hidden_states") and pixel_outputs.decoder_hidden_states is not None:
+                    features_2d = list(pixel_outputs.decoder_hidden_states)
+                elif isinstance(pixel_outputs, (tuple, list)):
+                    features_2d = list(pixel_outputs)
             except Exception:
-                # Fallback to local conv backbone if evaluation mode signature differs
-                feat = self.fallback_backbone(images)
-                features_2d = [
-                    F.interpolate(feat, scale_factor=2.0, mode='bilinear', align_corners=False),
-                    feat,
-                    F.interpolate(feat, scale_factor=0.5, mode='bilinear', align_corners=False),
-                    F.interpolate(feat, scale_factor=0.25, mode='bilinear', align_corners=False),
-                ]
-        else:
+                features_2d = None
+
+        if features_2d is None or len(features_2d) < 4:
             feat = self.fallback_backbone(images)
             features_2d = [
                 F.interpolate(feat, scale_factor=2.0, mode='bilinear', align_corners=False),

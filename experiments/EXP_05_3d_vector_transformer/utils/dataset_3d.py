@@ -68,14 +68,17 @@ class Surgical3DVectorDataset(Dataset):
 
         # 2. Load Depth Map (or generate synthetic depth fallback)
         depth_path = self._get_depth_path(img_path)
-        if os.path.exists(depth_path):
+        depth_norm = None
+        if os.path.exists(depth_path) and os.path.getsize(depth_path) > 0:
             depth_img = cv2.imread(depth_path, cv2.IMREAD_GRAYSCALE)
-            depth_resized = cv2.resize(depth_img, (1024, 1024))
-            depth_norm = depth_resized.astype(np.float32) / 255.0
-        else:
+            if depth_img is not None and depth_img.size > 0:
+                depth_resized = cv2.resize(depth_img, (1024, 1024))
+                depth_norm = depth_resized.astype(np.float32) / 255.0
+
+        if depth_norm is None or depth_norm.ndim != 2 or depth_norm.shape != (1024, 1024):
             # Synthetic fallback smooth depth map
             y_grid, x_grid = np.ogrid[:1024, :1024]
-            depth_norm = 0.5 + 0.3 * (y_grid / 1024.0)
+            depth_norm = (0.5 + 0.3 * (y_grid / 1024.0)).astype(np.float32)
 
         depth_tensor = torch.from_numpy(depth_norm).unsqueeze(0).float() # (1, 1024, 1024)
 
@@ -116,10 +119,12 @@ class Surgical3DVectorDataset(Dataset):
                 u_norm = (pts_2d_k[:, 0] - 512.0) / 512.0
                 v_norm = (pts_2d_k[:, 1] - 512.0) / 512.0
                 
-                # Sample depth along the polyline vertices
+                # Sample depth along the polyline vertices with safe bounds checking
                 z_vals = []
+                dh, dw = depth_norm.shape[:2]
                 for pt in pts_2d_k:
-                    px, py = int(np.clip(pt[0], 0, 1023)), int(np.clip(pt[1], 0, 1023))
+                    px = int(np.clip(pt[0], 0, dw - 1))
+                    py = int(np.clip(pt[1], 0, dh - 1))
                     z_vals.append(depth_norm[py, px])
                 z_arr = np.array(z_vals, dtype=np.float32)
                 z_norm = z_arr * 2.0 - 1.0 # Scale depth to [-1, 1]
