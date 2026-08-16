@@ -7,6 +7,10 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 
 # Add experiment root to path
 EXP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -70,6 +74,63 @@ def compute_mask_metrics(pred_masks: torch.Tensor, target_masks: torch.Tensor, e
         "soft_iou": m_soft_iou, "soft_dice": m_soft_dice
     }
 
+def render_prediction_overlay(image_tensor, gt_polylines, gt_masks, pred_polylines, pred_masks, epoch, split="Train", save_path="vis.png"):
+    """
+    Renders a side-by-side 2D & 3D visualization of Ground Truth vs Model Prediction for an epoch.
+    """
+    try:
+        # Denormalize image
+        mean = np.array([0.485, 0.456, 0.406]).reshape(1, 1, 3)
+        std = np.array([0.229, 0.224, 0.225]).reshape(1, 1, 3)
+        img_np = image_tensor.permute(1, 2, 0).cpu().numpy()
+        img_rgb = np.clip(img_np * std + mean, 0.0, 1.0)
+
+        # Extract first GT mask & polyline
+        gt_mask = gt_masks[0].cpu().numpy() if gt_masks is not None else np.zeros((1024, 1024))
+        gt_poly = gt_polylines[0].cpu().numpy() if gt_polylines is not None else np.zeros((20, 3))
+
+        # Extract best predicted mask & polyline
+        pred_m = torch.sigmoid(pred_masks[0]).cpu().numpy()
+        pred_p = pred_polylines[0].cpu().numpy()
+
+        fig = plt.figure(figsize=(14, 6), facecolor='#0d1117')
+        
+        # 1. 2D Visual Overlay (RGB + GT Contour + Predicted Mask Heatmap)
+        ax1 = fig.add_subplot(1, 2, 1)
+        ax1.set_facecolor('#161b22')
+        ax1.imshow(img_rgb)
+        # Predicted Mask Overlay
+        ax1.imshow(pred_m, cmap='magma', alpha=0.45)
+        # GT Contour
+        if gt_mask.sum() > 0:
+            ax1.contour(gt_mask, levels=[0.5], colors=['#00ffcc'], linewidths=3)
+        ax1.set_title(f"Epoch {epoch:02d} [{split}] 2D Mask & GT Contour (Cyan)", color='white', fontsize=12, fontweight='bold')
+        ax1.axis('off')
+
+        # 2. 3D Camera Coordinate Space Comparison
+        ax2 = fig.add_subplot(1, 2, 2, projection='3d')
+        ax2.set_facecolor('#0d1117')
+        if gt_poly.sum() != 0:
+            ax2.plot(gt_poly[:, 0], gt_poly[:, 1], gt_poly[:, 2], color='#00ffcc', linewidth=4, label="GT 3D Curve")
+            ax2.scatter(gt_poly[:, 0], gt_poly[:, 1], gt_poly[:, 2], color='#00ffcc', s=30)
+        
+        ax2.plot(pred_p[:, 0], pred_p[:, 1], pred_p[:, 2], color='#ff00ff', linewidth=3, linestyle='--', label="Predicted 3D")
+        ax2.scatter(pred_p[:, 0], pred_p[:, 1], pred_p[:, 2], color='#ff00ff', s=30)
+        
+        ax2.set_title(f"Epoch {epoch:02d} [{split}] 3D Polyline (Camera Metric Space)", color='white', fontsize=12, fontweight='bold')
+        ax2.tick_params(colors='white')
+        ax2.set_xlim([-1, 1]); ax2.set_ylim([-1, 1]); ax2.set_zlim([-1, 1])
+        ax2.legend(loc="upper left", facecolor='#161b22', labelcolor='white')
+
+        plt.tight_layout()
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=140, facecolor=fig.get_facecolor(), edgecolor='none')
+        plt.close()
+        return save_path
+    except Exception as e:
+        print(f"⚠️ Could not render visual overlay: {e}")
+        return None
+
 def main():
     args = parse_args()
     print("=" * 70)
@@ -108,6 +169,8 @@ def main():
         print("💻 Execution Device: CPU")
 
     os.makedirs(args.save_dir, exist_ok=True)
+    vis_dir = os.path.join(args.save_dir, "epoch_visualizations")
+    os.makedirs(vis_dir, exist_ok=True)
 
     # 1. Dataset & DataLoader (Train & Val)
     if not os.path.exists(args.dataset_dir):
@@ -181,6 +244,10 @@ def main():
         epoch_loss_dict = {"l_cls": 0.0, "l_pos": 0.0, "l_tan": 0.0, "l_curv": 0.0, "l_mask": 0.0}
         start_time = time.time()
 
+        # Cache last training batch for epoch visualization
+        last_train_batch = None
+        last_train_outputs = None
+
         pbar = tqdm(loader, desc=f"Epoch {epoch:2d}/{args.epochs:2d} [Train]", leave=False)
         for batch_idx, batch in enumerate(pbar):
             images = batch["image"].to(device)
@@ -218,6 +285,13 @@ def main():
                 train_metrics[mk] += b_m[mk]
 
             pbar.set_postfix({"loss": f"{loss.item():.4f}", "iou": f"{b_m['hard_iou']*100:.1f}%"})
+            
+            if batch_idx == 0:
+                last_train_batch = batch
+                last_train_outputs = {
+                    "pred_masks": outputs["pred_masks"].detach(),
+                    "pred_polylines": outputs["pred_polylines"].detach()
+                }
 
         scheduler.step()
         elapsed = time.time() - start_time
@@ -233,6 +307,9 @@ def main():
         val_metrics = dict(train_metrics)
         val_loss_dict = dict(epoch_loss_dict)
 
+        last_val_batch = None
+        last_val_outputs = None
+
         if val_loader is not None and len(val_loader) > 0:
             model.eval()
             val_epoch_loss = 0.0
@@ -241,7 +318,7 @@ def main():
             
             with torch.no_grad():
                 val_pbar = tqdm(val_loader, desc=f"Epoch {epoch:2d}/{args.epochs:2d} [Val]", leave=False)
-                for batch in val_pbar:
+                for v_idx, batch in enumerate(val_pbar):
                     images = batch["image"].to(device)
                     depth = batch["depth"].to(device)
                     targets = {
@@ -267,6 +344,13 @@ def main():
                     for mk in val_metrics:
                         val_metrics[mk] += v_m[mk]
 
+                    if v_idx == 0:
+                        last_val_batch = batch
+                        last_val_outputs = {
+                            "pred_masks": val_outputs["pred_masks"].detach(),
+                            "pred_polylines": val_outputs["pred_polylines"].detach()
+                        }
+
             avg_val_loss = val_epoch_loss / max(len(val_loader), 1)
             for mk in val_metrics:
                 val_metrics[mk] /= max(len(val_loader), 1)
@@ -278,10 +362,35 @@ def main():
               f"Val Hard IoU: {val_metrics['hard_iou']*100:.1f}% | Val Soft IoU: {val_metrics['soft_iou']*100:.1f}% | "
               f"Val Hard Dice: {val_metrics['hard_dice']*100:.1f}% | Val Soft Dice: {val_metrics['soft_dice']*100:.1f}%", flush=True)
 
+        # 5. Render 1 Train & 1 Val Visual Diagnostic Image per Epoch
+        train_img_path = os.path.join(vis_dir, f"epoch_{epoch:02d}_train.png")
+        val_img_path = os.path.join(vis_dir, f"epoch_{epoch:02d}_val.png")
+
+        if last_train_batch is not None and last_train_outputs is not None:
+            render_prediction_overlay(
+                last_train_batch["image"][0],
+                last_train_batch["target_polylines"][0],
+                last_train_batch["target_masks"][0],
+                last_train_outputs["pred_polylines"][0],
+                last_train_outputs["pred_masks"][0],
+                epoch=epoch, split="Train", save_path=train_img_path
+            )
+
+        if last_val_batch is not None and last_val_outputs is not None:
+            render_prediction_overlay(
+                last_val_batch["image"][0],
+                last_val_batch["target_polylines"][0],
+                last_val_batch["target_masks"][0],
+                last_val_outputs["pred_polylines"][0],
+                last_val_outputs["pred_masks"][0],
+                epoch=epoch, split="Val", save_path=val_img_path
+            )
+
+        # 6. Log metrics and visual overlays to W&B
         if use_wandb:
             try:
                 import wandb
-                wandb.log({
+                log_payload = {
                     "epoch": epoch,
                     "train/total_loss": avg_train_loss,
                     "train/hard_iou_pct": train_metrics["hard_iou"] * 100.0,
@@ -304,9 +413,16 @@ def main():
                     "val/l_curv": val_loss_dict['l_curv'],
                     "val/l_mask": val_loss_dict['l_mask'],
                     "learning_rate": optimizer.param_groups[0]['lr']
-                })
-            except Exception:
-                pass
+                }
+
+                if os.path.exists(train_img_path):
+                    log_payload["train/epoch_prediction_visual"] = wandb.Image(train_img_path)
+                if os.path.exists(val_img_path):
+                    log_payload["val/epoch_prediction_visual"] = wandb.Image(val_img_path)
+
+                wandb.log(log_payload)
+            except Exception as e:
+                print(f"⚠️ Wandb logging error: {e}")
 
         # Save Best Checkpoint on Validation Loss
         if avg_val_loss < best_val_loss:
