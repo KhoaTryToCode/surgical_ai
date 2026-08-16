@@ -36,14 +36,29 @@ drive.mount('/content/drive')
   --dataset_dir /content/L3D
 ```
 
-### Cell 5: Train EXP_05 on A100 GPU (Saving Checkpoints directly to Google Drive)
+### Cell 5: Run Visual Diagnostic Smoke Test (9-Panel Introspection)
+```python
+# Runs the 9-panel intermediate activation and 3D geometry diagnostic
+!python experiments/EXP_05_3d_vector_transformer/scripts/visualize_pipeline_smoke_test.py \
+  --dataset_dir /content/L3D \
+  --sample_idx 0 \
+  --output /content/pipeline_diagnostic_visualization.png \
+  --wandb
+
+# Display the 9-panel figure inline in Colab
+from IPython.display import Image, display
+display(Image("/content/pipeline_diagnostic_visualization.png"))
+```
+
+### Cell 6: Train EXP_05 on A100 GPU (Saving Checkpoints directly to Google Drive)
 ```bash
 !python experiments/EXP_05_3d_vector_transformer/scripts/train_3d_vector_transformer.py \
   --dataset_dir /content/L3D \
   --batch_size 8 \
   --epochs 50 \
   --lr 1e-4 \
-  --save_dir "/content/drive/MyDrive/Surgical_AI/checkpoints/EXP_05"
+  --save_dir "/content/drive/MyDrive/Surgical_AI/checkpoints/EXP_05" \
+  --wandb
 ```
 
 ### Cell 6: Evaluate 3D Chamfer Distance Metrics
