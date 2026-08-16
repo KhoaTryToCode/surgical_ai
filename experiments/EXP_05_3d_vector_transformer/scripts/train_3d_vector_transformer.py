@@ -386,6 +386,9 @@ def main():
                 epoch=epoch, split="Val", save_path=val_img_path
             )
 
+        if os.path.exists(train_img_path) or os.path.exists(val_img_path):
+            print(f"  🖼️ Epoch {epoch:02d} visual overlays saved to: '{vis_dir}/'", flush=True)
+
         # 6. Log metrics and visual overlays to W&B
         if use_wandb:
             try:
