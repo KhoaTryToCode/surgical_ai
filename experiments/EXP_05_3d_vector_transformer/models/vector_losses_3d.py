@@ -109,6 +109,21 @@ class Vector3DLossSuite(nn.Module):
         union = pred_sigmoid.sum(dim=(-2, -1)) + target.sum(dim=(-2, -1))
         return 1.0 - (2.0 * intersection + eps) / (union + eps)
 
+    def _focal_loss(self, inputs: torch.Tensor, targets: torch.Tensor, alpha: float = 0.25, gamma: float = 2.0) -> torch.Tensor:
+        """
+        Multi-Class Focal Loss for DETR/Mask2Former query classification.
+        inputs: (B * N, num_classes + 1)
+        targets: (B * N,)
+        """
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        pt = torch.exp(-ce_loss).clamp(min=1e-6, max=1.0)
+        focal_loss = ((1.0 - pt) ** gamma) * ce_loss
+        
+        alpha_t = torch.full_like(targets, alpha, dtype=torch.float32, device=inputs.device)
+        alpha_t[targets == 0] = (1.0 - alpha) * 0.1 # Suppress background query gradient explosion
+        
+        return (alpha_t * focal_loss).mean()
+
     def forward(self, outputs_cls: list, outputs_polylines: list, outputs_masks: list, targets: dict):
         """
         Calculates Deep Supervision Loss across all decoder layers L.
@@ -130,11 +145,9 @@ class Vector3DLossSuite(nn.Module):
             # 1. Run Hungarian Matcher for layer l in Float32
             matched_indices = self.matcher(pred_cls_l, pred_poly_l, target_cls, target_polylines, valid_mask)
 
-            # Compute Classification Loss with DETR/Mask2Former Background Weighting (0.1 for no-object class 0)
+            # Compute Classification Focal Loss (eliminates overconfident background penalties)
             num_classes_total = pred_cls_l.size(-1)
-            cls_weights = torch.ones(num_classes_total, device=pred_cls_l.device)
-            cls_weights[0] = 0.1 # Downweight background class 0 to prevent background query dominance
-            l_cls_layer = F.cross_entropy(pred_cls_l.view(-1, num_classes_total), target_cls.view(-1), weight=cls_weights, reduction='mean')
+            l_cls_layer = self._focal_loss(pred_cls_l.view(-1, num_classes_total), target_cls.view(-1))
             
             l_pos_layer = 0.0
             l_tan_layer = 0.0

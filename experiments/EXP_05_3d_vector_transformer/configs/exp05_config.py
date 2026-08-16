@@ -42,7 +42,7 @@ class EXP05Config:
     
     # Backbone & Feature Pyramid specs (Matching Mask2Former EXP_01)
     mask2former_model_name: str = "facebook/mask2former-swin-tiny-ade-semantic"
-    decoder_stride_idx: int = 1     # 1: Stride-8 (128x128 = 16,384 tokens for High Precision A100), 2: Stride-16 (64x64)
+    decoder_stride_idx: int = 0     # 0: Stride-4 (256x256 = 65,536 tokens for High Precision A100), 1: Stride-8 (128x128)
     
     # Loss weights
     lambda_cls: float = 2.0         # Classification Focal Loss weight

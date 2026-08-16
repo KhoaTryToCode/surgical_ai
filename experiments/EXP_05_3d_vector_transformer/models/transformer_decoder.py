@@ -21,26 +21,30 @@ class HierarchicalDecoderLayer(nn.Module):
     Performs:
       1. Intra-Curve Point Self-Attention across K points within each instance
       2. Memory-Efficient Masked Cross-Attention to 2D visual feature map
-      3. FFN update
+      3. FFN update with Dropout regularization
     """
-    def __init__(self, embed_dim: int = 256, num_heads: int = 8, feedforward_dim: int = 1024):
+    def __init__(self, embed_dim: int = 256, num_heads: int = 8, feedforward_dim: int = 1024, dropout: float = 0.1):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
 
         # Self-attention across point sequence
-        self.self_attn = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
+        self.self_attn = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True, dropout=dropout)
         self.norm1 = nn.LayerNorm(embed_dim)
+        self.dropout1 = nn.Dropout(dropout)
 
         # Cross-attention to 2D feature map
-        self.cross_attn = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
+        self.cross_attn = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True, dropout=dropout)
         self.norm2 = nn.LayerNorm(embed_dim)
+        self.dropout2 = nn.Dropout(dropout)
 
         # Feedforward Network
         self.ffn = nn.Sequential(
             nn.Linear(embed_dim, feedforward_dim),
             nn.GELU(),
-            nn.Linear(feedforward_dim, embed_dim)
+            nn.Dropout(dropout),
+            nn.Linear(feedforward_dim, embed_dim),
+            nn.Dropout(dropout)
         )
         self.norm3 = nn.LayerNorm(embed_dim)
 
@@ -50,17 +54,15 @@ class HierarchicalDecoderLayer(nn.Module):
         memory: (B, H_f*W_f, embed_dim) - 2D visual feature map
         attn_mask: (B * num_heads, N * K, H_f*W_f) boolean attention mask derived from M_{l-1}
         """
-        B, NK, C = queries.shape
-
         # 1. Intra-Curve Self-Attention
         q_norm = self.norm1(queries)
         sa_out, _ = self.self_attn(q_norm, q_norm, q_norm)
-        queries = queries + sa_out
+        queries = queries + self.dropout1(sa_out)
 
         # 2. Memory-Efficient Shared Cross-Attention
         q_norm2 = self.norm2(queries)
         ca_out, _ = self.cross_attn(q_norm2, memory, memory, attn_mask=attn_mask)
-        queries = queries + ca_out
+        queries = queries + self.dropout2(ca_out)
 
         # 3. FFN
         queries = queries + self.ffn(self.norm3(queries))
