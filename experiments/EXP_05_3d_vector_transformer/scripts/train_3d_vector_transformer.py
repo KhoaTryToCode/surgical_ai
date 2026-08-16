@@ -77,6 +77,7 @@ def compute_mask_metrics(pred_masks: torch.Tensor, target_masks: torch.Tensor, e
 def render_prediction_overlay(image_tensor, gt_polylines, gt_masks, pred_polylines, pred_masks, epoch, split="Train", save_path="vis.png"):
     """
     Renders a side-by-side 2D & 3D visualization of Ground Truth vs Model Prediction for an epoch.
+    Synchronizes the 2D projected polyline and 3D camera polyline.
     """
     try:
         # Denormalize image
@@ -85,27 +86,52 @@ def render_prediction_overlay(image_tensor, gt_polylines, gt_masks, pred_polylin
         img_np = image_tensor.permute(1, 2, 0).cpu().numpy()
         img_rgb = np.clip(img_np * std + mean, 0.0, 1.0)
 
-        # Extract first GT mask & polyline
+        # Extract first valid GT mask & polyline
         gt_mask = gt_masks[0].cpu().numpy() if gt_masks is not None else np.zeros((1024, 1024))
         gt_poly = gt_polylines[0].cpu().numpy() if gt_polylines is not None else np.zeros((20, 3))
 
-        # Extract best predicted mask & polyline
-        pred_m = torch.sigmoid(pred_masks[0]).cpu().numpy()
-        pred_p = pred_polylines[0].cpu().numpy()
+        # Find best-matched predicted query (highest mask activation or closest to GT center)
+        best_q_idx = 0
+        best_score = -1.0
+        gt_mask_t = torch.from_numpy(gt_mask).float()
+        for q in range(pred_masks.shape[0]):
+            p_m = torch.sigmoid(pred_masks[q]).cpu().float()
+            inter = (p_m * gt_mask_t).sum().item()
+            if inter > best_score:
+                best_score = inter
+                best_q_idx = q
+
+        pred_m = torch.sigmoid(pred_masks[best_q_idx]).cpu().numpy()
+        pred_p = pred_polylines[best_q_idx].cpu().numpy()
 
         fig = plt.figure(figsize=(14, 6), facecolor='#0d1117')
         
-        # 1. 2D Visual Overlay (RGB + GT Contour + Predicted Mask Heatmap)
+        # 1. 2D Visual Overlay (RGB + GT Contour + Predicted Mask Heatmap + Projected 2D Polyline)
         ax1 = fig.add_subplot(1, 2, 1)
         ax1.set_facecolor('#161b22')
         ax1.imshow(img_rgb)
-        # Predicted Mask Overlay
-        ax1.imshow(pred_m, cmap='magma', alpha=0.45)
-        # GT Contour
+        
+        # Predicted Mask Heatmap Overlay
+        ax1.imshow(pred_m, cmap='magma', alpha=0.40)
+        
+        # GT Landmark Contour (Cyan)
         if gt_mask.sum() > 0:
             ax1.contour(gt_mask, levels=[0.5], colors=['#00ffcc'], linewidths=3)
-        ax1.set_title(f"Epoch {epoch:02d} [{split}] 2D Mask & GT Contour (Cyan)", color='white', fontsize=12, fontweight='bold')
+
+        # Projected 2D Predicted Polyline (Magenta)
+        # Pinhole un-normalization: canonical focal length = 1.732051
+        f_canon = 1.732051
+        z_safe = np.clip(pred_p[:, 2] * 0.45 + 0.55, 0.1, 2.0)
+        u_norm = (pred_p[:, 0] / z_safe) / f_canon
+        v_norm = (pred_p[:, 1] / z_safe) / f_canon
+        u_pix = np.clip((u_norm * 0.5 + 0.5) * 1024, 0, 1023)
+        v_pix = np.clip((v_norm * 0.5 + 0.5) * 1024, 0, 1023)
+        
+        ax1.plot(u_pix, v_pix, color='#ff00ff', linewidth=3, linestyle='--', marker='o', markersize=4, label="Predicted Polyline (2D Projection)")
+        
+        ax1.set_title(f"Epoch {epoch:02d} [{split}] 2D Projection & Mask (Cyan=GT, Magenta=Pred)", color='white', fontsize=12, fontweight='bold')
         ax1.axis('off')
+        ax1.legend(loc="lower left", facecolor='#161b22', labelcolor='white')
 
         # 2. 3D Camera Coordinate Space Comparison
         ax2 = fig.add_subplot(1, 2, 2, projection='3d')
@@ -114,7 +140,7 @@ def render_prediction_overlay(image_tensor, gt_polylines, gt_masks, pred_polylin
             ax2.plot(gt_poly[:, 0], gt_poly[:, 1], gt_poly[:, 2], color='#00ffcc', linewidth=4, label="GT 3D Curve")
             ax2.scatter(gt_poly[:, 0], gt_poly[:, 1], gt_poly[:, 2], color='#00ffcc', s=30)
         
-        ax2.plot(pred_p[:, 0], pred_p[:, 1], pred_p[:, 2], color='#ff00ff', linewidth=3, linestyle='--', label="Predicted 3D")
+        ax2.plot(pred_p[:, 0], pred_p[:, 1], pred_p[:, 2], color='#ff00ff', linewidth=3, linestyle='--', label="Predicted 3D (Query {best_q_idx})")
         ax2.scatter(pred_p[:, 0], pred_p[:, 1], pred_p[:, 2], color='#ff00ff', s=30)
         
         ax2.set_title(f"Epoch {epoch:02d} [{split}] 3D Polyline (Camera Metric Space)", color='white', fontsize=12, fontweight='bold')
