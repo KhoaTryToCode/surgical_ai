@@ -153,10 +153,10 @@ class Vector3DLossSuite(nn.Module):
                 p_matched = pred_poly_l[b, pred_idx].float() # (M, K, 3)
                 gt_matched = target_polylines[b, gt_idx].float() # (M, K, 3)
 
-                # 2. Bidirectional Smooth L1 Position Loss
-                fwd_diff = F.smooth_l1_loss(p_matched, gt_matched, reduction='none').mean(dim=(-2, -1)) # (M,)
+                # 2. Bidirectional L1 3D Position Loss (Direct linear coordinate distance)
+                fwd_diff = F.l1_loss(p_matched, gt_matched, reduction='none').mean(dim=(-2, -1)) # (M,)
                 gt_rev = torch.flip(gt_matched, dims=[1])
-                rev_diff = F.smooth_l1_loss(p_matched, gt_rev, reduction='none').mean(dim=(-2, -1)) # (M,)
+                rev_diff = F.l1_loss(p_matched, gt_rev, reduction='none').mean(dim=(-2, -1)) # (M,)
 
                 best_dir_is_rev = rev_diff < fwd_diff
                 gt_aligned = gt_matched.clone()
@@ -174,10 +174,10 @@ class Vector3DLossSuite(nn.Module):
                 cos_sim = torch.clamp(cos_sim, -1.0, 1.0)
                 l_tan_layer += (1.0 - cos_sim).mean(dim=-1).sum()
 
-                # 4. 1D Discrete Laplacian Curvature Loss
+                # 4. 1D Discrete Laplacian Curvature Loss (L1 smoothness regularizer)
                 p_laplacian = p_matched[:, 2:] - 2.0 * p_matched[:, 1:-1] + p_matched[:, :-2]
                 gt_laplacian = gt_aligned[:, 2:] - 2.0 * gt_aligned[:, 1:-1] + gt_aligned[:, :-2]
-                l_curv_layer += F.mse_loss(p_laplacian, gt_laplacian, reduction='none').mean(dim=(-2, -1)).sum()
+                l_curv_layer += F.l1_loss(p_laplacian, gt_laplacian, reduction='none').mean(dim=(-2, -1)).sum()
 
                 # 5. Auxiliary 2D Mask Loss (BCE + Dice per instance)
                 m_matched = pred_mask_l[b, pred_idx].float() # (M, H, W)
