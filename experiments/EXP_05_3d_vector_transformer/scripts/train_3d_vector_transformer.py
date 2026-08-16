@@ -33,46 +33,75 @@ def parse_args():
     parser.add_argument("--wandb_run_name", type=str, default="EXP_05_Swin_3D_Vector_Transformer", help="W&B run name")
     return parser.parse_args()
 
-def compute_mask_metrics(pred_masks: torch.Tensor, target_masks: torch.Tensor, eps: float = 1e-5):
+def compute_mask_metrics(pred_masks: torch.Tensor, target_masks: torch.Tensor, valid_mask: torch.Tensor = None, eps: float = 1e-5):
     """
-    Computes BOTH Hard (thresholded > 0.5) and Soft (continuous sigmoid) 2D Mask IoU & Dice metrics.
+    Computes BOTH Hard (thresholded > 0.5) and Soft (continuous sigmoid) 2D Mask IoU & Dice metrics
+    using Optimal Instance Matching for each active GT landmark.
     pred_masks: (B, N, H, W) raw logits
     target_masks: (B, N, H, W) binary GT masks
+    valid_mask: (B, N) active GT indicators
     """
     with torch.no_grad():
+        B, N, H, W = pred_masks.shape
         probs = torch.sigmoid(pred_masks.float())
         hard_pred = (probs > 0.5).float()
         gt_bin = (target_masks.float() > 0.5).float()
 
-        active = (gt_bin.sum(dim=(-2, -1)) > 0)
+        hard_ious, hard_dices = [], []
+        soft_ious, soft_dices = [], []
 
-        # 1. Hard Metrics (Standard Paper Benchmark)
-        hard_inter = (hard_pred * gt_bin).sum(dim=(-2, -1))
-        hard_union = hard_pred.sum(dim=(-2, -1)) + gt_bin.sum(dim=(-2, -1)) - hard_inter
-        hard_iou = (hard_inter + eps) / (hard_union + eps)
-        hard_dice = (2.0 * hard_inter + eps) / (hard_pred.sum(dim=(-2, -1)) + gt_bin.sum(dim=(-2, -1)) + eps)
+        for b in range(B):
+            if valid_mask is not None:
+                active_gt = [g for g in range(N) if valid_mask[b, g] > 0 and gt_bin[b, g].sum() > 0]
+            else:
+                active_gt = [g for g in range(N) if gt_bin[b, g].sum() > 0]
 
-        # 2. Soft Metrics (Continuous Optimization Tracking)
-        soft_inter = (probs * gt_bin).sum(dim=(-2, -1))
-        soft_union = probs.sum(dim=(-2, -1)) + gt_bin.sum(dim=(-2, -1)) - soft_inter
-        soft_iou = (soft_inter + eps) / (soft_union + eps)
-        soft_dice = (2.0 * soft_inter + eps) / (probs.sum(dim=(-2, -1)) + gt_bin.sum(dim=(-2, -1)) + eps)
+            if len(active_gt) == 0:
+                continue
 
-        if active.sum() > 0:
-            m_hard_iou = hard_iou[active].mean().item()
-            m_hard_dice = hard_dice[active].mean().item()
-            m_soft_iou = soft_iou[active].mean().item()
-            m_soft_dice = soft_dice[active].mean().item()
+            for g in active_gt:
+                target_m = gt_bin[b, g] # (H, W)
+                
+                best_h_iou = 0.0
+                best_h_dice = 0.0
+                best_s_iou = 0.0
+                best_s_dice = 0.0
+                
+                for q in range(N):
+                    # Hard Metrics
+                    h_m = hard_pred[b, q]
+                    h_inter = (h_m * target_m).sum().item()
+                    h_union = h_m.sum().item() + target_m.sum().item() - h_inter
+                    h_iou = (h_inter + eps) / (h_union + eps)
+                    h_dice = (2.0 * h_inter + eps) / (h_m.sum().item() + target_m.sum().item() + eps)
+
+                    # Soft Metrics
+                    s_m = probs[b, q]
+                    s_inter = (s_m * target_m).sum().item()
+                    s_union = s_m.sum().item() + target_m.sum().item() - s_inter
+                    s_iou = (s_inter + eps) / (s_union + eps)
+                    s_dice = (2.0 * s_inter + eps) / (s_m.sum().item() + target_m.sum().item() + eps)
+
+                    if s_dice > best_s_dice or (best_s_dice == 0.0 and h_dice > best_h_dice):
+                        best_h_iou = h_iou
+                        best_h_dice = h_dice
+                        best_s_iou = s_iou
+                        best_s_dice = s_dice
+
+                hard_ious.append(best_h_iou)
+                hard_dices.append(best_h_dice)
+                soft_ious.append(best_s_iou)
+                soft_dices.append(best_s_dice)
+
+        if len(hard_ious) > 0:
+            return {
+                "hard_iou": float(np.mean(hard_ious)),
+                "hard_dice": float(np.mean(hard_dices)),
+                "soft_iou": float(np.mean(soft_ious)),
+                "soft_dice": float(np.mean(soft_dices))
+            }
         else:
-            m_hard_iou = hard_iou.mean().item()
-            m_hard_dice = hard_dice.mean().item()
-            m_soft_iou = soft_iou.mean().item()
-            m_soft_dice = soft_dice.mean().item()
-
-    return {
-        "hard_iou": m_hard_iou, "hard_dice": m_hard_dice,
-        "soft_iou": m_soft_iou, "soft_dice": m_soft_dice
-    }
+            return {"hard_iou": 0.0, "hard_dice": 0.0, "soft_iou": 0.0, "soft_dice": 0.0}
 
 def render_prediction_overlay(image_tensor, gt_polylines, gt_masks, valid_mask, pred_polylines, pred_masks, epoch, split="Train", save_path="vis.png"):
     """
@@ -317,8 +346,8 @@ def main():
             for k, v in outputs["loss_dict"].items():
                 epoch_loss_dict[k] += v
 
-            # Compute batch Hard & Soft metrics
-            b_m = compute_mask_metrics(outputs["pred_masks"], targets["target_masks"])
+            # Compute batch Hard & Soft metrics with Optimal Instance Matching
+            b_m = compute_mask_metrics(outputs["pred_masks"], targets["target_masks"], targets["valid_mask"])
             for mk in train_metrics:
                 train_metrics[mk] += b_m[mk]
 
@@ -378,7 +407,7 @@ def main():
                     for k, v in val_outputs["loss_dict"].items():
                         val_epoch_loss_dict[k] += v
 
-                    v_m = compute_mask_metrics(val_outputs["pred_masks"], targets["target_masks"])
+                    v_m = compute_mask_metrics(val_outputs["pred_masks"], targets["target_masks"], targets["valid_mask"])
                     for mk in val_metrics:
                         val_metrics[mk] += v_m[mk]
 
