@@ -34,7 +34,8 @@ class Sinusoidal3DPositionalEncoding(nn.Module):
         
         # Concat sin and cos across frequencies and 3 spatial channels
         pe = torch.cat([sin_feat, cos_feat], dim=-1) # (B, 3, H, W, 2 * num_pos_feats)
-        pe = pe.view(B, H, W, -1).permute(0, 3, 1, 2).contiguous() # (B, 6 * num_pos_feats, H, W)
+        # Correctly preserve (H, W) spatial dimensions when flattening the 3 spatial frequency channels
+        pe = pe.permute(0, 1, 4, 2, 3).contiguous().view(B, 3 * 2 * self.num_pos_feats, H, W) # (B, 192, H, W)
         return pe
 
 class SurgicalBackbone3DLifting(nn.Module):
