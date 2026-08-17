@@ -157,13 +157,25 @@ def main():
     ax7 = fig.add_subplot(3, 3, 7)
     ax7.set_facecolor('#161b22')
     ax7.imshow(img_rgb)
+    
+    # Find best-matched query slot for primary GT landmark
+    best_q = 0
     if len(active_gts) > 0:
-        gt_poly = target_polylines[0, active_gts[0]].cpu().numpy() * 1024.0
+        primary_gt_p = target_polylines[0, active_gts[0]] # (K, 2)
+        gt_poly = primary_gt_p.cpu().numpy() * 1024.0
         ax7.plot(gt_poly[:, 0], gt_poly[:, 1], color='#00ffcc', linewidth=4, label="Target GT 2D")
 
-    l0_poly = query_priors[0] * 1024.0
-    l2_poly = decoder_outputs["aux_polylines"][2][0, 0].detach().cpu().numpy() * 1024.0
-    l6_poly = decoder_outputs["aux_polylines"][-1][0, 0].detach().cpu().numpy() * 1024.0
+        best_l1 = float('inf')
+        for q in range(decoder_outputs["pred_polylines"].shape[1]):
+            pred_p_q = decoder_outputs["pred_polylines"][0, q]
+            l1_diff = torch.abs(pred_p_q - primary_gt_p).mean().item()
+            if l1_diff < best_l1:
+                best_l1 = l1_diff
+                best_q = q
+
+    l0_poly = query_priors[best_q] * 1024.0
+    l2_poly = decoder_outputs["aux_polylines"][2][0, best_q].detach().cpu().numpy() * 1024.0
+    l6_poly = decoder_outputs["aux_polylines"][-1][0, best_q].detach().cpu().numpy() * 1024.0
 
     ax7.plot(l0_poly[:, 0], l0_poly[:, 1], color='#ff9900', linestyle=':', linewidth=2.5, label="L0 (Learned Prior)")
     ax7.plot(l2_poly[:, 0], l2_poly[:, 1], color='#ff00ff', linestyle='--', linewidth=2.5, label="L2 Refined")
@@ -178,9 +190,21 @@ def main():
     ax8.imshow(img_rgb)
     for idx, g in enumerate(active_gts):
         gt_m = target_masks[0, g].cpu().numpy()
+        gt_p_norm = target_polylines[0, g]
         if gt_m.sum() > 0:
             ax8.contour(gt_m, levels=[0.5], colors=[colors_gt[idx % len(colors_gt)]], linewidths=2.5)
-        pred_p = decoder_outputs["pred_polylines"][0, idx].detach().cpu().numpy() * 1024.0
+
+        # Match best predicted query for this landmark
+        best_g_q = 0
+        best_g_l1 = float('inf')
+        for q in range(decoder_outputs["pred_polylines"].shape[1]):
+            pred_q = decoder_outputs["pred_polylines"][0, q]
+            l1_d = torch.abs(pred_q - gt_p_norm).mean().item()
+            if l1_d < best_g_l1:
+                best_g_l1 = l1_d
+                best_g_q = q
+
+        pred_p = decoder_outputs["pred_polylines"][0, best_g_q].detach().cpu().numpy() * 1024.0
         ax8.plot(pred_p[:, 0], pred_p[:, 1], color='#ff00ff', linewidth=3, linestyle='--', marker='o', markersize=3, label="Predicted Polyline" if idx == 0 else None)
     ax8.set_title("8. Final 2D Vector Landmark Predictions", color='white', fontsize=12, fontweight='bold')
     ax8.axis('off')
