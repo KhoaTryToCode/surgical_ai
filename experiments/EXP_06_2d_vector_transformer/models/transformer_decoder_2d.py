@@ -38,9 +38,9 @@ class HierarchicalDecoderLayer2D(nn.Module):
     """
     Single Layer of the Hierarchical 2D Transformer Decoder.
     Performs:
-      1. Intra-Curve Point Self-Attention across K points within each instance
-      2. Memory-Efficient Masked Cross-Attention to 2D visual feature map
-      3. FFN update with Dropout regularization
+      1. Intra-Curve Point Self-Attention (Q = content + pos, K = content + pos, V = content)
+      2. Full Global Cross-Attention to 2D visual feature map (Q = content + pos, K = memory, V = memory)
+      3. FFN update on pure visual content with Dropout regularization
     """
     def __init__(self, embed_dim: int = 256, num_heads: int = 8, feedforward_dim: int = 1024, dropout: float = 0.1):
         super().__init__()
@@ -52,7 +52,7 @@ class HierarchicalDecoderLayer2D(nn.Module):
         self.norm1 = nn.LayerNorm(embed_dim)
         self.dropout1 = nn.Dropout(dropout)
 
-        # 2. Masked cross-attention
+        # 2. Full Global Cross-Attention (unblinded to capture full organ textures)
         self.cross_attn = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True, dropout=dropout)
         self.norm2 = nn.LayerNorm(embed_dim)
         self.dropout2 = nn.Dropout(dropout)
@@ -67,30 +67,34 @@ class HierarchicalDecoderLayer2D(nn.Module):
         )
         self.norm3 = nn.LayerNorm(embed_dim)
 
-    def forward(self, queries: torch.Tensor, memory: torch.Tensor, attn_mask: torch.Tensor = None) -> torch.Tensor:
+    def forward(self, content: torch.Tensor, pos: torch.Tensor, memory: torch.Tensor) -> torch.Tensor:
         """
-        queries: (B, N * K, embed_dim) - all point queries in batch
-        memory: (B, H_f*W_f, embed_dim) - 2D visual feature map
-        attn_mask: (B * num_heads, N * K, H_f*W_f) boolean attention mask derived from M_{l-1}
+        content: (B, N * K, embed_dim) - pure visual/semantic features
+        pos: (B, N * K, embed_dim) - coordinate positional encoding
+        memory: (B, H_f*W_f, embed_dim) - 2D visual feature map from Swin backbone
         """
-        # 1. Intra-Curve Point Self-Attention
-        q_norm = self.norm1(queries)
-        sa_out, _ = self.self_attn(q_norm, q_norm, q_norm)
-        queries = queries + self.dropout1(sa_out)
+        # 1. Intra-Curve Point Self-Attention (Queries and Keys have position, Value is pure content)
+        q_sa = self.norm1(content + pos)
+        k_sa = q_sa
+        v_sa = self.norm1(content)
+        sa_out, _ = self.self_attn(q_sa, k_sa, v_sa)
+        content = content + self.dropout1(sa_out)
 
-        # 2. Masked Shared Cross-Attention
-        q_norm2 = self.norm2(queries)
-        ca_out, _ = self.cross_attn(q_norm2, memory, memory, attn_mask=attn_mask)
-        queries = queries + self.dropout2(ca_out)
+        # 2. Full Global Cross-Attention (Query has position, Memory is pure visual features)
+        q_ca = self.norm2(content + pos)
+        k_ca = memory
+        v_ca = memory
+        ca_out, _ = self.cross_attn(q_ca, k_ca, v_ca)
+        content = content + self.dropout2(ca_out)
 
-        # 3. FFN
-        queries = queries + self.ffn(self.norm3(queries))
-        return queries
+        # 3. FFN on pure content
+        content = content + self.ffn(self.norm3(content))
+        return content
 
 class HierarchicalMaskedDecoder2D(nn.Module):
     """
     6-Layer Hierarchical 2D Transformer Decoder with Learned Query Embeddings for EXP_06.
-    Operates natively in normalized image space (u, v) in [0.0, 1.0]^2.
+    Operates natively in normalized image space (u, v) in [0.0, 1.0]^2 with Full Global Cross-Attention.
     """
     def __init__(self, config):
         super().__init__()
@@ -151,8 +155,7 @@ class HierarchicalMaskedDecoder2D(nn.Module):
             ) for _ in range(self.num_layers)
         ])
 
-        # Official Mask2Former Multi-Scale Round-Robin Schedule:
-        # Layer 0 & 3: Stride-32 (Index 3) | Layer 1 & 4: Stride-16 (Index 2) | Layer 2 & 5: Stride-8 (Index 1)
+        # Multi-Scale Round-Robin Schedule (Stride 32 -> 16 -> 8)
         self.scale_schedule = [3, 2, 1, 3, 2, 1]
 
     def forward(self, fused_features: list) -> dict:
@@ -172,7 +175,7 @@ class HierarchicalMaskedDecoder2D(nn.Module):
         # Initialize query positions from learned parameters
         current_anchors = self.query_polylines.unsqueeze(0).repeat(B, 1, 1, 1) # (B, N, K, 2)
 
-        # Build initial query content embeddings
+        # Build initial query content embeddings (pure visual/semantic descriptors)
         inst_idx = torch.arange(N, device=feat_stride4.device).unsqueeze(1).repeat(1, K) # (N, K)
         pt_idx = torch.arange(K, device=feat_stride4.device).unsqueeze(0).repeat(N, 1)   # (N, K)
         
@@ -182,22 +185,18 @@ class HierarchicalMaskedDecoder2D(nn.Module):
         outputs_polylines = []
         outputs_masks = []
 
-        attn_mask = None # Layer 0 attends globally
-
         for l in range(self.num_layers):
             # Select multi-scale feature map for this layer via Round-Robin schedule
             scale_idx = self.scale_schedule[l % len(self.scale_schedule)]
             feat_current = fused_features[scale_idx] # (B, 256, H_l, W_l)
-            B_curr, C_curr, H_l, W_l = feat_current.shape
             memory = feat_current.flatten(2).permute(0, 2, 1) # (B, H_l*W_l, C)
 
-            # 1. Fuse content with current 2D coordinate positional encoding
-            pos_emb = self.pos_encoder_2d(current_anchors) # (B, N, K, C)
-            queries = (base_content + pos_emb).view(B, N * K, C)
+            # 1. Compute coordinate positional encoding for current anchor locations
+            pos_emb = self.pos_encoder_2d(current_anchors).view(B, N * K, C)
 
-            # 2. Forward through Hierarchical Decoder Layer
-            queries = self.layers[l](queries, memory, attn_mask=attn_mask)
-            base_content = queries.view(B, N, K, C)
+            # 2. Forward through Decoder Layer with Full Global Attention
+            base_content_flat = self.layers[l](base_content.view(B, N * K, C), pos_emb, memory)
+            base_content = base_content_flat.view(B, N, K, C)
 
             # Instance-level pooled query representation
             instance_queries = base_content.mean(dim=2) # (B, N, C)
@@ -218,28 +217,6 @@ class HierarchicalMaskedDecoder2D(nn.Module):
             # Upsample mask to full 1024x1024
             mask_logits_up = F.interpolate(mask_logits, size=(1024, 1024), mode='bilinear', align_corners=False)
             outputs_masks.append(mask_logits_up)
-
-            # 6. Construct Masked Attention for Layer l+1 matching next layer's spatial resolution
-            if l < self.num_layers - 1:
-                next_scale_idx = self.scale_schedule[(l + 1) % len(self.scale_schedule)]
-                feat_next = fused_features[next_scale_idx]
-                H_next, W_next = feat_next.shape[2], feat_next.shape[3]
-
-                with torch.no_grad():
-                    mask_ds = F.interpolate(mask_logits, size=(H_next, W_next), mode='bilinear', align_corners=False)
-                    mask_ds = mask_ds.unsqueeze(2).repeat(1, 1, K, 1, 1).view(B, N * K, H_next * W_next)
-                    
-                    # Boolean mask: True = masked out (background)
-                    mask_bool = (mask_ds < 0.0)
-                    
-                    # Safeguard: if an entire row is masked, unmask it to prevent softmax(-inf) = NaN
-                    all_masked = mask_bool.all(dim=-1, keepdim=True)
-                    mask_bool = mask_bool & (~all_masked)
-                    
-                    # Repeat across attention heads
-                    attn_mask = mask_bool.unsqueeze(1).repeat(1, self.config.num_heads, 1, 1).view(
-                        B * self.config.num_heads, N * K, H_next * W_next
-                    )
 
         return {
             "pred_cls": outputs_cls[-1],
