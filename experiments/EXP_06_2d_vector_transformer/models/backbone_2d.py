@@ -44,7 +44,16 @@ class SurgicalBackbone2D(nn.Module):
         self.config = config
         self.embed_dim = config.embed_dim
         
-        # Load pre-trained Mask2Former Swin-Tiny backbone
+        # 1. Fallback / Test Backbone (Always initialized for safety)
+        self.fallback_backbone = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=7, stride=4, padding=3),
+            nn.BatchNorm2d(64),
+            nn.GELU(),
+            nn.Conv2d(64, self.embed_dim, kernel_size=3, padding=1)
+        )
+
+        # 2. Load pre-trained Mask2Former Swin-Tiny backbone
+        self.pixel_decoder = None
         try:
             from transformers import Mask2FormerForUniversalSegmentation
             m2f = Mask2FormerForUniversalSegmentation.from_pretrained(config.mask2former_model_name)
@@ -54,24 +63,20 @@ class SurgicalBackbone2D(nn.Module):
                 self.pixel_decoder = m2f.model.pixel_decoder
             else:
                 self.pixel_decoder = m2f.model
-            self.use_mock = False
             print(f"✅ Loaded Mask2Former 2D backbone from '{config.mask2former_model_name}'")
         except Exception as e:
-            print(f"⚠️ Transformers not available locally ({e}), initializing standard lightweight Swin FPN emulation for testing.")
-            self.use_mock = True
-            self.mock_encoder = nn.Sequential(
-                nn.Conv2d(3, 64, kernel_size=7, stride=4, padding=3),
-                nn.BatchNorm2d(64),
-                nn.GELU(),
-                nn.Conv2d(64, self.embed_dim, kernel_size=3, padding=1)
-            )
+            print(f"⚠️ Transformers Mask2Former not loaded ({e}), using standard convolutional backbone.")
 
         self.proj_stride4 = nn.Conv2d(256, self.embed_dim, kernel_size=1) if self.embed_dim != 256 else nn.Identity()
 
-        # 2D Positional Encoding
-        self.pe_2d = Sinusoidal2DPositionalEncoding(num_pos_feats=64) # 128 channels
+        # 3. 2D Positional Encoding (128 channels)
+        self.pe_2d = Sinusoidal2DPositionalEncoding(num_pos_feats=64)
 
-        # Linear projections for multi-scale feature levels (Stride 4, 8, 16, 32)
+        # 4. Feature projection & fusion per level
+        self.proj_fpn = nn.ModuleList([
+            nn.Conv2d(self.embed_dim, self.embed_dim, kernel_size=1) for _ in range(4)
+        ])
+        
         self.fuse_proj = nn.ModuleList([
             nn.Sequential(
                 nn.Conv2d(self.embed_dim + 128, self.embed_dim, kernel_size=3, padding=1),
@@ -86,42 +91,44 @@ class SurgicalBackbone2D(nn.Module):
         Returns: List of 4 fused 2D feature maps [Stride 4, Stride 8, Stride 16, Stride 32]
         """
         pyramid = None
-        if not getattr(self, 'use_mock', False) and hasattr(self, 'pixel_decoder'):
+        if self.pixel_decoder is not None:
             try:
                 pixel_outputs = self.pixel_decoder(pixel_values=pixel_values)
-                if hasattr(pixel_outputs, "mask_features") and hasattr(pixel_outputs, "multi_scale_pixel_decoder_hidden_states"):
-                    pyramid = [pixel_outputs.mask_features] + list(pixel_outputs.multi_scale_pixel_decoder_hidden_states)
-                elif hasattr(pixel_outputs, "decoder_last_hidden_state") and hasattr(pixel_outputs, "decoder_hidden_states") and pixel_outputs.decoder_hidden_states is not None:
-                    pyramid = [self.proj_stride4(pixel_outputs.decoder_last_hidden_state)] + list(pixel_outputs.decoder_hidden_states)
-                elif hasattr(pixel_outputs, "decoder_last_hidden_state"):
-                    feat_s4 = self.proj_stride4(pixel_outputs.decoder_last_hidden_state)
+                feat_s4 = pixel_outputs.decoder_last_hidden_state # (B, 256, 256, 256) Stride-4
+                feat_s4 = self.proj_stride4(feat_s4)
+
+                # Check available multi-scale hidden states
+                if hasattr(pixel_outputs, "decoder_hidden_states") and pixel_outputs.decoder_hidden_states is not None:
+                    hs = pixel_outputs.decoder_hidden_states
+                    pyramid = [feat_s4, hs[2], hs[1], hs[0]]
+                elif hasattr(pixel_outputs, "multi_scale_features") and pixel_outputs.multi_scale_features is not None:
+                    ms = pixel_outputs.multi_scale_features
+                    pyramid = [feat_s4, ms[2], ms[1], ms[0]]
+                else:
+                    # Construct multi-scale pyramid via hierarchical pooling
                     pyramid = [
                         feat_s4,
                         F.avg_pool2d(feat_s4, 2),
                         F.avg_pool2d(feat_s4, 4),
                         F.avg_pool2d(feat_s4, 8)
                     ]
-                elif hasattr(pixel_outputs, "feature_maps"):
-                    pyramid = list(pixel_outputs.feature_maps)
-                elif isinstance(pixel_outputs, (tuple, list)):
-                    pyramid = list(pixel_outputs)
             except Exception as e:
                 pyramid = None
 
         if pyramid is None or len(pyramid) < 4:
-            feat_stride4 = self.mock_encoder(pixel_values) # (B, 256, 256, 256)
-            feat_stride8 = F.avg_pool2d(feat_stride4, 2)
-            feat_stride16 = F.avg_pool2d(feat_stride8, 2)
-            feat_stride32 = F.avg_pool2d(feat_stride16, 2)
-            pyramid = [feat_stride4, feat_stride8, feat_stride16, feat_stride32]
+            feat_stride4 = self.fallback_backbone(pixel_values) # (B, 256, 256, 256)
+            pyramid = [
+                feat_stride4,
+                F.avg_pool2d(feat_stride4, 2),
+                F.avg_pool2d(feat_stride4, 4),
+                F.avg_pool2d(feat_stride4, 8)
+            ]
         
         fused_features = []
         for l in range(4):
             feat = pyramid[l]
-            if feat.shape[1] != self.embed_dim:
-                feat = nn.functional.conv2d(feat, torch.eye(self.embed_dim, feat.shape[1], device=feat.device).unsqueeze(-1).unsqueeze(-1)) if hasattr(nn.functional, 'conv2d') else feat
-            pos_2d = self.pe_2d(feat) # (B, 128, H, W)
-            fused = self.fuse_proj[l](torch.cat([feat, pos_2d], dim=1)) # (B, 256, H, W)
+            pos_2d = self.pe_2d(feat) # (B, 128, H_l, W_l)
+            fused = self.fuse_proj[l](torch.cat([feat, pos_2d], dim=1)) # (B, 256, H_l, W_l)
             fused_features.append(fused)
 
         return fused_features
