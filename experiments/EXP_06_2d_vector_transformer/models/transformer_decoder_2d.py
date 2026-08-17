@@ -151,27 +151,30 @@ class HierarchicalMaskedDecoder2D(nn.Module):
             ) for _ in range(self.num_layers)
         ])
 
+        # Official Mask2Former Multi-Scale Round-Robin Schedule:
+        # Layer 0 & 3: Stride-32 (Index 3) | Layer 1 & 4: Stride-16 (Index 2) | Layer 2 & 5: Stride-8 (Index 1)
+        self.scale_schedule = [3, 2, 1, 3, 2, 1]
+
     def forward(self, fused_features: list) -> dict:
         """
-        fused_features: List of multi-scale feature maps from SurgicalBackbone2D
-        Returns dict containing layer-by-layer predictions for deep supervision.
+        fused_features: List of multi-scale feature maps from SurgicalBackbone2D:
+          - fused_features[0]: Stride-4 (256x256) -> Used for high-res Dot-Product Mask Head
+          - fused_features[1]: Stride-8 (128x128) -> Used for fine Cross-Attention
+          - fused_features[2]: Stride-16 (64x64)  -> Used for regional Cross-Attention
+          - fused_features[3]: Stride-32 (32x32)  -> Used for global Cross-Attention
         """
-        # Selected visual memory (Stride-4 at 256x256)
-        feat_memory = fused_features[self.stride_idx] # (B, 256, H_f, W_f)
-        feat_stride4 = fused_features[0]              # (B, 256, H_s4, W_s4)
-
-        B, C, H_f, W_f = feat_memory.shape
-        memory = feat_memory.flatten(2).permute(0, 2, 1) # (B, H_f*W_f, C)
-
+        feat_stride4 = fused_features[0] # High-resolution Stride-4 canvas (256x256)
+        B = feat_stride4.shape[0]
         N = self.num_instances
         K = self.num_points
+        C = self.embed_dim
 
         # Initialize query positions from learned parameters
         current_anchors = self.query_polylines.unsqueeze(0).repeat(B, 1, 1, 1) # (B, N, K, 2)
 
         # Build initial query content embeddings
-        inst_idx = torch.arange(N, device=feat_memory.device).unsqueeze(1).repeat(1, K) # (N, K)
-        pt_idx = torch.arange(K, device=feat_memory.device).unsqueeze(0).repeat(N, 1)   # (N, K)
+        inst_idx = torch.arange(N, device=feat_stride4.device).unsqueeze(1).repeat(1, K) # (N, K)
+        pt_idx = torch.arange(K, device=feat_stride4.device).unsqueeze(0).repeat(N, 1)   # (N, K)
         
         base_content = (self.instance_embed(inst_idx) + self.point_embed(pt_idx)).unsqueeze(0).repeat(B, 1, 1, 1) # (B, N, K, C)
 
@@ -182,6 +185,12 @@ class HierarchicalMaskedDecoder2D(nn.Module):
         attn_mask = None # Layer 0 attends globally
 
         for l in range(self.num_layers):
+            # Select multi-scale feature map for this layer via Round-Robin schedule
+            scale_idx = self.scale_schedule[l % len(self.scale_schedule)]
+            feat_current = fused_features[scale_idx] # (B, 256, H_l, W_l)
+            B_curr, C_curr, H_l, W_l = feat_current.shape
+            memory = feat_current.flatten(2).permute(0, 2, 1) # (B, H_l*W_l, C)
+
             # 1. Fuse content with current 2D coordinate positional encoding
             pos_emb = self.pos_encoder_2d(current_anchors) # (B, N, K, C)
             queries = (base_content + pos_emb).view(B, N * K, C)
@@ -202,30 +211,35 @@ class HierarchicalMaskedDecoder2D(nn.Module):
             current_anchors = torch.clamp(current_anchors + delta_p, 0.0, 1.0)
             outputs_polylines.append(current_anchors)
 
-            # 5. Dot-Product 2D Mask Head (Mask2Former Formulation: M_i = MLP(q_i) • F_stride4)
+            # 5. Dot-Product 2D Mask Head (High-Res Stride-4: M_i = MLP(q_i) • F_stride4)
             mask_embed = self.mask_embed_heads[l](instance_queries) # (B, N, C)
             mask_logits = torch.einsum("bnc,bchw->bnhw", mask_embed, feat_stride4) # (B, N, H_s4, W_s4)
 
-            # Upsample mask to 1024x1024
+            # Upsample mask to full 1024x1024
             mask_logits_up = F.interpolate(mask_logits, size=(1024, 1024), mode='bilinear', align_corners=False)
             outputs_masks.append(mask_logits_up)
 
-            # 6. Construct Masked Attention for Layer l+1
-            with torch.no_grad():
-                mask_ds = F.interpolate(mask_logits, size=(H_f, W_f), mode='bilinear', align_corners=False)
-                mask_ds = mask_ds.unsqueeze(2).repeat(1, 1, K, 1, 1).view(B, N * K, H_f * W_f)
-                
-                # Boolean mask: True = masked out (background)
-                mask_bool = (mask_ds < 0.0)
-                
-                # Safeguard: if an entire row is masked, unmask it to prevent softmax(-inf) = NaN
-                all_masked = mask_bool.all(dim=-1, keepdim=True)
-                mask_bool = mask_bool & (~all_masked)
-                
-                # Repeat across attention heads
-                attn_mask = mask_bool.unsqueeze(1).repeat(1, self.config.num_heads, 1, 1).view(
-                    B * self.config.num_heads, N * K, H_f * W_f
-                )
+            # 6. Construct Masked Attention for Layer l+1 matching next layer's spatial resolution
+            if l < self.num_layers - 1:
+                next_scale_idx = self.scale_schedule[(l + 1) % len(self.scale_schedule)]
+                feat_next = fused_features[next_scale_idx]
+                H_next, W_next = feat_next.shape[2], feat_next.shape[3]
+
+                with torch.no_grad():
+                    mask_ds = F.interpolate(mask_logits, size=(H_next, W_next), mode='bilinear', align_corners=False)
+                    mask_ds = mask_ds.unsqueeze(2).repeat(1, 1, K, 1, 1).view(B, N * K, H_next * W_next)
+                    
+                    # Boolean mask: True = masked out (background)
+                    mask_bool = (mask_ds < 0.0)
+                    
+                    # Safeguard: if an entire row is masked, unmask it to prevent softmax(-inf) = NaN
+                    all_masked = mask_bool.all(dim=-1, keepdim=True)
+                    mask_bool = mask_bool & (~all_masked)
+                    
+                    # Repeat across attention heads
+                    attn_mask = mask_bool.unsqueeze(1).repeat(1, self.config.num_heads, 1, 1).view(
+                        B * self.config.num_heads, N * K, H_next * W_next
+                    )
 
         return {
             "pred_cls": outputs_cls[-1],
