@@ -288,7 +288,7 @@ def main():
         model.train()
         epoch_loss = 0.0
         train_metrics = {"hard_iou": 0.0, "hard_dice": 0.0, "soft_iou": 0.0, "soft_dice": 0.0}
-        epoch_loss_dict = {"l_cls": 0.0, "l_pos": 0.0, "l_tan": 0.0, "l_curv": 0.0, "l_mask": 0.0}
+        epoch_loss_dict = {"l_cls": 0.0, "l_pos": 0.0, "l_mask": 0.0}
         start_time = time.time()
 
         last_train_batch = None
@@ -359,7 +359,7 @@ def main():
             model.eval()
             val_epoch_loss = 0.0
             val_metrics = {"hard_iou": 0.0, "hard_dice": 0.0, "soft_iou": 0.0, "soft_dice": 0.0}
-            val_epoch_loss_dict = {"l_cls": 0.0, "l_pos": 0.0, "l_tan": 0.0, "l_curv": 0.0, "l_mask": 0.0}
+            val_epoch_loss_dict = {"l_cls": 0.0, "l_pos": 0.0, "l_mask": 0.0}
             
             with torch.no_grad():
                 val_pbar = tqdm(val_loader, desc=f"Epoch {epoch:2d}/{args.epochs:2d} [Val]", leave=False)
@@ -448,8 +448,6 @@ def main():
                     "train/soft_dice_pct": train_metrics["soft_dice"] * 100.0,
                     "train/l_cls": epoch_loss_dict['l_cls'],
                     "train/l_pos": epoch_loss_dict['l_pos'],
-                    "train/l_tan": epoch_loss_dict['l_tan'],
-                    "train/l_curv": epoch_loss_dict['l_curv'],
                     "train/l_mask": epoch_loss_dict['l_mask'],
                     "val/total_loss": avg_val_loss,
                     "val/hard_iou_pct": val_metrics["hard_iou"] * 100.0,
@@ -458,8 +456,6 @@ def main():
                     "val/soft_dice_pct": val_metrics["soft_dice"] * 100.0,
                     "val/l_cls": val_loss_dict['l_cls'],
                     "val/l_pos": val_loss_dict['l_pos'],
-                    "val/l_tan": val_loss_dict['l_tan'],
-                    "val/l_curv": val_loss_dict['l_curv'],
                     "val/l_mask": val_loss_dict['l_mask'],
                     "learning_rate": optimizer.param_groups[0]['lr']
                 }

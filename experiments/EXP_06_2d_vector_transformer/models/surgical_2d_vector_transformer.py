@@ -26,12 +26,10 @@ class Surgical2DVectorTransformer(nn.Module):
         # 2. Hierarchical 2D Masked Decoder with Learned Query Embeddings
         self.decoder = HierarchicalMaskedDecoder2D(config)
         
-        # 3. Deep Supervision 2D Loss Suite
+        # 3. Deep Supervision 2D Loss Suite (3 Core Objectives: L_cls, L_pos, L_mask)
         self.loss_suite = Vector2DLossSuite(
             lambda_cls=config.lambda_cls,
             lambda_pos=config.lambda_pos,
-            lambda_tan=config.lambda_tan,
-            lambda_curv=config.lambda_curv,
             lambda_mask=config.lambda_mask
         )
 

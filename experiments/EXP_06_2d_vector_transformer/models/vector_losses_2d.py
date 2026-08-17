@@ -75,22 +75,17 @@ class HungarianMatcher2D(nn.Module):
 
 class Vector2DLossSuite(nn.Module):
     """
-    Complete Loss Suite for EXP_06 Direct 2D Vector Space Transformer.
-    Computes:
-      - Multi-Class Focal Classification Loss (L_cls)
-      - Bidirectional 2D L1 Position Loss (L_pos)
-      - 2D Cosine Tangent Orientation Loss (L_tan)
-      - 1D Discrete Laplacian Curvature Regularizer (L_curv)
-      - Auxiliary 2D Mask BCE + Dice Loss (L_mask)
+    Streamlined 3-Objective Loss Suite for EXP_06 Direct 2D Vector Space Transformer.
+    Computes ONLY what really matters:
+      1. Multi-Class Focal Classification Loss (L_cls)
+      2. Bidirectional 2D L1 Coordinate Position Loss (L_pos)
+      3. Auxiliary 2D Dot-Product Mask BCE + Dice Loss (L_mask)
     """
-    def __init__(self, lambda_cls: float = 2.0, lambda_pos: float = 5.0,
-                 lambda_tan: float = 2.0, lambda_curv: float = 1.0, lambda_mask: float = 2.0):
+    def __init__(self, lambda_cls: float = 2.0, lambda_pos: float = 5.0, lambda_mask: float = 2.0):
         super().__init__()
         self.matcher = HungarianMatcher2D(cost_cls=lambda_cls, cost_pos=lambda_pos)
         self.lambda_cls = lambda_cls
         self.lambda_pos = lambda_pos
-        self.lambda_tan = lambda_tan
-        self.lambda_curv = lambda_curv
         self.lambda_mask = lambda_mask
 
     def _dice_loss(self, pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
@@ -129,7 +124,7 @@ class Vector2DLossSuite(nn.Module):
 
         num_layers = len(outputs_cls)
         total_loss = 0.0
-        loss_dict = {"l_cls": 0.0, "l_pos": 0.0, "l_tan": 0.0, "l_curv": 0.0, "l_mask": 0.0}
+        loss_dict = {"l_cls": 0.0, "l_pos": 0.0, "l_mask": 0.0}
 
         for l in range(num_layers):
             pred_cls_l = outputs_cls[l]             # (B, N, num_classes+1)
@@ -144,8 +139,6 @@ class Vector2DLossSuite(nn.Module):
             l_cls_layer = self._focal_loss(pred_cls_l.view(-1, num_classes_total), target_cls.view(-1))
             
             l_pos_layer = torch.tensor(0.0, device=pred_cls_l.device)
-            l_tan_layer = torch.tensor(0.0, device=pred_cls_l.device)
-            l_curv_layer = torch.tensor(0.0, device=pred_cls_l.device)
             l_mask_layer = torch.tensor(0.0, device=pred_cls_l.device)
             num_matched_total = 0
 
@@ -165,28 +158,9 @@ class Vector2DLossSuite(nn.Module):
                 gt_rev = torch.flip(gt_matched, dims=[1])
                 rev_diff = F.l1_loss(p_matched, gt_rev, reduction='none').mean(dim=(-2, -1)) # (M,)
 
-                best_dir_is_rev = rev_diff < fwd_diff
-                gt_aligned = gt_matched.clone()
-                gt_aligned[best_dir_is_rev] = gt_rev[best_dir_is_rev]
-
                 l_pos_layer = l_pos_layer + torch.minimum(fwd_diff, rev_diff).sum()
 
-                # 4. 2D Cosine Tangent Orientation Alignment Loss
-                p_tangents = p_matched[:, 1:] - p_matched[:, :-1] # (M, K-1, 2)
-                gt_tangents = gt_aligned[:, 1:] - gt_aligned[:, :-1] # (M, K-1, 2)
-                
-                p_norm = torch.linalg.norm(p_tangents, dim=-1, keepdim=True).clamp(min=1e-6)
-                gt_norm = torch.linalg.norm(gt_tangents, dim=-1, keepdim=True).clamp(min=1e-6)
-                cos_sim = (p_tangents * gt_tangents).sum(dim=-1) / (p_norm * gt_norm).squeeze(-1)
-                cos_sim = torch.clamp(cos_sim, -1.0, 1.0)
-                l_tan_layer = l_tan_layer + (1.0 - cos_sim).mean(dim=-1).sum()
-
-                # 5. 1D Discrete Laplacian Curvature Loss (L1 Smoothness Regularizer)
-                p_laplacian = p_matched[:, 2:] - 2.0 * p_matched[:, 1:-1] + p_matched[:, :-2]
-                gt_laplacian = gt_aligned[:, 2:] - 2.0 * gt_aligned[:, 1:-1] + gt_aligned[:, :-2]
-                l_curv_layer = l_curv_layer + F.l1_loss(p_laplacian, gt_laplacian, reduction='none').mean(dim=(-2, -1)).sum()
-
-                # 6. Auxiliary 2D Mask Loss (BCE + Dice per instance)
+                # 4. Auxiliary 2D Mask Loss (BCE + Dice per instance)
                 m_matched = pred_mask_l[b, pred_idx].float() # (M, H, W)
                 gt_m_matched = target_masks[b, gt_idx].float() # (M, H, W)
                 
@@ -196,15 +170,11 @@ class Vector2DLossSuite(nn.Module):
 
             norm_factor = max(num_matched_total, 1)
             l_pos_layer = l_pos_layer / norm_factor
-            l_tan_layer = l_tan_layer / norm_factor
-            l_curv_layer = l_curv_layer / norm_factor
             l_mask_layer = l_mask_layer / norm_factor
 
             layer_loss = (
                 self.lambda_cls * l_cls_layer +
                 self.lambda_pos * l_pos_layer +
-                self.lambda_tan * l_tan_layer +
-                self.lambda_curv * l_curv_layer +
                 self.lambda_mask * l_mask_layer
             )
             total_loss = total_loss + layer_loss
@@ -214,8 +184,6 @@ class Vector2DLossSuite(nn.Module):
 
             loss_dict["l_cls"] += _to_float(l_cls_layer)
             loss_dict["l_pos"] += _to_float(l_pos_layer)
-            loss_dict["l_tan"] += _to_float(l_tan_layer)
-            loss_dict["l_curv"] += _to_float(l_curv_layer)
             loss_dict["l_mask"] += _to_float(l_mask_layer)
 
         # Average loss dictionary across layers for logging

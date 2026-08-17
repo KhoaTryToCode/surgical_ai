@@ -43,11 +43,9 @@ class EXP06Config:
     mask2former_model_name: str = "facebook/mask2former-swin-tiny-ade-semantic"
     decoder_stride_idx: int = 0     # 0: Stride-4 (256x256 = 65,536 spatial tokens for High Precision A100)
     
-    # Loss weights
+    # Loss weights (3 Core Objectives: Classification + 2D Coordinates + Dot-Product Mask)
     lambda_cls: float = 2.0         # Multi-Class Focal Loss weight
     lambda_pos: float = 5.0         # Bidirectional 2D L1 Coordinate Loss weight
-    lambda_tan: float = 2.0         # Cosine Tangent Orientation Loss weight
-    lambda_curv: float = 1.0        # 1D Discrete Laplacian Curvature Regularizer weight
     lambda_mask: float = 2.0        # Auxiliary 2D Dot-Product Mask BCE + Dice Loss weight
     
     # Training specs

@@ -85,6 +85,24 @@ class Surgical2DVectorDataset(Dataset):
     def __len__(self) -> int:
         return len(self.image_paths)
 
+    def _find_annotation_path(self, img_path: str) -> str:
+        base_no_ext = os.path.splitext(img_path)[0]
+        base_name = os.path.basename(base_no_ext)
+        img_dir = os.path.dirname(img_path)
+
+        candidates = [
+            img_path.replace("images", "labels").replace(".jpg", ".json").replace(".png", ".json"),
+            img_path.replace("images", "annotations").replace(".jpg", ".json").replace(".png", ".json"),
+            os.path.join(img_dir, f"{base_name}.json"),
+            os.path.join(os.path.dirname(img_dir), "labels", f"{base_name}.json"),
+            os.path.join(os.path.dirname(img_dir), "annotations", f"{base_name}.json"),
+            f"{base_no_ext}.json"
+        ]
+        for c in candidates:
+            if os.path.exists(c):
+                return c
+        return candidates[0]
+
     def __getitem__(self, idx: int) -> dict:
         img_path = self.image_paths[idx]
         base_name = os.path.splitext(os.path.basename(img_path))[0]
@@ -93,8 +111,10 @@ class Surgical2DVectorDataset(Dataset):
         img_bgr = cv2.imread(img_path)
         if img_bgr is None:
             img_rgb = np.zeros((1024, 1024, 3), dtype=np.float32)
+            orig_h, orig_w = 1024, 1024
         else:
             img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            orig_h, orig_w = img_rgb.shape[:2]
             if img_rgb.shape[:2] != (1024, 1024):
                 img_rgb = cv2.resize(img_rgb, (1024, 1024), interpolation=cv2.INTER_LINEAR)
             img_rgb = img_rgb.astype(np.float32) / 255.0
@@ -104,9 +124,7 @@ class Surgical2DVectorDataset(Dataset):
         img_tensor = torch.from_numpy(img_norm).permute(2, 0, 1).float()
 
         # 2. Parse Landmark Annotations
-        ann_path = os.path.join(self.ann_dir, f"{base_name}.json")
-        if not os.path.exists(ann_path):
-            ann_path = os.path.join(os.path.dirname(img_path), f"{base_name}.json")
+        ann_path = self._find_annotation_path(img_path)
 
         target_classes = np.zeros((self.num_instances,), dtype=np.int64)
         target_polylines = np.zeros((self.num_instances, self.num_points, 2), dtype=np.float32)
@@ -126,16 +144,25 @@ class Surgical2DVectorDataset(Dataset):
                         break
 
                     label = str(shape.get("label", "")).lower().replace("-", "_").replace(" ", "_")
-                    cls_id = self.CLASS_MAP.get(label, 1)
+                    if label.startswith('r') or 'ridge' in label:
+                        cls_id = 1 # Ridge
+                    elif label.startswith('s') or 'silhouette' in label:
+                        cls_id = 2 # Silhouette
+                    elif label.startswith('l') or 'ligament' in label or 'falciform' in label or 'vessel' in label:
+                        cls_id = 3 # Falciform Ligament / Vessel
+                    elif 'gall' in label:
+                        cls_id = 4 # Gallbladder
+                    else:
+                        cls_id = self.CLASS_MAP.get(label, 1)
 
                     raw_pts = np.array(shape.get("points", []), dtype=np.float32)
                     if len(raw_pts) < 2:
                         continue
 
-                    # Normalize pixel coordinates (u, v) into [0.0, 1.0]^2
+                    # Scale raw points to [0, 1] normalized coordinates
                     pts_norm = raw_pts.copy()
-                    pts_norm[:, 0] = np.clip(pts_norm[:, 0] / 1024.0, 0.0, 1.0)
-                    pts_norm[:, 1] = np.clip(pts_norm[:, 1] / 1024.0, 0.0, 1.0)
+                    pts_norm[:, 0] = np.clip(pts_norm[:, 0] / float(orig_w), 0.0, 1.0)
+                    pts_norm[:, 1] = np.clip(pts_norm[:, 1] / float(orig_h), 0.0, 1.0)
 
                     # Resample to exactly K=20 equidistant points
                     poly_2d = resample_polyline_2d(pts_norm, num_points=self.num_points)

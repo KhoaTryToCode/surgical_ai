@@ -38,7 +38,21 @@ def main():
         print("⚠️ Dataset directory is empty or not found.")
         return
 
+    # Check if requested sample has annotations; if not, search for first valid annotated frame
     sample = dataset[args.sample_idx]
+    if sample["valid_mask"].sum() == 0:
+        print(f"ℹ️ Sample index {args.sample_idx} has 0 annotations. Searching dataset for first annotated frame...")
+        found_idx = None
+        for i in range(len(dataset)):
+            s_test = dataset[i]
+            if s_test["valid_mask"].sum() > 0:
+                sample = s_test
+                found_idx = i
+                print(f"🎯 Found annotated sample at index {i}!")
+                break
+        if found_idx is None:
+            print("⚠️ No annotated samples found in dataset directory.")
+
     image = sample["image"].unsqueeze(0).to(device) # (1, 3, 1024, 1024)
     target_classes = sample["target_classes"].unsqueeze(0).to(device)
     target_polylines = sample["target_polylines"].unsqueeze(0).to(device)
@@ -177,12 +191,12 @@ def main():
     ax9.set_facecolor('#161b22')
     loss_names = list(loss_dict.keys())
     loss_values = [loss_dict[k] for k in loss_names]
-    bar_colors = ['#ff6b6b', '#4dabf7', '#cc5de8', '#ff922b', '#51cf66']
-    bars = ax9.bar(loss_names, loss_values, color=bar_colors, width=0.6)
+    bar_colors = ['#ff6b6b', '#4dabf7', '#51cf66']
+    bars = ax9.bar(loss_names, loss_values, color=bar_colors[:len(loss_names)], width=0.5)
     for bar, val in zip(bars, loss_values):
         ax9.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.02, f"{val:.2f}",
-                 ha='center', va='bottom', color='white', fontsize=10, fontweight='bold')
-    ax9.set_title("9. Deep Supervision 2D Loss Breakdown", color='white', fontsize=12, fontweight='bold')
+                 ha='center', va='bottom', color='white', fontsize=11, fontweight='bold')
+    ax9.set_title("9. Deep Supervision 2D Loss (L_cls, L_pos, L_mask)", color='white', fontsize=12, fontweight='bold')
     ax9.tick_params(colors='white')
     ax9.set_ylim([0, max(loss_values) * 1.35 if len(loss_values) > 0 and max(loss_values) > 0 else 3.0])
     ax9.grid(axis='y', linestyle='--', alpha=0.3)
