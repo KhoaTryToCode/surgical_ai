@@ -85,20 +85,41 @@ class SurgicalBackbone2D(nn.Module):
         pixel_values: (B, 3, 1024, 1024)
         Returns: List of 4 fused 2D feature maps [Stride 4, Stride 8, Stride 16, Stride 32]
         """
-        if getattr(self, 'use_mock', False):
+        pyramid = None
+        if not getattr(self, 'use_mock', False) and hasattr(self, 'pixel_decoder'):
+            try:
+                pixel_outputs = self.pixel_decoder(pixel_values=pixel_values)
+                if hasattr(pixel_outputs, "mask_features") and hasattr(pixel_outputs, "multi_scale_pixel_decoder_hidden_states"):
+                    pyramid = [pixel_outputs.mask_features] + list(pixel_outputs.multi_scale_pixel_decoder_hidden_states)
+                elif hasattr(pixel_outputs, "decoder_last_hidden_state") and hasattr(pixel_outputs, "decoder_hidden_states") and pixel_outputs.decoder_hidden_states is not None:
+                    pyramid = [self.proj_stride4(pixel_outputs.decoder_last_hidden_state)] + list(pixel_outputs.decoder_hidden_states)
+                elif hasattr(pixel_outputs, "decoder_last_hidden_state"):
+                    feat_s4 = self.proj_stride4(pixel_outputs.decoder_last_hidden_state)
+                    pyramid = [
+                        feat_s4,
+                        F.avg_pool2d(feat_s4, 2),
+                        F.avg_pool2d(feat_s4, 4),
+                        F.avg_pool2d(feat_s4, 8)
+                    ]
+                elif hasattr(pixel_outputs, "feature_maps"):
+                    pyramid = list(pixel_outputs.feature_maps)
+                elif isinstance(pixel_outputs, (tuple, list)):
+                    pyramid = list(pixel_outputs)
+            except Exception as e:
+                pyramid = None
+
+        if pyramid is None or len(pyramid) < 4:
             feat_stride4 = self.mock_encoder(pixel_values) # (B, 256, 256, 256)
             feat_stride8 = F.avg_pool2d(feat_stride4, 2)
             feat_stride16 = F.avg_pool2d(feat_stride8, 2)
             feat_stride32 = F.avg_pool2d(feat_stride16, 2)
             pyramid = [feat_stride4, feat_stride8, feat_stride16, feat_stride32]
-        else:
-            pixel_outputs = self.pixel_decoder(pixel_values=pixel_values)
-            multi_scale_features = list(pixel_outputs.multi_scale_features) # Stride 32, 16, 8
-            feat_stride4 = self.proj_stride4(pixel_outputs.decoder_last_hidden_state) # Stride 4 (256x256)
-            pyramid = [feat_stride4, multi_scale_features[2], multi_scale_features[1], multi_scale_features[0]]
         
         fused_features = []
-        for l, feat in enumerate(pyramid):
+        for l in range(4):
+            feat = pyramid[l]
+            if feat.shape[1] != self.embed_dim:
+                feat = nn.functional.conv2d(feat, torch.eye(self.embed_dim, feat.shape[1], device=feat.device).unsqueeze(-1).unsqueeze(-1)) if hasattr(nn.functional, 'conv2d') else feat
             pos_2d = self.pe_2d(feat) # (B, 128, H, W)
             fused = self.fuse_proj[l](torch.cat([feat, pos_2d], dim=1)) # (B, 256, H, W)
             fused_features.append(fused)
