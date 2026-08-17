@@ -48,8 +48,12 @@ class SurgicalBackbone2D(nn.Module):
         try:
             from transformers import Mask2FormerForUniversalSegmentation
             m2f = Mask2FormerForUniversalSegmentation.from_pretrained(config.mask2former_model_name)
-            self.pixel_level_module = m2f.model.pixel_level_module
-            self.proj_stride4 = nn.Conv2d(self.pixel_level_module.decoder.conv_dim, self.embed_dim, kernel_size=1)
+            if hasattr(m2f.model, "pixel_level_module"):
+                self.pixel_decoder = m2f.model.pixel_level_module
+            elif hasattr(m2f.model, "pixel_decoder"):
+                self.pixel_decoder = m2f.model.pixel_decoder
+            else:
+                self.pixel_decoder = m2f.model
             self.use_mock = False
             print(f"✅ Loaded Mask2Former 2D backbone from '{config.mask2former_model_name}'")
         except Exception as e:
@@ -61,6 +65,8 @@ class SurgicalBackbone2D(nn.Module):
                 nn.GELU(),
                 nn.Conv2d(64, self.embed_dim, kernel_size=3, padding=1)
             )
+
+        self.proj_stride4 = nn.Conv2d(256, self.embed_dim, kernel_size=1) if self.embed_dim != 256 else nn.Identity()
 
         # 2D Positional Encoding
         self.pe_2d = Sinusoidal2DPositionalEncoding(num_pos_feats=64) # 128 channels
@@ -86,7 +92,7 @@ class SurgicalBackbone2D(nn.Module):
             feat_stride32 = F.avg_pool2d(feat_stride16, 2)
             pyramid = [feat_stride4, feat_stride8, feat_stride16, feat_stride32]
         else:
-            pixel_outputs = self.pixel_level_module(pixel_values=pixel_values)
+            pixel_outputs = self.pixel_decoder(pixel_values=pixel_values)
             multi_scale_features = list(pixel_outputs.multi_scale_features) # Stride 32, 16, 8
             feat_stride4 = self.proj_stride4(pixel_outputs.decoder_last_hidden_state) # Stride 4 (256x256)
             pyramid = [feat_stride4, multi_scale_features[2], multi_scale_features[1], multi_scale_features[0]]
