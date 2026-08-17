@@ -134,15 +134,21 @@ class Vector2DLossSuite(nn.Module):
             # 1. Hungarian Matching for layer l
             matched_indices = self.matcher(pred_cls_l, pred_poly_l, target_cls, target_polylines, valid_mask)
 
-            # 2. Multi-Class Focal Classification Loss
+            # 2. Multi-Class Focal Classification Loss on Hungarian-Matched Query Slots
+            B, N, K, _ = pred_poly_l.shape
             num_classes_total = pred_cls_l.size(-1)
-            l_cls_layer = self._focal_loss(pred_cls_l.view(-1, num_classes_total), target_cls.view(-1))
+            
+            target_classes_matched = torch.zeros((B, N), dtype=torch.long, device=pred_cls_l.device)
+            for b in range(B):
+                pred_idx, gt_idx = matched_indices[b]
+                if len(pred_idx) > 0:
+                    target_classes_matched[b, pred_idx] = target_cls[b, gt_idx]
+
+            l_cls_layer = self._focal_loss(pred_cls_l.view(-1, num_classes_total), target_classes_matched.view(-1))
             
             l_pos_layer = torch.tensor(0.0, device=pred_cls_l.device)
             l_mask_layer = torch.tensor(0.0, device=pred_cls_l.device)
             num_matched_total = 0
-
-            B, N, K, _ = pred_poly_l.shape
 
             for b in range(B):
                 pred_idx, gt_idx = matched_indices[b]
