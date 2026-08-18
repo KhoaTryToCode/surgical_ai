@@ -27,6 +27,7 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=config.batch_size, help="Batch size")
     parser.add_argument("--lr", type=float, default=config.learning_rate, help="Learning rate")
     parser.add_argument("--save_dir", type=str, default="checkpoints/EXP_06", help="Checkpoint save directory")
+    parser.add_argument("--viz_interval", type=int, default=10, help="Log diagnostic overlay visualization every N steps")
     parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases experiment tracking")
     parser.add_argument("--wandb_project", type=str, default="Surgical_AI_2D_Vector", help="W&B project name")
     parser.add_argument("--wandb_run_name", type=str, default="EXP_06_Swin_2D_Vector_Transformer", help="W&B run name")
@@ -101,6 +102,160 @@ def compute_mask_metrics(pred_masks: torch.Tensor, target_masks: torch.Tensor, v
             }
         else:
             return {"hard_iou": 0.0, "hard_dice": 0.0, "soft_iou": 0.0, "soft_dice": 0.0}
+
+def render_step_diagnostic_overlay(image_tensor, gt_polylines, gt_masks, valid_mask, target_classes,
+                                   pred_polylines, pred_masks, pred_cls, loss_dict, total_loss,
+                                   step, epoch, save_path="vis.png"):
+    """
+    Renders an in-depth 3-panel step diagnostic visualization:
+      Panel 1: Ground Truth (Cyan) vs Pred Polylines (Magenta) + Yellow Error Springs
+      Panel 2: Dot-Product Attention Heatmap + White GT Contours
+      Panel 3: Diagnostic Loss & Error Breakdown Dashboard
+    """
+    try:
+        mean = np.array([0.485, 0.456, 0.406]).reshape(1, 1, 3)
+        std = np.array([0.229, 0.224, 0.225]).reshape(1, 1, 3)
+        img_np = image_tensor.permute(1, 2, 0).cpu().numpy()
+        img_rgb = np.clip(img_np * std + mean, 0.0, 1.0)
+
+        active_gt_indices = [i for i in range(valid_mask.shape[0]) if valid_mask[i] > 0]
+        if len(active_gt_indices) == 0:
+            active_gt_indices = [0]
+
+        colors_gt = ['#00ffcc', '#00ff88', '#00e1ff', '#33ffaa']
+        colors_pred = ['#ff00ff', '#ff3366', '#ffaa00', '#ff00aa']
+        class_names = ["Background", "Falciform", "Anterior Ridge", "Silhouette", "Gallbladder"]
+
+        fig = plt.figure(figsize=(20, 7), facecolor='#0d1117')
+        gs = fig.add_gridspec(1, 3, width_ratios=[1.2, 1.2, 1.0])
+
+        ax1 = fig.add_subplot(gs[0, 0])
+        ax2 = fig.add_subplot(gs[0, 1])
+        ax3 = fig.add_subplot(gs[0, 2])
+
+        # 1. Panel 1: Vector Overlay with Error Springs
+        ax1.set_facecolor('#161b22')
+        ax1.imshow(img_rgb)
+
+        # 2. Panel 2: Mask Heatmap
+        ax2.set_facecolor('#161b22')
+        ax2.imshow(img_rgb)
+        combined_pred_mask = torch.sigmoid(pred_masks).max(dim=0)[0].cpu().numpy()
+        ax2.imshow(combined_pred_mask, cmap='magma', alpha=0.60)
+
+        mean_pixel_errors = []
+        max_pixel_errors = []
+        match_info = []
+
+        for idx, gt_i in enumerate(active_gt_indices):
+            gt_m = gt_masks[gt_i].cpu().numpy() if gt_masks is not None else np.zeros((1024, 1024))
+            gt_p = gt_polylines[gt_i].cpu().numpy() if gt_polylines is not None else np.zeros((20, 2))
+            c_id = int(target_classes[gt_i].item()) if target_classes is not None else 0
+            c_name = class_names[c_id] if c_id < len(class_names) else f"Class {c_id}"
+
+            c_gt = colors_gt[idx % len(colors_gt)]
+            c_pred = colors_pred[idx % len(colors_pred)]
+
+            # Draw GT Contour in 2D
+            if gt_m.sum() > 0:
+                ax1.contour(gt_m, levels=[0.5], colors=[c_gt], linewidths=2.5)
+                ax2.contour(gt_m, levels=[0.5], colors=['#ffffff'], linewidths=1.5, linestyles=':')
+
+            # Find best-matched query for this GT landmark (minimum L1 coordinate distance)
+            best_q = 0
+            best_dist = 1e9
+            gt_p_t = torch.from_numpy(gt_p).float()
+            for q in range(pred_polylines.shape[0]):
+                p_cand = pred_polylines[q].cpu().float()
+                d_fwd = torch.mean(torch.abs(p_cand - gt_p_t)).item()
+                d_rev = torch.mean(torch.abs(p_cand - torch.flip(gt_p_t, dims=[0]))).item()
+                d = min(d_fwd, d_rev)
+                if d < best_dist:
+                    best_dist = d
+                    best_q = q
+
+            pred_p = pred_polylines[best_q].cpu().numpy()
+
+            # Coordinates in 1024px space
+            u_gt = gt_p[:, 0] * 1024.0
+            v_gt = gt_p[:, 1] * 1024.0
+            u_pred = np.clip(pred_p[:, 0] * 1024.0, 0, 1023)
+            v_pred = np.clip(pred_p[:, 1] * 1024.0, 0, 1023)
+
+            # Draw GT Polyline Points
+            ax1.plot(u_gt, v_gt, color=c_gt, linewidth=2.5, linestyle='-', marker='o', markersize=4, label=f"GT: {c_name}")
+            # Draw Predicted Polyline Points
+            ax1.plot(u_pred, v_pred, color=c_pred, linewidth=3.0, linestyle='--', marker='s', markersize=5, label=f"Pred Query #{best_q}")
+
+            # Draw Yellow Error Springs connecting corresponding points
+            # Check orientation alignment
+            dist_fwd = np.mean(np.sqrt((u_pred - u_gt)**2 + (v_pred - v_gt)**2))
+            dist_rev = np.mean(np.sqrt((u_pred - u_gt[::-1])**2 + (v_pred - v_gt[::-1])**2))
+            if dist_rev < dist_fwd:
+                u_gt_aligned = u_gt[::-1]
+                v_gt_aligned = v_gt[::-1]
+                cur_dist = dist_rev
+            else:
+                u_gt_aligned = u_gt
+                v_gt_aligned = v_gt
+                cur_dist = dist_fwd
+
+            mean_pixel_errors.append(cur_dist)
+            pt_dists = np.sqrt((u_pred - u_gt_aligned)**2 + (v_pred - v_gt_aligned)**2)
+            max_pixel_errors.append(np.max(pt_dists))
+
+            for k in range(len(u_pred)):
+                ax1.plot([u_pred[k], u_gt_aligned[k]], [v_pred[k], v_gt_aligned[k]], color='#ffff00', linestyle=':', linewidth=1.0, alpha=0.7)
+
+            match_info.append(f"• Query #{best_q} ──► {c_name} (Avg Err: {cur_dist:.1f}px)")
+
+        ax1.set_title(f"Step {step:05d} [Ep {epoch:02d}] Vectors (Cyan=GT, Magenta=Pred, Yellow=Error)", color='white', fontsize=11, fontweight='bold')
+        ax1.axis('off')
+        ax1.legend(loc="lower left", facecolor='#161b22', labelcolor='white', fontsize=9)
+
+        ax2.set_title(f"Dot-Product 2D Mask Attention Heatmap", color='white', fontsize=11, fontweight='bold')
+        ax2.axis('off')
+
+        # 3. Panel 3: Diagnostic Metrics Card
+        ax3.set_facecolor('#161b22')
+        ax3.axis('off')
+
+        avg_err = np.mean(mean_pixel_errors) if len(mean_pixel_errors) > 0 else 0.0
+        max_err = np.max(max_pixel_errors) if len(max_pixel_errors) > 0 else 0.0
+        l_pos = loss_dict.get("l_pos", 0.0)
+        l_cls = loss_dict.get("l_cls", 0.0)
+        l_mask = loss_dict.get("l_mask", 0.0)
+
+        card_text = (
+            f"🔍 LIVE STEP DIAGNOSTICS [Step {step:05d} | Epoch {epoch:02d}]\n"
+            f"───────────────────────────────────────────────\n"
+            f"📊 TOTAL BATCH LOSS:  {total_loss:.4f}\n\n"
+            f"📐 Coordinate Loss (L_pos):  {l_pos:.4f}\n"
+            f"   • Mean Point Error:       {avg_err:.1f} px / 1024 px\n"
+            f"   • Max Point Error:        {max_err:.1f} px\n"
+            f"   • Normalized L1 Dist:     {avg_err/1024.0:.4f}\n\n"
+            f"🎯 Classification Loss (L_cls): {l_cls:.4f}\n"
+            f"🎭 Mask BCE+Dice Loss (L_mask): {l_mask:.4f}\n"
+            f"───────────────────────────────────────────────\n"
+            f"🔗 Bipartite Hungarian Matches:\n" + "\n".join(match_info) + "\n\n"
+            f"💡 Loss Reflection Analysis:\n"
+            f"{'• Prediction is FAR from GT -> High L_pos penalty!' if avg_err > 50 else '• Prediction is CLOSE to GT -> Low L_pos gradient!'}\n"
+            f"• Yellow lines show the exact pull direction of backprop."
+        )
+
+        ax3.text(0.05, 0.95, card_text, transform=ax3.transAxes, color='#e6edf3',
+                 fontsize=10, verticalalignment='top', fontfamily='monospace',
+                 bbox=dict(boxstyle='round,pad=0.6', facecolor='#0d1117', edgecolor='#30363d', alpha=0.9))
+
+        plt.tight_layout()
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=130, facecolor=fig.get_facecolor(), edgecolor='none')
+        plt.close('all')
+        return save_path, avg_err
+    except Exception as e:
+        print(f"⚠️ Could not render step diagnostic overlay: {e}")
+        plt.close('all')
+        return None, 0.0
 
 def render_prediction_overlay(image_tensor, gt_polylines, gt_masks, valid_mask, pred_polylines, pred_masks, epoch, split="Train", save_path="vis.png"):
     """
@@ -219,6 +374,8 @@ def main():
     os.makedirs(args.save_dir, exist_ok=True)
     vis_dir = os.path.join(args.save_dir, "epoch_visualizations")
     os.makedirs(vis_dir, exist_ok=True)
+    diag_dir = os.path.join(args.save_dir, "live_diagnostics")
+    os.makedirs(diag_dir, exist_ok=True)
 
     # 1. Dataset & DataLoader
     if not os.path.exists(args.dataset_dir):
@@ -331,6 +488,32 @@ def main():
 
             pbar.set_postfix({"loss": f"{loss.item():.4f}", "dice": f"{b_m['hard_dice']*100:.1f}%"})
             
+            global_step = (epoch - 1) * len(loader) + batch_idx + 1
+
+            # Render Live Diagnostic Overlay every viz_interval steps (e.g. every 10 batches)
+            if global_step % args.viz_interval == 0 or (epoch == 1 and batch_idx in [0, 2, 5]):
+                diag_path = os.path.join(diag_dir, f"step_{global_step:05d}_loss_{loss.item():.2f}.png")
+                res_path, avg_pixel_err = render_step_diagnostic_overlay(
+                    image_tensor=batch["image"][0],
+                    gt_polylines=batch["target_polylines"][0],
+                    gt_masks=batch["target_masks"][0],
+                    valid_mask=batch["valid_mask"][0],
+                    target_classes=batch["target_classes"][0],
+                    pred_polylines=outputs["pred_polylines"][0].detach(),
+                    pred_masks=outputs["pred_masks"][0].detach(),
+                    pred_cls=outputs["pred_cls"][0].detach() if "pred_cls" in outputs else None,
+                    loss_dict=outputs["loss_dict"],
+                    total_loss=loss.item(),
+                    step=global_step,
+                    epoch=epoch,
+                    save_path=diag_path
+                )
+                if use_wandb and res_path and os.path.exists(res_path):
+                    wandb.log({
+                        "live_diagnostic_overlay": wandb.Image(res_path, caption=f"Step {global_step:05d} (Ep {epoch}) | Loss: {loss.item():.3f} | Pixel Err: {avg_pixel_err:.1f}px"),
+                        "live_pixel_error_px": avg_pixel_err
+                    }, step=global_step)
+
             if batch_idx == 0:
                 last_train_batch = batch
                 last_train_outputs = {
