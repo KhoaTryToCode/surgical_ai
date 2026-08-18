@@ -391,6 +391,8 @@ def main():
     os.makedirs(vis_dir, exist_ok=True)
     diag_dir = os.path.join(args.save_dir, "live_diagnostics")
     os.makedirs(diag_dir, exist_ok=True)
+    anchor_dir = os.path.join(args.save_dir, "anchor_progression")
+    os.makedirs(anchor_dir, exist_ok=True)
 
     # 1. Dataset & DataLoader
     if not os.path.exists(args.dataset_dir):
@@ -410,6 +412,27 @@ def main():
         mode="val"
     )
     print(f"📊 Training Dataset Size: {len(train_dataset)} images | Validation Dataset Size: {len(val_dataset)} images")
+
+    # Select Fixed Anchor Frames for Time-Lapse Progression Tracking
+    fixed_train_anchor = None
+    if len(train_dataset) > 0:
+        for i in range(min(len(train_dataset), 50)):
+            s = train_dataset[i]
+            if s["valid_mask"].sum() >= 2:
+                fixed_train_anchor = {k: v.unsqueeze(0).to(device) for k, v in s.items()}
+                break
+        if fixed_train_anchor is None:
+            fixed_train_anchor = {k: v.unsqueeze(0).to(device) for k, v in train_dataset[0].items()}
+
+    fixed_val_anchor = None
+    if len(val_dataset) > 0:
+        for i in range(min(len(val_dataset), 50)):
+            s = val_dataset[i]
+            if s["valid_mask"].sum() >= 2:
+                fixed_val_anchor = {k: v.unsqueeze(0).to(device) for k, v in s.items()}
+                break
+        if fixed_val_anchor is None:
+            fixed_val_anchor = {k: v.unsqueeze(0).to(device) for k, v in val_dataset[0].items()}
 
     loader = DataLoader(
         train_dataset,
@@ -604,7 +627,67 @@ def main():
               f"Val Hard IoU: {val_metrics['hard_iou']*100:.1f}% | Val Soft IoU: {val_metrics['soft_iou']*100:.1f}% | "
               f"Val Hard Dice: {val_metrics['hard_dice']*100:.1f}% | Val Soft Dice: {val_metrics['soft_dice']*100:.1f}%", flush=True)
 
-        # 5. Render 1 Train & 1 Val Visual Diagnostic Image per Epoch
+        # 5. Render Fixed Anchor Frames (Time-Lapse Progression Tracking)
+        anchor_train_path = os.path.join(anchor_dir, f"epoch_{epoch:02d}_train_anchor.png")
+        anchor_val_path = os.path.join(anchor_dir, f"epoch_{epoch:02d}_val_anchor.png")
+
+        if fixed_train_anchor is not None:
+            model.eval()
+            with torch.no_grad():
+                a_targets = {
+                    "target_classes": fixed_train_anchor["target_classes"],
+                    "target_polylines": fixed_train_anchor["target_polylines"],
+                    "target_masks": fixed_train_anchor["target_masks"],
+                    "valid_mask": fixed_train_anchor["valid_mask"]
+                }
+                with autocast_ctx:
+                    a_out = model(fixed_train_anchor["image"], targets=a_targets)
+                
+                render_step_diagnostic_overlay(
+                    image_tensor=fixed_train_anchor["image"][0],
+                    gt_polylines=fixed_train_anchor["target_polylines"][0],
+                    gt_masks=fixed_train_anchor["target_masks"][0],
+                    valid_mask=fixed_train_anchor["valid_mask"][0],
+                    target_classes=fixed_train_anchor["target_classes"][0],
+                    pred_polylines=a_out["pred_polylines"][0],
+                    pred_masks=a_out["pred_masks"][0],
+                    pred_cls=a_out.get("pred_cls", None)[0] if "pred_cls" in a_out else None,
+                    loss_dict=a_out["loss_dict"],
+                    total_loss=a_out["loss"].item(),
+                    step=epoch, epoch=epoch,
+                    save_path=anchor_train_path
+                )
+
+        if fixed_val_anchor is not None:
+            model.eval()
+            with torch.no_grad():
+                v_a_targets = {
+                    "target_classes": fixed_val_anchor["target_classes"],
+                    "target_polylines": fixed_val_anchor["target_polylines"],
+                    "target_masks": fixed_val_anchor["target_masks"],
+                    "valid_mask": fixed_val_anchor["valid_mask"]
+                }
+                with autocast_ctx:
+                    v_a_out = model(fixed_val_anchor["image"], targets=v_a_targets)
+                
+                render_step_diagnostic_overlay(
+                    image_tensor=fixed_val_anchor["image"][0],
+                    gt_polylines=fixed_val_anchor["target_polylines"][0],
+                    gt_masks=fixed_val_anchor["target_masks"][0],
+                    valid_mask=fixed_val_anchor["valid_mask"][0],
+                    target_classes=fixed_val_anchor["target_classes"][0],
+                    pred_polylines=v_a_out["pred_polylines"][0],
+                    pred_masks=v_a_out["pred_masks"][0],
+                    pred_cls=v_a_out.get("pred_cls", None)[0] if "pred_cls" in v_a_out else None,
+                    loss_dict=v_a_out["loss_dict"],
+                    total_loss=v_a_out["loss"].item(),
+                    step=epoch, epoch=epoch,
+                    save_path=anchor_val_path
+                )
+
+        print(f"  [ANCHOR] Epoch {epoch:02d} fixed anchor progression saved to: '{anchor_dir}/'", flush=True)
+
+        # 6. Render Latest Batch Overlays
         train_img_path = os.path.join(vis_dir, f"epoch_{epoch:02d}_train.png")
         val_img_path = os.path.join(vis_dir, f"epoch_{epoch:02d}_val.png")
 
@@ -629,9 +712,6 @@ def main():
                 last_val_outputs["pred_masks"][0],
                 epoch=epoch, split="Val", save_path=val_img_path
             )
-
-        if os.path.exists(train_img_path) or os.path.exists(val_img_path):
-            print(f"  🖼️ Epoch {epoch:02d} visual overlays saved to: '{vis_dir}/'", flush=True)
 
         # 6. Log to Weights & Biases
         if use_wandb:
