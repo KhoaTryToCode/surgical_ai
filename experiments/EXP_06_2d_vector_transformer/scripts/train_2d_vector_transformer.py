@@ -156,33 +156,39 @@ def render_step_diagnostic_overlay(image_tensor, gt_polylines, gt_masks, valid_m
         max_pixel_errors = []
         match_info = []
 
-        for idx, gt_i in enumerate(active_gt_indices):
+        # 1-to-1 Bipartite Hungarian Assignment for all active GT landmarks
+        from scipy.optimize import linear_sum_assignment
+        N_cand = pred_polylines.shape[0]
+        N_gt = len(active_gt_indices)
+        cost_matrix = np.zeros((N_cand, N_gt))
+
+        for j, gt_i in enumerate(active_gt_indices):
+            gt_p_t = torch.from_numpy(gt_polylines[gt_i].cpu().numpy()).float()
+            for q in range(N_cand):
+                p_cand = pred_polylines[q].cpu().float()
+                d_fwd = torch.mean(torch.abs(p_cand - gt_p_t)).item()
+                d_rev = torch.mean(torch.abs(p_cand - torch.flip(gt_p_t, dims=[0]))).item()
+                cost_matrix[q, j] = min(d_fwd, d_rev)
+
+        pred_assign, gt_assign = linear_sum_assignment(cost_matrix)
+        gt_to_query = {j: q for q, j in zip(pred_assign, gt_assign)}
+
+        for j, gt_i in enumerate(active_gt_indices):
             gt_m = gt_masks[gt_i].cpu().numpy() if gt_masks is not None else np.zeros((1024, 1024))
             gt_p = gt_polylines[gt_i].cpu().numpy() if gt_polylines is not None else np.zeros((20, 2))
             c_id = int(target_classes[gt_i].item()) if target_classes is not None else 0
             c_name = class_names[c_id] if c_id < len(class_names) else f"Class {c_id}"
 
-            c_gt = colors_gt[idx % len(colors_gt)]
-            c_pred = colors_pred[idx % len(colors_pred)]
+            c_gt = colors_gt[j % len(colors_gt)]
+            c_pred = colors_pred[j % len(colors_pred)]
 
             # Draw GT Contour in 2D
             if gt_m.sum() > 0:
                 ax1.contour(gt_m, levels=[0.5], colors=[c_gt], linewidths=2.5)
                 ax2.contour(gt_m, levels=[0.5], colors=['#ffffff'], linewidths=1.5, linestyles=':')
 
-            # Find best-matched query for this GT landmark (minimum L1 coordinate distance)
-            best_q = 0
-            best_dist = 1e9
-            gt_p_t = torch.from_numpy(gt_p).float()
-            for q in range(pred_polylines.shape[0]):
-                p_cand = pred_polylines[q].cpu().float()
-                d_fwd = torch.mean(torch.abs(p_cand - gt_p_t)).item()
-                d_rev = torch.mean(torch.abs(p_cand - torch.flip(gt_p_t, dims=[0]))).item()
-                d = min(d_fwd, d_rev)
-                if d < best_dist:
-                    best_dist = d
-                    best_q = q
-
+            # Unique Hungarian-assigned query for this GT landmark
+            best_q = gt_to_query[j]
             pred_p = pred_polylines[best_q].cpu().numpy()
 
             # Coordinates in 1024px space
@@ -216,7 +222,7 @@ def render_step_diagnostic_overlay(image_tensor, gt_polylines, gt_masks, valid_m
             for k in range(len(u_pred)):
                 ax1.plot([u_pred[k], u_gt_aligned[k]], [v_pred[k], v_gt_aligned[k]], color='#ffff00', linestyle=':', linewidth=1.0, alpha=0.7)
 
-            match_info.append(f"• Query #{best_q} ──► {c_name} (Avg Err: {cur_dist:.1f}px)")
+            match_info.append(f"* Query #{best_q} -> {c_name} (Avg Err: {cur_dist:.1f}px)")
 
         ax1.set_title(f"Step {step:05d} [Ep {epoch:02d}] Vectors (Cyan=GT, Magenta=Pred, Yellow=Error)", color='white', fontsize=11, fontweight='bold')
         ax1.axis('off')
