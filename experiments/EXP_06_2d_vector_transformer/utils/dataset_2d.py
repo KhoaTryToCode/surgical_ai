@@ -69,6 +69,7 @@ class Surgical2DVectorDataset(Dataset):
         if not os.path.exists(split_dir):
             split_dir = dataset_dir
 
+        self.split_dir = split_dir
         self.img_dir = os.path.join(split_dir, "images")
         self.ann_dir = os.path.join(split_dir, "annotations")
 
@@ -79,29 +80,42 @@ class Surgical2DVectorDataset(Dataset):
             self.image_paths = sorted(glob.glob(os.path.join(split_dir, "**", "*.png"), recursive=True) +
                                      glob.glob(os.path.join(split_dir, "**", "*.jpg"), recursive=True))
 
+        # Pre-index all JSON annotation files in split directory
+        self.json_index = {}
+        for jf in glob.glob(os.path.join(split_dir, "**", "*.json"), recursive=True):
+            j_name = os.path.splitext(os.path.basename(jf))[0]
+            self.json_index[j_name] = jf
+
         self.mean = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(1, 1, 3)
         self.std = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(1, 1, 3)
+
+        found_anns = sum(1 for p in self.image_paths if self._find_annotation_path(p) is not None)
+        print(f"📊 [{mode.upper()} DATASET] {len(self.image_paths)} Images | {found_anns} Annotated JSONs located.")
 
     def __len__(self) -> int:
         return len(self.image_paths)
 
-    def _find_annotation_path(self, img_path: str) -> str:
+    def _find_annotation_path(self, img_path: str):
         base_no_ext = os.path.splitext(img_path)[0]
         base_name = os.path.basename(base_no_ext)
-        img_dir = os.path.dirname(img_path)
+        if base_name in self.json_index:
+            return self.json_index[base_name]
 
+        img_dir = os.path.dirname(img_path)
         candidates = [
             img_path.replace("images", "labels").replace(".jpg", ".json").replace(".png", ".json"),
             img_path.replace("images", "annotations").replace(".jpg", ".json").replace(".png", ".json"),
+            img_path.replace("images", "label").replace(".jpg", ".json").replace(".png", ".json"),
             os.path.join(img_dir, f"{base_name}.json"),
             os.path.join(os.path.dirname(img_dir), "labels", f"{base_name}.json"),
             os.path.join(os.path.dirname(img_dir), "annotations", f"{base_name}.json"),
+            os.path.join(os.path.dirname(img_dir), "label", f"{base_name}.json"),
             f"{base_no_ext}.json"
         ]
         for c in candidates:
             if os.path.exists(c):
                 return c
-        return candidates[0]
+        return None
 
     def __getitem__(self, idx: int) -> dict:
         img_path = self.image_paths[idx]
@@ -131,7 +145,7 @@ class Surgical2DVectorDataset(Dataset):
         target_masks = np.zeros((self.num_instances, 1024, 1024), dtype=np.float32)
         valid_mask = np.zeros((self.num_instances,), dtype=bool)
 
-        if os.path.exists(ann_path):
+        if ann_path is not None and os.path.exists(ann_path):
             try:
                 with open(ann_path, 'r') as f:
                     data = json.load(f)
