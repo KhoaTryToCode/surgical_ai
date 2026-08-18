@@ -21,7 +21,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="EXP_06 2D Vector Transformer Visual Diagnostic Smoke Test")
     parser.add_argument("--dataset_dir", type=str, default=config.dataset_dir, help="Dataset directory")
     parser.add_argument("--sample_idx", type=int, default=0, help="Index of sample to visualize")
-    parser.add_argument("--output", type=str, default="pipeline_diagnostic_2d.png", help="Output PNG path")
+    parser.add_argument("--output", "--save_path", dest="output", type=str, default="pipeline_diagnostic_2d.png", help="Output PNG path")
     return parser.parse_args()
 
 def main():
