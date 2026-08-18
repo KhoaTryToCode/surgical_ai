@@ -42,13 +42,15 @@ def parse_args():
     parser.add_argument("--wandb_run_name", type=str, default="EXP_06_Swin_2D_Vector_Transformer", help="W&B run name")
     return parser.parse_args()
 
-def compute_mask_metrics(pred_masks: torch.Tensor, target_masks: torch.Tensor, valid_mask: torch.Tensor = None, eps: float = 1e-5):
+def compute_batch_metrics(pred_masks: torch.Tensor, pred_polylines: torch.Tensor,
+                          target_masks: torch.Tensor, target_polylines: torch.Tensor,
+                          valid_mask: torch.Tensor = None, eps: float = 1e-5):
     """
-    Computes BOTH Hard (thresholded > 0.5) and Soft (continuous sigmoid) 2D Mask IoU & Dice metrics
-    using Optimal Instance Matching for each active GT landmark.
-    pred_masks: (B, N, H, W) raw logits
-    target_masks: (B, N, H, W) binary GT masks
-    valid_mask: (B, N) active GT indicators
+    Computes Comprehensive 2D Metrics across Batches:
+      - poly_err_px: Mean point coordinate distance in pixels on 1024x1024 canvas
+      - hard_dice: Binary mask overlap thresholded at > 0.5
+      - adaptive_dice: Dynamic confidence stroke mask overlap
+      - soft_dice: Continuous probability mask overlap
     """
     with torch.no_grad():
         B, N, H, W = pred_masks.shape
@@ -56,8 +58,10 @@ def compute_mask_metrics(pred_masks: torch.Tensor, target_masks: torch.Tensor, v
         hard_pred = (probs > 0.5).float()
         gt_bin = (target_masks.float() > 0.5).float()
 
-        hard_ious, hard_dices = [], []
-        soft_ious, soft_dices = [], []
+        poly_errs = []
+        hard_dices = []
+        adapt_dices = []
+        soft_dices = []
 
         for b in range(B):
             if valid_mask is not None:
@@ -70,47 +74,60 @@ def compute_mask_metrics(pred_masks: torch.Tensor, target_masks: torch.Tensor, v
 
             for g in active_gt:
                 target_m = gt_bin[b, g] # (H, W)
+                target_p = target_polylines[b, g].float() # (K, 2)
                 
-                best_h_iou = 0.0
-                best_h_dice = 0.0
-                best_s_iou = 0.0
-                best_s_dice = 0.0
-                
+                # 1. Polyline Coordinate Error in 1024px space
+                best_poly_err = 1e9
                 for q in range(N):
-                    # Hard Metrics
+                    p_q = pred_polylines[b, q].float() # (K, 2)
+                    d_fwd = torch.mean(torch.abs(p_q - target_p)).item() * 1024.0
+                    d_rev = torch.mean(torch.abs(p_q - torch.flip(target_p, dims=[0]))).item() * 1024.0
+                    d = min(d_fwd, d_rev)
+                    if d < best_poly_err:
+                        best_poly_err = d
+                poly_errs.append(best_poly_err)
+
+                # 2. Mask Metrics (Best matched query)
+                best_h_dice = 0.0
+                best_a_dice = 0.0
+                best_s_dice = 0.0
+
+                for q in range(N):
+                    s_m = probs[b, q]
+                    # Adaptive threshold for thin surgical strokes
+                    thresh = max(0.15, float(s_m.mean() + s_m.std()))
+                    a_m = (s_m > thresh).float()
                     h_m = hard_pred[b, q]
+
+                    # Hard Dice (> 0.5)
                     h_inter = (h_m * target_m).sum().item()
-                    h_union = h_m.sum().item() + target_m.sum().item() - h_inter
-                    h_iou = (h_inter + eps) / (h_union + eps)
                     h_dice = (2.0 * h_inter + eps) / (h_m.sum().item() + target_m.sum().item() + eps)
 
-                    # Soft Metrics
-                    s_m = probs[b, q]
+                    # Adaptive Dice
+                    a_inter = (a_m * target_m).sum().item()
+                    a_dice = (2.0 * a_inter + eps) / (a_m.sum().item() + target_m.sum().item() + eps)
+
+                    # Soft Dice
                     s_inter = (s_m * target_m).sum().item()
-                    s_union = s_m.sum().item() + target_m.sum().item() - s_inter
-                    s_iou = (s_inter + eps) / (s_union + eps)
                     s_dice = (2.0 * s_inter + eps) / (s_m.sum().item() + target_m.sum().item() + eps)
 
-                    if s_dice > best_s_dice or (best_s_dice == 0.0 and h_dice > best_h_dice):
-                        best_h_iou = h_iou
+                    if a_dice > best_a_dice:
+                        best_a_dice = a_dice
+                    if h_dice > best_h_dice:
                         best_h_dice = h_dice
-                        best_s_iou = s_iou
+                    if s_dice > best_s_dice:
                         best_s_dice = s_dice
 
-                hard_ious.append(best_h_iou)
                 hard_dices.append(best_h_dice)
-                soft_ious.append(best_s_iou)
+                adapt_dices.append(best_a_dice)
                 soft_dices.append(best_s_dice)
 
-        if len(hard_ious) > 0:
-            return {
-                "hard_iou": float(np.mean(hard_ious)),
-                "hard_dice": float(np.mean(hard_dices)),
-                "soft_iou": float(np.mean(soft_ious)),
-                "soft_dice": float(np.mean(soft_dices))
-            }
-        else:
-            return {"hard_iou": 0.0, "hard_dice": 0.0, "soft_iou": 0.0, "soft_dice": 0.0}
+        return {
+            "poly_err_px": float(np.mean(poly_errs)) if len(poly_errs) > 0 else 0.0,
+            "hard_dice": float(np.mean(hard_dices)) if len(hard_dices) > 0 else 0.0,
+            "adaptive_dice": float(np.mean(adapt_dices)) if len(adapt_dices) > 0 else 0.0,
+            "soft_dice": float(np.mean(soft_dices)) if len(soft_dices) > 0 else 0.0
+        }
 
 def render_step_diagnostic_overlay(image_tensor, gt_polylines, gt_masks, valid_mask, target_classes,
                                    pred_polylines, pred_masks, pred_cls, loss_dict, total_loss,
@@ -482,7 +499,7 @@ def main():
     for epoch in range(1, args.epochs + 1):
         model.train()
         epoch_loss = 0.0
-        train_metrics = {"hard_iou": 0.0, "hard_dice": 0.0, "soft_iou": 0.0, "soft_dice": 0.0}
+        train_metrics = {"poly_err_px": 0.0, "hard_dice": 0.0, "adaptive_dice": 0.0, "soft_dice": 0.0}
         epoch_loss_dict = {"l_cls": 0.0, "l_pos": 0.0, "l_mask": 0.0}
         start_time = time.time()
 
@@ -519,12 +536,12 @@ def main():
             for k, v in outputs["loss_dict"].items():
                 epoch_loss_dict[k] += v
 
-            # Compute batch Hard & Soft metrics with Optimal Instance Matching
-            b_m = compute_mask_metrics(outputs["pred_masks"], targets["target_masks"], targets["valid_mask"])
+            # Compute batch Hard, Soft & Polyline metrics with Optimal Instance Matching
+            b_m = compute_batch_metrics(outputs["pred_masks"], outputs["pred_polylines"], targets["target_masks"], targets["target_polylines"], targets["valid_mask"])
             for mk in train_metrics:
                 train_metrics[mk] += b_m[mk]
 
-            pbar.set_postfix({"loss": f"{loss.item():.4f}", "dice": f"{b_m['hard_dice']*100:.1f}%"})
+            pbar.set_postfix({"loss": f"{loss.item():.4f}", "err": f"{b_m['poly_err_px']:.1f}px", "dice": f"{b_m['adaptive_dice']*100:.1f}%"})
             
             global_step = (epoch - 1) * len(loader) + batch_idx + 1
 
@@ -579,7 +596,7 @@ def main():
         if val_loader is not None and len(val_loader) > 0:
             model.eval()
             val_epoch_loss = 0.0
-            val_metrics = {"hard_iou": 0.0, "hard_dice": 0.0, "soft_iou": 0.0, "soft_dice": 0.0}
+            val_metrics = {"poly_err_px": 0.0, "hard_dice": 0.0, "adaptive_dice": 0.0, "soft_dice": 0.0}
             val_epoch_loss_dict = {"l_cls": 0.0, "l_pos": 0.0, "l_mask": 0.0}
             
             with torch.no_grad():
@@ -605,7 +622,7 @@ def main():
                     for k, v in val_outputs["loss_dict"].items():
                         val_epoch_loss_dict[k] += v
 
-                    v_m = compute_mask_metrics(val_outputs["pred_masks"], targets["target_masks"], targets["valid_mask"])
+                    v_m = compute_batch_metrics(val_outputs["pred_masks"], val_outputs["pred_polylines"], targets["target_masks"], targets["target_polylines"], targets["valid_mask"])
                     for mk in val_metrics:
                         val_metrics[mk] += v_m[mk]
 
@@ -624,8 +641,8 @@ def main():
                 val_loss_dict[k] = val_epoch_loss_dict[k] / max(len(val_loader), 1)
 
         print(f"Epoch [{epoch:2d}/{args.epochs:2d}] ({elapsed:.1f}s) | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | "
-              f"Val Hard IoU: {val_metrics['hard_iou']*100:.1f}% | Val Soft IoU: {val_metrics['soft_iou']*100:.1f}% | "
-              f"Val Hard Dice: {val_metrics['hard_dice']*100:.1f}% | Val Soft Dice: {val_metrics['soft_dice']*100:.1f}%", flush=True)
+              f"Val Poly Error: {val_metrics['poly_err_px']:.1f}px | Val Adaptive Dice: {val_metrics['adaptive_dice']*100:.1f}% | "
+              f"Val Hard Dice: {val_metrics['hard_dice']*100:.1f}%", flush=True)
 
         # 5. Render Fixed Anchor Frames (Time-Lapse Progression Tracking)
         anchor_train_path = os.path.join(anchor_dir, f"epoch_{epoch:02d}_train_anchor.png")
