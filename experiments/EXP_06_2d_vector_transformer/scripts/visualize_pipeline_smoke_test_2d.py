@@ -1,6 +1,14 @@
 import os
 import sys
 import argparse
+import warnings
+
+# Suppress harmless Matplotlib font & HF Hub warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
+warnings.filterwarnings("ignore", message=".*Glyph.*")
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 import numpy as np
 import torch
 import torch.nn.functional as F
