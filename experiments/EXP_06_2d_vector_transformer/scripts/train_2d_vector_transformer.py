@@ -227,20 +227,20 @@ def render_step_diagnostic_overlay(image_tensor, gt_polylines, gt_masks, valid_m
         l_mask = loss_dict.get("l_mask", 0.0)
 
         card_text = (
-            f"🔍 LIVE STEP DIAGNOSTICS [Step {step:05d} | Epoch {epoch:02d}]\n"
-            f"───────────────────────────────────────────────\n"
-            f"📊 TOTAL BATCH LOSS:  {total_loss:.4f}\n\n"
-            f"📐 Coordinate Loss (L_pos):  {l_pos:.4f}\n"
-            f"   • Mean Point Error:       {avg_err:.1f} px / 1024 px\n"
-            f"   • Max Point Error:        {max_err:.1f} px\n"
-            f"   • Normalized L1 Dist:     {avg_err/1024.0:.4f}\n\n"
-            f"🎯 Classification Loss (L_cls): {l_cls:.4f}\n"
-            f"🎭 Mask BCE+Dice Loss (L_mask): {l_mask:.4f}\n"
-            f"───────────────────────────────────────────────\n"
-            f"🔗 Bipartite Hungarian Matches:\n" + "\n".join(match_info) + "\n\n"
-            f"💡 Loss Reflection Analysis:\n"
-            f"{'• Prediction is FAR from GT -> High L_pos penalty!' if avg_err > 50 else '• Prediction is CLOSE to GT -> Low L_pos gradient!'}\n"
-            f"• Yellow lines show the exact pull direction of backprop."
+            f"[LIVE STEP DIAGNOSTICS] Step {step:05d} | Epoch {epoch:02d}\n"
+            f"---------------------------------------------------\n"
+            f"TOTAL BATCH LOSS:  {total_loss:.4f}\n\n"
+            f"Coordinate Loss (L_pos):  {l_pos:.4f}\n"
+            f"   * Mean Point Error:       {avg_err:.1f} px / 1024 px\n"
+            f"   * Max Point Error:        {max_err:.1f} px\n"
+            f"   * Normalized L1 Dist:     {avg_err/1024.0:.4f}\n\n"
+            f"Classification Loss (L_cls): {l_cls:.4f}\n"
+            f"Mask BCE+Dice Loss (L_mask): {l_mask:.4f}\n"
+            f"---------------------------------------------------\n"
+            f"Bipartite Hungarian Matches:\n" + "\n".join(match_info) + "\n\n"
+            f"Loss Reflection Analysis:\n"
+            f"{'* Prediction is FAR from GT -> High L_pos penalty!' if avg_err > 50 else '* Prediction is CLOSE to GT -> Low L_pos gradient!'}\n"
+            f"* Yellow lines show the exact pull direction of backprop."
         )
 
         ax3.text(0.05, 0.95, card_text, transform=ax3.transAxes, color='#e6edf3',
