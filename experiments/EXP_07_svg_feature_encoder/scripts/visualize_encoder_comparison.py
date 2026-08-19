@@ -24,9 +24,16 @@ from utils.svg_visualizer_utils import (
     create_synthetic_surgical_frame
 )
 
+import glob
+import json
+import random
+import cv2
+
 def parse_args():
     parser = argparse.ArgumentParser(description="EXP_07: Visual Comparison of Standard Swin vs SVG Feature Encoder")
-    parser.add_argument("--image_path", type=str, default=None, help="Path to input surgical image (optional)")
+    parser.add_argument("--dataset_dir", type=str, default="/kaggle/working/L3D", help="Path to surgical dataset directory")
+    parser.add_argument("--image_path", type=str, default=None, help="Direct path to input surgical image (optional)")
+    parser.add_argument("--sample_idx", type=int, default=None, help="Sample index in dataset (optional, random if not set)")
     parser.add_argument("--output_path", type=str, default=os.path.join(config.output_dir, "encoder_feature_comparison.png"), help="Path to save comparison PNG")
     return parser.parse_args()
 
@@ -37,16 +44,40 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🚀 Running EXP_07 Encoder Feature Map Comparison on device: {device}")
 
-    # 1. Load or Generate Input Surgical Frame
+    # 1. Load or Sample Input Surgical Frame
+    img_np = None
+    gt_contours = []
+
+    # Priority A: Explicit image_path passed
     if args.image_path and os.path.exists(args.image_path):
-        import cv2
         img_bgr = cv2.imread(args.image_path)
-        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-        if img_rgb.shape[:2] != (1024, 1024):
-            img_rgb = cv2.resize(img_rgb, (1024, 1024))
-        img_np = img_rgb.astype(np.float32) / 255.0
-        print(f"🖼️ Loaded real surgical frame from: {args.image_path}")
-    else:
+        if img_bgr is not None:
+            img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            if img_rgb.shape[:2] != (1024, 1024):
+                img_rgb = cv2.resize(img_rgb, (1024, 1024))
+            img_np = img_rgb.astype(np.float32) / 255.0
+            print(f"🖼️ Loaded surgical image from: {args.image_path}")
+
+    # Priority B: Sample from dataset directory (e.g. /kaggle/working/L3D)
+    if img_np is None and os.path.exists(args.dataset_dir):
+        img_candidates = sorted(glob.glob(os.path.join(args.dataset_dir, "**", "*.png"), recursive=True) +
+                                glob.glob(os.path.join(args.dataset_dir, "**", "*.jpg"), recursive=True))
+        if len(img_candidates) > 0:
+            if args.sample_idx is not None and 0 <= args.sample_idx < len(img_candidates):
+                sel_path = img_candidates[args.sample_idx]
+            else:
+                sel_path = random.choice(img_candidates)
+            
+            img_bgr = cv2.imread(sel_path)
+            if img_bgr is not None:
+                img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+                if img_rgb.shape[:2] != (1024, 1024):
+                    img_rgb = cv2.resize(img_rgb, (1024, 1024))
+                img_np = img_rgb.astype(np.float32) / 255.0
+                print(f"🖼️ Randomly sampled image from dataset ({sel_path})")
+
+    # Priority C: High-fidelity synthetic frame
+    if img_np is None:
         img_np = create_synthetic_surgical_frame(1024, 1024)
         print("🖼️ Generated high-fidelity synthetic laparoscopic liver frame with Falciform & Ridge contours.")
 
