@@ -183,8 +183,17 @@ class BezierDecoderLayer(nn.Module):
 
 class BezierSplineDecoder(nn.Module):
     """
-    Full iterative Bézier spline decoder with N layers.
-    Returns intermediate control points at every layer for visualization.
+    Dynamic Two-Stage Bézier Spline Decoder with Iterative Refinement.
+    
+    1. Stage 1 (Dynamic Proposals):
+       - Scans the encoder's Saliency Map S(x, y) for the current image.
+       - Discovers the top-Q landmark peak locations (uc, vc).
+       - Reads the local Tangent Flow T(uc, vc) at each peak.
+       - Spawns initial Bézier queries [P0, C1, C2, P3] aligned with the real tissue ridges.
+       - Initializes query content embeddings directly from the sampled local peak features.
+    
+    2. Stage 2 (Iterative Refinement):
+       - 6 decoder layers perform Global Cross-Attention + Local Curve Probing to snap onto ground truth.
     """
 
     def __init__(
@@ -202,13 +211,19 @@ class BezierSplineDecoder(nn.Module):
         self.d_model = d_model
         self.num_sample_t = num_sample_t
 
-        # Learnable query content embeddings
-        self.query_embed = nn.Embedding(num_queries, d_model)
+        # Dynamic Proposal Projection: maps 131-channel sampled peak features + (uc, vc) coords to d_model
+        self.proposal_proj = nn.Sequential(
+            nn.Linear(131 + 2, d_model),
+            nn.GELU(),
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, d_model),
+            nn.LayerNorm(d_model),
+        )
 
-        # Learnable initial control points (P0, C1, C2, P3) per query
-        # Initialized spread across the image
-        self.init_control_points = nn.Parameter(
-            self._create_initial_control_points(num_queries)
+        # Fallback learned anchor points (used if saliency has zero peaks)
+        self.register_buffer(
+            "fallback_control_points",
+            self._create_fallback_control_points(num_queries)
         )
 
         # Decoder layers
@@ -221,37 +236,20 @@ class BezierSplineDecoder(nn.Module):
         self.class_head = nn.Linear(d_model, num_classes + 1)  # +1 for "no object"
 
     @staticmethod
-    def _create_initial_control_points(num_queries: int) -> torch.Tensor:
-        """
-        Create structured Spatial Anchor Priors covering canonical laparoscopic anatomical positions:
-          - Queries 0-2: Horizontal curved spans (Upper/Mid/Lower Anterior Ridges & Silhouettes)
-          - Queries 3-5: Vertical spans (Center & Left/Right Falciform Ligament / Ligamentum Teres)
-          - Queries 6-7: Lateral curved boundaries (Left & Right Liver Silhouettes)
-          - Queries 8-9: Diagonal / Oblique spans (Gallbladder Boundary & Transverse Ridges)
-        """
+    def _create_fallback_control_points(num_queries: int) -> torch.Tensor:
+        """Fallback spatial anchors covering canonical anatomical zones."""
         anchors = [
-            # 0: Upper Horizontal Ridge (Anterior Ridge high)
             [[0.15, 0.32], [0.35, 0.22], [0.65, 0.22], [0.85, 0.32]],
-            # 1: Mid Horizontal Ridge (Anterior Ridge mid)
             [[0.15, 0.50], [0.35, 0.45], [0.65, 0.45], [0.85, 0.50]],
-            # 2: Lower Horizontal Silhouette (Liver bottom contour)
             [[0.20, 0.72], [0.40, 0.78], [0.60, 0.78], [0.80, 0.72]],
-            # 3: Center Vertical Midline (Falciform Ligament)
             [[0.50, 0.20], [0.50, 0.40], [0.50, 0.65], [0.50, 0.85]],
-            # 4: Left-Midline Vertical (Ligamentum Teres / Vessel)
             [[0.42, 0.28], [0.45, 0.48], [0.48, 0.68], [0.50, 0.88]],
-            # 5: Right-Midline Vertical
             [[0.58, 0.28], [0.55, 0.48], [0.52, 0.68], [0.50, 0.88]],
-            # 6: Left Lateral Curved Boundary (Left Lobe Silhouette)
             [[0.15, 0.30], [0.12, 0.50], [0.15, 0.70], [0.25, 0.85]],
-            # 7: Right Lateral Curved Boundary (Right Lobe Silhouette)
             [[0.85, 0.30], [0.88, 0.50], [0.85, 0.70], [0.75, 0.85]],
-            # 8: Right-Lower Oblique (Gallbladder Boundary / Fossa)
             [[0.65, 0.45], [0.70, 0.55], [0.68, 0.65], [0.60, 0.75]],
-            # 9: Diagonal Transverse Span (Transverse liver contour)
             [[0.25, 0.30], [0.45, 0.45], [0.65, 0.55], [0.80, 0.65]],
         ]
-
         cps = torch.zeros(num_queries, 4, 2)
         for i in range(num_queries):
             if i < len(anchors):
@@ -263,6 +261,79 @@ class BezierSplineDecoder(nn.Module):
                 cps[i, 2] = torch.tensor([0.65, y_c - 0.02])
                 cps[i, 3] = torch.tensor([0.8, y_c])
         return cps
+
+    def _generate_dynamic_proposals(
+        self,
+        saliency: torch.Tensor,
+        tangent: torch.Tensor,
+        feature_map: torch.Tensor,
+    ) -> tuple:
+        """
+        Stage 1: Generate dynamic image-conditioned Bézier queries from the current frame.
+        
+        Args:
+            saliency: (B, 1, H, W) in [0, 1]
+            tangent: (B, 2, H, W) unit vectors (Tx, Ty)
+            feature_map: (B, 131, H, W) combined visual + vector features
+        Returns:
+            query_content: (B, Q, d_model) image-conditioned content vectors
+            control_points: (B, Q, 4, 2) image-conditioned initial Bézier curves
+        """
+        B, _, H, W = saliency.shape
+        device = saliency.device
+        Q = self.num_queries
+
+        # 1. Detect Saliency Peaks (Local Maxima using 3x3 MaxPool NMS)
+        sal_max = F.max_pool2d(saliency, kernel_size=5, stride=1, padding=2)
+        is_peak = (saliency >= sal_max - 1e-4) & (saliency > 0.05)
+        peaks = torch.where(is_peak, saliency, torch.zeros_like(saliency))
+
+        # Fallback to raw saliency if fewer than Q peaks found
+        peaks_flat = peaks.view(B, -1)
+        sal_flat = saliency.view(B, -1)
+        combined_scores = peaks_flat + sal_flat * 0.1
+
+        topk_indices = torch.topk(combined_scores, k=Q, dim=-1).indices  # (B, Q)
+
+        peak_y = (topk_indices // W).float() / float(H)  # in [0, 1]
+        peak_x = (topk_indices % W).float() / float(W)
+        centers = torch.stack([peak_x, peak_y], dim=-1)  # (B, Q, 2)
+
+        # 2. Sample Local Tangent Vectors at Peak Centers
+        grid_centers = centers * 2.0 - 1.0  # to [-1, 1] for grid_sample
+        grid_centers_4d = grid_centers.unsqueeze(2)  # (B, Q, 1, 2)
+
+        sampled_tangents = F.grid_sample(
+            tangent, grid_centers_4d, mode="bilinear", padding_mode="border", align_corners=True
+        ).squeeze(-1).permute(0, 2, 1)  # (B, Q, 2)
+
+        # 3. Construct Dynamic Tangent-Aligned Initial Bézier Curves
+        tx = sampled_tangents[..., 0]  # (B, Q)
+        ty = sampled_tangents[..., 1]  # (B, Q)
+        
+        # Initial curve half-span (15-20% of image width)
+        L = 0.18
+
+        cx = centers[..., 0]
+        cy = centers[..., 1]
+
+        p0 = torch.stack([cx - tx * L, cy - ty * L], dim=-1)
+        c1 = torch.stack([cx - tx * (L * 0.33), cy - ty * (L * 0.33)], dim=-1)
+        c2 = torch.stack([cx + tx * (L * 0.33), cy + ty * (L * 0.33)], dim=-1)
+        p3 = torch.stack([cx + tx * L, cy + ty * L], dim=-1)
+
+        init_control_points = torch.stack([p0, c1, c2, p3], dim=2).clamp(0.0, 1.0)  # (B, Q, 4, 2)
+
+        # 4. Extract Dynamic Content Embeddings directly from the Peak Image Features
+        sampled_peak_feat = F.grid_sample(
+            feature_map, grid_centers_4d, mode="bilinear", padding_mode="border", align_corners=True
+        ).squeeze(-1).permute(0, 2, 1)  # (B, Q, 131)
+
+        # Concat sampled visual features with normalized (x, y) coordinates
+        peak_input = torch.cat([sampled_peak_feat, centers], dim=-1)  # (B, Q, 133)
+        query_content = self.proposal_proj(peak_input)  # (B, Q, d_model)
+
+        return query_content, init_control_points
 
     def forward(self, encoder_output: dict) -> dict:
         """
@@ -290,27 +361,29 @@ class BezierSplineDecoder(nn.Module):
         if tangent.shape[2:] != geo_feat.shape[2:]:
             tangent = F.interpolate(tangent, size=(H, W), mode="bilinear", align_corners=False)
 
-        # Concatenate all encoder outputs into a single feature map
+        # Concatenate all encoder outputs into a high-res feature map
         feature_map = torch.cat([geo_feat, saliency, tangent], dim=1)  # (B, 131, H, W)
 
-        # Global Memory Tokens for Phase 1 Global Cross-Attention (Stride 32 / Stride 16 tokens)
+        # Global Memory Tokens for Phase 1 Global Cross-Attention
         swin_out = encoder_output.get("swin_outputs", {})
         if "stride32_features" in swin_out:
-            # (B, 256, 32, 32) -> (B, 1024, 256)
-            s32 = swin_out["stride32_features"]
-            global_memory = s32.flatten(2).permute(0, 2, 1)
+            s32 = swin_out["stride32_features"]  # (B, 256, 32, 32)
+            global_memory = s32.flatten(2).permute(0, 2, 1)  # (B, 1024, 256)
         else:
-            # Fallback to downsampled geometric features
             s32 = F.adaptive_avg_pool2d(geo_feat, (32, 32))
             if s32.shape[1] != self.d_model:
                 s32 = F.interpolate(s32, size=(32, 32), mode="bilinear")
             global_memory = s32.flatten(2).permute(0, 2, 1)
 
-        # Initialize queries
-        query_content = self.query_embed.weight.unsqueeze(0).expand(B, -1, -1)  # (B, Q, d_model)
-        control_points = self.init_control_points.unsqueeze(0).expand(B, -1, -1, -1).clone()  # (B, Q, 4, 2)
+        # ── STAGE 1: DYNAMIC IMAGE-CONDITIONED PROPOSAL GENERATION ──
+        # Spawns queries directly on the current patient's landmark peaks aligned with tangent flow!
+        query_content, control_points = self._generate_dynamic_proposals(
+            saliency=saliency,
+            tangent=tangent,
+            feature_map=feature_map,
+        )
 
-        # Run decoder layers with Global Radar + Local Microscope probing
+        # ── STAGE 2: ITERATIVE 6-LAYER REFINEMENT ──
         layer_states = []
         for layer in self.layers:
             cp_before = control_points.clone()
@@ -333,5 +406,5 @@ class BezierSplineDecoder(nn.Module):
             "final_control_points": control_points,
             "class_logits": class_logits,
             "layer_states": layer_states,
-            "feature_map": feature_map,  # for visualization
+            "feature_map": feature_map,
         }
