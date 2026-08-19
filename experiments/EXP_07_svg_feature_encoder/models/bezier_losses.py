@@ -147,12 +147,14 @@ class BezierSplineLoss(nn.Module):
             gt_target = gt_union
         gt_target = gt_target.clamp(0.0, 1.0)
 
-        # 1. Binary Cross Entropy
-        bce = F.binary_cross_entropy(pred_saliency, gt_target)
+        # 1. Binary Cross Entropy (AMP-safe explicit float32 formulation)
+        pred_f32 = pred_saliency.float().clamp(1e-6, 1.0 - 1e-6)
+        gt_f32 = gt_target.float()
+        bce = -(gt_f32 * torch.log(pred_f32) + (1.0 - gt_f32) * torch.log(1.0 - pred_f32)).mean()
 
         # 2. Soft Dice
-        inter = (pred_saliency * gt_target).sum(dim=(2, 3))
-        union = pred_saliency.sum(dim=(2, 3)) + gt_target.sum(dim=(2, 3))
+        inter = (pred_f32 * gt_f32).sum(dim=(2, 3))
+        union = pred_f32.sum(dim=(2, 3)) + gt_f32.sum(dim=(2, 3))
         dice = 1.0 - (2.0 * inter + 1e-5) / (union + 1e-5)
         dice_loss = dice.mean()
 
