@@ -360,6 +360,8 @@ def main():
                     dec_out["final_control_points"],
                     dec_out["class_logits"],
                     gt_poly, gt_cls, valid,
+                    pred_saliency=enc_out["saliency_field"],
+                    gt_masks=gt_masks,
                 )
                 loss = loss_out["loss"]
 
@@ -379,6 +381,7 @@ def main():
             pbar.set_postfix({
                 "loss": f"{loss.item():.4f}",
                 "curve": f"{loss_out['loss_dict']['l_curve']:.4f}",
+                "sal": f"{loss_out['loss_dict'].get('l_aux_sal', 0):.4f}",
                 "cls": f"{loss_out['loss_dict']['l_cls']:.4f}",
             })
 
@@ -398,7 +401,7 @@ def main():
             encoder.eval()
             decoder.eval()
             val_epoch_loss = 0.0
-            val_epoch_loss_dict = {"l_curve": 0.0, "l_cls": 0.0, "l_endpoint": 0.0, "l_smooth": 0.0}
+            val_epoch_loss_dict = {"l_curve": 0.0, "l_cls": 0.0, "l_endpoint": 0.0, "l_smooth": 0.0, "l_aux_sal": 0.0}
             all_dices, all_ious = [], []
 
             with torch.no_grad():
@@ -416,6 +419,8 @@ def main():
                             dec_out["final_control_points"],
                             dec_out["class_logits"],
                             gt_poly, gt_cls, valid,
+                            pred_saliency=enc_out["saliency_field"],
+                            gt_masks=gt_masks_v,
                         )
 
                     val_epoch_loss += v_loss_out["loss"].item()
@@ -458,6 +463,8 @@ def main():
                         fixed_train_anchor["target_polylines"],
                         fixed_train_anchor["target_classes"],
                         fixed_train_anchor["valid_mask"],
+                        pred_saliency=a_enc["saliency_field"],
+                        gt_masks=fixed_train_anchor["target_masks"],
                     )
 
                 anchor_path = os.path.join(anchor_dir, f"epoch_{epoch:02d}_train_anchor.png")
@@ -487,6 +494,8 @@ def main():
                         fixed_val_anchor["target_polylines"],
                         fixed_val_anchor["target_classes"],
                         fixed_val_anchor["valid_mask"],
+                        pred_saliency=v_enc["saliency_field"],
+                        gt_masks=fixed_val_anchor["target_masks"],
                     )
 
                 anchor_path = os.path.join(anchor_dir, f"epoch_{epoch:02d}_val_anchor.png")
@@ -517,11 +526,13 @@ def main():
                     "train/l_cls": epoch_loss_dict["l_cls"],
                     "train/l_endpoint": epoch_loss_dict["l_endpoint"],
                     "train/l_smooth": epoch_loss_dict["l_smooth"],
+                    "train/l_aux_sal": epoch_loss_dict.get("l_aux_sal", 0.0),
                     "val/total_loss": avg_val_loss,
                     "val/l_curve": val_loss_dict["l_curve"],
                     "val/l_cls": val_loss_dict["l_cls"],
                     "val/l_endpoint": val_loss_dict["l_endpoint"],
                     "val/l_smooth": val_loss_dict["l_smooth"],
+                    "val/l_aux_sal": val_loss_dict.get("l_aux_sal", 0.0),
                     "val/dice_pct": val_dice * 100.0,
                     "val/iou_pct": val_iou * 100.0,
                     "learning_rate": optimizer.param_groups[0]["lr"],

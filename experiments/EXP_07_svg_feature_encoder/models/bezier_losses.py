@@ -105,6 +105,7 @@ class BezierSplineLoss(nn.Module):
         self.lambda_cls = config.lambda_cls
         self.lambda_endpoint = config.lambda_endpoint
         self.lambda_smooth = config.lambda_smooth
+        self.lambda_aux_saliency = getattr(config, "lambda_aux_saliency", 2.0)
         self.num_classes = config.num_classes
         self.num_curve_samples = 50  # Points sampled along Bézier for Chamfer
 
@@ -124,6 +125,38 @@ class BezierSplineLoss(nn.Module):
         pt = torch.exp(-ce)
         focal = self.focal_alpha * ((1.0 - pt) ** self.focal_gamma) * ce
         return focal.mean()
+
+    def saliency_loss(self, pred_saliency: torch.Tensor, gt_masks: torch.Tensor, valid_mask: torch.Tensor) -> torch.Tensor:
+        """
+        Auxiliary loss for Saliency Map: BCE + Soft Dice vs union of GT landmark strokes.
+
+        Args:
+            pred_saliency: (B, 1, H, W) in [0, 1] (Sigmoided).
+            gt_masks: (B, N, 1024, 1024) rasterized stroke masks.
+            valid_mask: (B, N) active indicator.
+        """
+        B, _, H, W = pred_saliency.shape
+        # Create union mask of all active landmarks: (B, 1, 1024, 1024)
+        valid_float = valid_mask.float().view(B, -1, 1, 1)
+        gt_union = (gt_masks * valid_float).max(dim=1, keepdim=True)[0]  # (B, 1, 1024, 1024)
+
+        # Downsample to saliency map resolution (256, 256)
+        if gt_union.shape[2:] != (H, W):
+            gt_target = F.interpolate(gt_union, size=(H, W), mode="bilinear", align_corners=False)
+        else:
+            gt_target = gt_union
+        gt_target = gt_target.clamp(0.0, 1.0)
+
+        # 1. Binary Cross Entropy
+        bce = F.binary_cross_entropy(pred_saliency, gt_target)
+
+        # 2. Soft Dice
+        inter = (pred_saliency * gt_target).sum(dim=(2, 3))
+        union = pred_saliency.sum(dim=(2, 3)) + gt_target.sum(dim=(2, 3))
+        dice = 1.0 - (2.0 * inter + 1e-5) / (union + 1e-5)
+        dice_loss = dice.mean()
+
+        return bce + dice_loss
 
     @torch.no_grad()
     def hungarian_match(
@@ -183,9 +216,11 @@ class BezierSplineLoss(nn.Module):
         gt_polylines: torch.Tensor,
         gt_classes: torch.Tensor,
         valid_mask: torch.Tensor,
+        pred_saliency: torch.Tensor = None,
+        gt_masks: torch.Tensor = None,
     ) -> dict:
         """
-        Compute all 4 loss components.
+        Compute all loss components (Decoder Bézier losses + Encoder Auxiliary Saliency loss).
 
         Args:
             pred_control_points: (B, Q, 4, 2) predicted Bézier control points in [0, 1].
@@ -193,6 +228,8 @@ class BezierSplineLoss(nn.Module):
             gt_polylines: (B, N, K, 2) GT polyline coordinates in [0, 1].
             gt_classes: (B, N) GT class IDs (0=bg, 1-4=landmark classes).
             valid_mask: (B, N) boolean.
+            pred_saliency: (B, 1, 256, 256) optional encoder saliency field.
+            gt_masks: (B, N, 1024, 1024) optional ground truth stroke masks.
         Returns:
             dict with "loss", "loss_dict", and "matches" per batch item.
         """
@@ -261,11 +298,18 @@ class BezierSplineLoss(nn.Module):
         l_cls = total_cls / B
         l_smooth = total_smooth / B
 
+        # ── Auxiliary Saliency Loss (Encoder Supervision) ──
+        if pred_saliency is not None and gt_masks is not None:
+            l_aux_sal = self.saliency_loss(pred_saliency, gt_masks, valid_mask)
+        else:
+            l_aux_sal = torch.tensor(0.0, device=device)
+
         loss = (
             self.lambda_curve * l_curve
             + self.lambda_cls * l_cls
             + self.lambda_endpoint * l_endpoint
             + self.lambda_smooth * l_smooth
+            + self.lambda_aux_saliency * l_aux_sal
         )
 
         return {
@@ -275,6 +319,7 @@ class BezierSplineLoss(nn.Module):
                 "l_cls": l_cls.item(),
                 "l_endpoint": l_endpoint.item(),
                 "l_smooth": l_smooth.item(),
+                "l_aux_sal": l_aux_sal.item(),
             },
             "matches": all_matches,
         }

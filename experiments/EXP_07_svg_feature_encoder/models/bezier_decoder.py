@@ -33,7 +33,11 @@ class BezierDecoderLayer(nn.Module):
         t = torch.linspace(0.0, 1.0, num_sample_t)  # (T,)
         self.register_buffer("t_vals", t)
 
-        # Project probed features into d_model
+        # 1. Global Cross-Attention: query content ↔ full image memory tokens (Radar/GPS)
+        self.global_cross_attn = nn.MultiheadAttention(d_model, nhead, batch_first=True)
+        self.global_cross_norm = nn.LayerNorm(d_model)
+
+        # 2. Local Probing: Project probed 131-channel features into d_model
         # Encoder output: geometric_features(128) + saliency(1) + tangent(2) = 131 channels
         self.probe_proj = nn.Sequential(
             nn.Linear(131, d_model),
@@ -41,15 +45,15 @@ class BezierDecoderLayer(nn.Module):
             nn.LayerNorm(d_model),
         )
 
-        # Self-attention across sampled curve points
+        # 3. Intra-Curve Self-Attention across sampled curve points (Microscope context)
         self.self_attn = nn.MultiheadAttention(d_model, nhead, batch_first=True)
         self.self_attn_norm = nn.LayerNorm(d_model)
 
-        # Cross-attention: query content ↔ probed sample features
-        self.cross_attn = nn.MultiheadAttention(d_model, nhead, batch_first=True)
-        self.cross_attn_norm = nn.LayerNorm(d_model)
+        # 4. Local Cross-Attention: query content ↔ sampled curve features
+        self.local_cross_attn = nn.MultiheadAttention(d_model, nhead, batch_first=True)
+        self.local_cross_norm = nn.LayerNorm(d_model)
 
-        # FFN
+        # 5. FFN
         self.ffn = nn.Sequential(
             nn.Linear(d_model, d_model * 4),
             nn.GELU(),
@@ -57,7 +61,7 @@ class BezierDecoderLayer(nn.Module):
         )
         self.ffn_norm = nn.LayerNorm(d_model)
 
-        # Correction head: predicts (ΔP0, ΔC1, ΔC2, ΔP3) = 8 values
+        # 6. Correction head: predicts (ΔP0, ΔC1, ΔC2, ΔP3) = 8 values
         self.correction_head = nn.Linear(d_model, 8)
 
     def _evaluate_bezier(self, control_points: torch.Tensor) -> torch.Tensor:
@@ -112,12 +116,14 @@ class BezierDecoderLayer(nn.Module):
         query_content: torch.Tensor,
         control_points: torch.Tensor,
         feature_map: torch.Tensor,
+        global_memory: torch.Tensor = None,
     ) -> tuple:
         """
         Args:
             query_content: (B, Q, d_model) — content embeddings per query.
             control_points: (B, Q, 4, 2) — current [P0, C1, C2, P3].
-            feature_map: (B, 131, H, W) — concatenated encoder output.
+            feature_map: (B, 131, H, W) — concatenated encoder output (high-res canvas).
+            global_memory: (B, HW, d_model) — global image tokens (Radar/GPS view).
         Returns:
             query_content: (B, Q, d_model) — updated content embeddings.
             control_points: (B, Q, 4, 2) — refined control points.
@@ -125,44 +131,52 @@ class BezierDecoderLayer(nn.Module):
         """
         B, Q, _, _ = control_points.shape
 
-        # 1. Evaluate Bézier curve → sample points
+        # ── PHASE 1: GLOBAL PROBING (The Radar / GPS) ──
+        # Query attends across the ENTIRE image canvas to discover distant landmarks
+        if global_memory is not None:
+            g_out, _ = self.global_cross_attn(
+                query_content,  # (B, Q, d_model)
+                global_memory,  # (B, HW, d_model)
+                global_memory,  # (B, HW, d_model)
+            )
+            query_content = self.global_cross_norm(query_content + g_out)
+
+        # ── PHASE 2: LOCAL PROBING (The Microscope) ──
+        # 1. Evaluate Bézier curve → sample 20 physical coordinates along B(t)
         sample_xy = self._evaluate_bezier(control_points)  # (B, Q, T, 2)
 
-        # 2. Probe the feature map at sample points
+        # 2. Probe the high-res feature map at those 20 sample coordinates
         probed = self._probe_features(sample_xy, feature_map)  # (B, Q, T, 131)
         probed = self.probe_proj(probed)  # (B, Q, T, d_model)
 
-        # 3. Self-attention along each curve's sample points
-        # Reshape to (B*Q, T, d_model) for per-curve self-attention
+        # 3. Intra-curve self-attention along the 20 sample points (shares context across glares/smoke)
         probed_flat = probed.view(B * Q, self.num_sample_t, self.d_model)
         sa_out, _ = self.self_attn(probed_flat, probed_flat, probed_flat)
         sa_out = self.self_attn_norm(probed_flat + sa_out)  # (B*Q, T, d_model)
 
         # Pool curve features into single vector per query
-        curve_feat = sa_out.mean(dim=1)  # (B*Q, d_model)
-        curve_feat = curve_feat.view(B, Q, self.d_model)  # (B, Q, d_model)
+        curve_feat = sa_out.mean(dim=1).view(B, Q, self.d_model)  # (B, Q, d_model)
 
-        # 4. Cross-attention: query_content attends to pooled curve features
-        ca_out, _ = self.cross_attn(
+        # 4. Local Cross-Attention: query_content attends to its own pooled curve features
+        ca_out, _ = self.local_cross_attn(
             query_content,   # (B, Q, d_model)
             curve_feat,      # (B, Q, d_model)
             curve_feat,      # (B, Q, d_model)
         )
-        query_content = self.cross_attn_norm(query_content + ca_out)
+        query_content = self.local_cross_norm(query_content + ca_out)
 
         # 5. FFN
         ffn_out = self.ffn(query_content)
         query_content = self.ffn_norm(query_content + ffn_out)
 
-        # 6. Predict control point corrections
-        delta = self.correction_head(query_content)  # (B, Q, 8)
-        delta = delta.view(B, Q, 4, 2)
-
-        # Scale corrections (small refinement steps)
-        delta = delta * 0.1
+        # 6. Predict control point corrections [ΔP0, ΔC1, ΔC2, ΔP3]
+        delta = self.correction_head(query_content).view(B, Q, 4, 2)
+        delta = delta * 0.1  # Stable refinement step
 
         # 7. Update control points
         control_points = (control_points + delta).clamp(0.0, 1.0)
+
+        return query_content, control_points, sample_xy
 
         return query_content, control_points, sample_xy
 
@@ -251,16 +265,32 @@ class BezierSplineDecoder(nn.Module):
         # Concatenate all encoder outputs into a single feature map
         feature_map = torch.cat([geo_feat, saliency, tangent], dim=1)  # (B, 131, H, W)
 
+        # Global Memory Tokens for Phase 1 Global Cross-Attention (Stride 32 / Stride 16 tokens)
+        swin_out = encoder_output.get("swin_outputs", {})
+        if "stride32_features" in swin_out:
+            # (B, 256, 32, 32) -> (B, 1024, 256)
+            s32 = swin_out["stride32_features"]
+            global_memory = s32.flatten(2).permute(0, 2, 1)
+        else:
+            # Fallback to downsampled geometric features
+            s32 = F.adaptive_avg_pool2d(geo_feat, (32, 32))
+            if s32.shape[1] != self.d_model:
+                s32 = F.interpolate(s32, size=(32, 32), mode="bilinear")
+            global_memory = s32.flatten(2).permute(0, 2, 1)
+
         # Initialize queries
         query_content = self.query_embed.weight.unsqueeze(0).expand(B, -1, -1)  # (B, Q, d_model)
         control_points = self.init_control_points.unsqueeze(0).expand(B, -1, -1, -1).clone()  # (B, Q, 4, 2)
 
-        # Run decoder layers, recording intermediate states
+        # Run decoder layers with Global Radar + Local Microscope probing
         layer_states = []
         for layer in self.layers:
             cp_before = control_points.clone()
             query_content, control_points, sample_xy = layer(
-                query_content, control_points, feature_map
+                query_content=query_content,
+                control_points=control_points,
+                feature_map=feature_map,
+                global_memory=global_memory,
             )
             layer_states.append({
                 "control_points": cp_before,

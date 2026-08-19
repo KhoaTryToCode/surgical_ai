@@ -42,10 +42,11 @@ class SVGEncoderConfig:
     gradient_clip_norm = 1.0
     
     # Loss weights
-    lambda_curve = 5.0          # L_curve: Chamfer distance
+    lambda_curve = 10.0         # L_curve: Chamfer distance (primary shape fitting)
     lambda_cls = 2.0            # L_cls: Focal classification loss
     lambda_endpoint = 3.0       # L_endpoint: Endpoint anchoring
-    lambda_smooth = 0.5         # L_smooth: Curvature regularization
+    lambda_smooth = 0.05        # L_smooth: Gentle curvature regularization
+    lambda_aux_saliency = 2.0   # L_aux: Direct supervision on encoder saliency map
     
     # Validation metrics
     stroke_thickness_dice = 20  # Pixel stroke width for Dice/IoU rasterization
