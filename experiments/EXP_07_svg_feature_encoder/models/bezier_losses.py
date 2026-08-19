@@ -169,11 +169,11 @@ class BezierSplineLoss(nn.Module):
         valid_mask: torch.Tensor,
     ) -> list:
         """
-        Bipartite Hungarian matching between predicted queries and GT landmarks.
+        Bipartite Hungarian matching using ordered arc-length + endpoint distance cost.
 
         Args:
             pred_control_points: (Q, 4, 2) predicted Bézier control points.
-            gt_polylines: (N, K, 2) GT polyline points.
+            gt_polylines: (N, K, 2) GT polyline points (resampled to K equidistant arc points).
             gt_classes: (N,) GT class IDs.
             valid_mask: (N,) boolean active indicators.
         Returns:
@@ -185,20 +185,31 @@ class BezierSplineLoss(nn.Module):
 
         Q = pred_control_points.shape[0]
         N_gt = len(active_gt)
+        K = gt_polylines.shape[1]
 
-        # Compute cost matrix: Chamfer distance between each pred curve and each GT polyline
-        pred_curves = evaluate_bezier_curve(pred_control_points, num_samples=self.num_curve_samples)  # (Q, 50, 2)
+        # Sample predicted curves at K points
+        pred_curves = evaluate_bezier_curve(pred_control_points, num_samples=K)  # (Q, K, 2)
 
         cost_matrix = torch.zeros(Q, N_gt, device=pred_control_points.device)
         for j, gt_i in enumerate(active_gt):
             gt_pts = gt_polylines[gt_i]  # (K, 2)
-            # Filter out zero-padded points
-            gt_valid = gt_pts[gt_pts.sum(dim=-1) > 1e-6]
-            if gt_valid.shape[0] < 2:
-                gt_valid = gt_pts[:2]
+            gt_rev = torch.flip(gt_pts, dims=[0])
 
             for q in range(Q):
-                cost_matrix[q, j] = chamfer_distance_1d(pred_curves[q], gt_valid)
+                p_c = pred_curves[q]  # (K, 2)
+                # Ordered arc-length trajectory distance
+                d_fwd = torch.mean(torch.abs(p_c - gt_pts))
+                d_rev = torch.mean(torch.abs(p_c - gt_rev))
+                d_arc = torch.min(d_fwd, d_rev)
+
+                # Endpoint anchor distance
+                p0 = pred_control_points[q, 0]
+                p3 = pred_control_points[q, 3]
+                ep_fwd = torch.norm(p0 - gt_pts[0]) + torch.norm(p3 - gt_pts[-1])
+                ep_rev = torch.norm(p0 - gt_pts[-1]) + torch.norm(p3 - gt_pts[0])
+                d_ep = torch.min(ep_fwd, ep_rev)
+
+                cost_matrix[q, j] = d_arc + 0.5 * d_ep
 
         # Run Hungarian algorithm
         cost_np = cost_matrix.cpu().numpy()
@@ -222,92 +233,94 @@ class BezierSplineLoss(nn.Module):
         gt_masks: torch.Tensor = None,
     ) -> dict:
         """
-        Compute all loss components (Decoder Bézier losses + Encoder Auxiliary Saliency loss).
-
-        Args:
-            pred_control_points: (B, Q, 4, 2) predicted Bézier control points in [0, 1].
-            pred_class_logits: (B, Q, C+1) class logits.
-            gt_polylines: (B, N, K, 2) GT polyline coordinates in [0, 1].
-            gt_classes: (B, N) GT class IDs (0=bg, 1-4=landmark classes).
-            valid_mask: (B, N) boolean.
-            pred_saliency: (B, 1, 256, 256) optional encoder saliency field.
-            gt_masks: (B, N, 1024, 1024) optional ground truth stroke masks.
-        Returns:
-            dict with "loss", "loss_dict", and "matches" per batch item.
+        Compute all loss components:
+          1. L_curve: Ordered Arc-Length L1 trajectory distance
+          2. L_len: Curve span length match
+          3. L_endpoint: P0/P3 anchor alignment
+          4. L_cls: Focal classification loss
+          5. L_smooth: Curvature regularization
+          6. L_aux_sal: Encoder Saliency Map BCE + Dice
         """
         B = pred_control_points.shape[0]
         Q = pred_control_points.shape[1]
+        K = gt_polylines.shape[2]  # num points in GT polyline (50)
         device = pred_control_points.device
 
         total_curve = torch.tensor(0.0, device=device)
-        total_cls = torch.tensor(0.0, device=device)
+        total_len = torch.tensor(0.0, device=device)
         total_endpoint = torch.tensor(0.0, device=device)
+        total_cls = torch.tensor(0.0, device=device)
         total_smooth = torch.tensor(0.0, device=device)
 
         all_matches = []
 
         for b in range(B):
-            # Hungarian matching for this batch item
             matches = self.hungarian_match(
                 pred_control_points[b], gt_polylines[b], gt_classes[b], valid_mask[b]
             )
             all_matches.append(matches)
 
-            # Sample predicted curves
+            # Sample predicted curves at K points matching GT resolution
             pred_curves = evaluate_bezier_curve(
-                pred_control_points[b], num_samples=self.num_curve_samples
-            )  # (Q, 50, 2)
+                pred_control_points[b], num_samples=K
+            )  # (Q, K, 2)
 
-            # ── L_curve: Chamfer Distance ──
             for pred_idx, gt_idx in matches:
-                gt_pts = gt_polylines[b, gt_idx]
-                gt_valid = gt_pts[gt_pts.sum(dim=-1) > 1e-6]
-                if gt_valid.shape[0] < 2:
-                    gt_valid = gt_pts[:2]
-                total_curve += chamfer_distance_1d(pred_curves[pred_idx], gt_valid)
+                p_c = pred_curves[pred_idx]  # (K, 2)
+                gt_pts = gt_polylines[b, gt_idx]  # (K, 2)
+                gt_rev = torch.flip(gt_pts, dims=[0])
 
-            # ── L_endpoint: P0/P3 vs GT start/end ──
-            for pred_idx, gt_idx in matches:
-                gt_pts = gt_polylines[b, gt_idx]
-                gt_valid = gt_pts[gt_pts.sum(dim=-1) > 1e-6]
-                if gt_valid.shape[0] < 2:
-                    gt_valid = gt_pts[:2]
+                # ── 1. Ordered Arc-Length L1 Trajectory Loss ──
+                dist_fwd = F.l1_loss(p_c, gt_pts)
+                dist_rev = F.l1_loss(p_c, gt_rev)
+                total_curve += torch.min(dist_fwd, dist_rev)
 
+                # ── 2. Curve Span Length Match (Prevents Short Noodle Shortcut) ──
+                pred_diffs = p_c[1:] - p_c[:-1]
+                pred_len = torch.sqrt((pred_diffs ** 2).sum(dim=-1) + 1e-8).sum()
+
+                gt_diffs = gt_pts[1:] - gt_pts[:-1]
+                gt_len = torch.sqrt((gt_diffs ** 2).sum(dim=-1) + 1e-8).sum()
+                total_len += F.l1_loss(pred_len, gt_len)
+
+                # ── 3. Endpoint Anchoring (P0 and P3) ──
                 p0 = pred_control_points[b, pred_idx, 0]  # (2,)
                 p3 = pred_control_points[b, pred_idx, 3]  # (2,)
-                gt_start = gt_valid[0]
-                gt_end = gt_valid[-1]
+                gt_start = gt_pts[0]
+                gt_end = gt_pts[-1]
 
-                # Check both orientations (GT polyline could be reversed)
-                dist_fwd = F.l1_loss(p0, gt_start) + F.l1_loss(p3, gt_end)
-                dist_rev = F.l1_loss(p0, gt_end) + F.l1_loss(p3, gt_start)
-                total_endpoint += torch.min(dist_fwd, dist_rev)
+                ep_fwd = F.l1_loss(p0, gt_start) + F.l1_loss(p3, gt_end)
+                ep_rev = F.l1_loss(p0, gt_end) + F.l1_loss(p3, gt_start)
+                total_endpoint += torch.min(ep_fwd, ep_rev)
 
-            # ── L_cls: Focal Classification Loss ──
-            # Build target class vector: matched queries get GT class, unmatched get 0 (no-object)
+            # ── 4. Focal Classification Loss ──
             target_cls = torch.zeros(Q, dtype=torch.long, device=device)
             for pred_idx, gt_idx in matches:
                 target_cls[pred_idx] = gt_classes[b, gt_idx]
             total_cls += self.focal_loss(pred_class_logits[b], target_cls)
 
-            # ── L_smooth: Curvature Regularization ──
+            # ── 5. Curvature Regularization ──
             total_smooth += bezier_second_derivative(pred_control_points[b])
 
         # Average over batch
         n_matches = max(sum(len(m) for m in all_matches), 1)
         l_curve = total_curve / n_matches
+        l_len = total_len / n_matches
         l_endpoint = total_endpoint / n_matches
         l_cls = total_cls / B
         l_smooth = total_smooth / B
 
-        # ── Auxiliary Saliency Loss (Encoder Supervision) ──
+        # ── 6. Auxiliary Saliency Loss ──
         if pred_saliency is not None and gt_masks is not None:
             l_aux_sal = self.saliency_loss(pred_saliency, gt_masks, valid_mask)
         else:
             l_aux_sal = torch.tensor(0.0, device=device)
 
+        lambda_len = getattr(self, "lambda_len", 2.0)
+
         loss = (
             self.lambda_curve * l_curve
+            + lambda_len * l_len
             + self.lambda_cls * l_cls
             + self.lambda_endpoint * l_endpoint
             + self.lambda_smooth * l_smooth
@@ -318,6 +331,7 @@ class BezierSplineLoss(nn.Module):
             "loss": loss,
             "loss_dict": {
                 "l_curve": l_curve.item(),
+                "l_len": l_len.item(),
                 "l_cls": l_cls.item(),
                 "l_endpoint": l_endpoint.item(),
                 "l_smooth": l_smooth.item(),

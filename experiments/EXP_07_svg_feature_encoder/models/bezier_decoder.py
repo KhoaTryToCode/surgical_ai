@@ -223,17 +223,45 @@ class BezierSplineDecoder(nn.Module):
     @staticmethod
     def _create_initial_control_points(num_queries: int) -> torch.Tensor:
         """
-        Create initial control points spread across the image canvas.
-        Each query gets a short horizontal curve segment at a different vertical position.
+        Create structured Spatial Anchor Priors covering canonical laparoscopic anatomical positions:
+          - Queries 0-2: Horizontal curved spans (Upper/Mid/Lower Anterior Ridges & Silhouettes)
+          - Queries 3-5: Vertical spans (Center & Left/Right Falciform Ligament / Ligamentum Teres)
+          - Queries 6-7: Lateral curved boundaries (Left & Right Liver Silhouettes)
+          - Queries 8-9: Diagonal / Oblique spans (Gallbladder Boundary & Transverse Ridges)
         """
+        anchors = [
+            # 0: Upper Horizontal Ridge (Anterior Ridge high)
+            [[0.15, 0.32], [0.35, 0.22], [0.65, 0.22], [0.85, 0.32]],
+            # 1: Mid Horizontal Ridge (Anterior Ridge mid)
+            [[0.15, 0.50], [0.35, 0.45], [0.65, 0.45], [0.85, 0.50]],
+            # 2: Lower Horizontal Silhouette (Liver bottom contour)
+            [[0.20, 0.72], [0.40, 0.78], [0.60, 0.78], [0.80, 0.72]],
+            # 3: Center Vertical Midline (Falciform Ligament)
+            [[0.50, 0.20], [0.50, 0.40], [0.50, 0.65], [0.50, 0.85]],
+            # 4: Left-Midline Vertical (Ligamentum Teres / Vessel)
+            [[0.42, 0.28], [0.45, 0.48], [0.48, 0.68], [0.50, 0.88]],
+            # 5: Right-Midline Vertical
+            [[0.58, 0.28], [0.55, 0.48], [0.52, 0.68], [0.50, 0.88]],
+            # 6: Left Lateral Curved Boundary (Left Lobe Silhouette)
+            [[0.15, 0.30], [0.12, 0.50], [0.15, 0.70], [0.25, 0.85]],
+            # 7: Right Lateral Curved Boundary (Right Lobe Silhouette)
+            [[0.85, 0.30], [0.88, 0.50], [0.85, 0.70], [0.75, 0.85]],
+            # 8: Right-Lower Oblique (Gallbladder Boundary / Fossa)
+            [[0.65, 0.45], [0.70, 0.55], [0.68, 0.65], [0.60, 0.75]],
+            # 9: Diagonal Transverse Span (Transverse liver contour)
+            [[0.25, 0.30], [0.45, 0.45], [0.65, 0.55], [0.80, 0.65]],
+        ]
+
         cps = torch.zeros(num_queries, 4, 2)
         for i in range(num_queries):
-            y_center = (i + 0.5) / num_queries
-            # P0 (start), C1 (handle 1), C2 (handle 2), P3 (end)
-            cps[i, 0] = torch.tensor([0.2, y_center])          # P0
-            cps[i, 1] = torch.tensor([0.35, y_center + 0.02])  # C1
-            cps[i, 2] = torch.tensor([0.65, y_center - 0.02])  # C2
-            cps[i, 3] = torch.tensor([0.8, y_center])          # P3
+            if i < len(anchors):
+                cps[i] = torch.tensor(anchors[i], dtype=torch.float32)
+            else:
+                y_c = (i + 0.5) / num_queries
+                cps[i, 0] = torch.tensor([0.2, y_c])
+                cps[i, 1] = torch.tensor([0.35, y_c + 0.02])
+                cps[i, 2] = torch.tensor([0.65, y_c - 0.02])
+                cps[i, 3] = torch.tensor([0.8, y_c])
         return cps
 
     def forward(self, encoder_output: dict) -> dict:

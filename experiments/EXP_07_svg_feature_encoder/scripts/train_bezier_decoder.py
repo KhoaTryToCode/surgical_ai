@@ -142,9 +142,11 @@ def render_anchor_overlay(
             c_name = class_names[c_id] if c_id < len(class_names) else f"Cls{c_id}"
             ax1.plot(u, v, color="#00ffcc", linewidth=2.5, label=f"GT: {c_name}" if idx == 0 else None)
 
-        # Draw predicted Bézier curves
+        # Draw predicted Bézier curves for matched queries
         cp_np = pred_control_points.cpu().numpy()
+        probs = F.softmax(pred_class_logits.float(), dim=-1).cpu().numpy() if pred_class_logits is not None else None
         t = np.linspace(0.0, 1.0, 80).reshape(-1, 1)
+
         for pred_idx, gt_idx in matches:
             cp = cp_np[pred_idx]
             p0, c1, c2, p3 = cp[0], cp[1], cp[2], cp[3]
@@ -152,15 +154,25 @@ def render_anchor_overlay(
             curve_px = curve * 1024.0
             col = QUERY_COLORS[pred_idx % len(QUERY_COLORS)]
 
-            ax1.plot(curve_px[:, 0], curve_px[:, 1], color=col, linewidth=2.5, linestyle="--")
-            ax1.scatter([p0[0] * 1024, p3[0] * 1024], [p0[1] * 1024, p3[1] * 1024],
-                       color="white", s=50, zorder=5, edgecolors=col, linewidths=1.5)
-            ax1.scatter([c1[0] * 1024, c2[0] * 1024], [c1[1] * 1024, c2[1] * 1024],
-                       color=col, s=30, marker="s", zorder=5)
+            # Class label & confidence
+            if probs is not None:
+                p_cls = int(np.argmax(probs[pred_idx]))
+                p_conf = float(probs[pred_idx, p_cls])
+                p_name = class_names[p_cls] if p_cls < len(class_names) else f"Cls{p_cls}"
+                label_str = f"Q#{pred_idx}:{p_name} ({p_conf*100:.0f}%)"
+            else:
+                label_str = f"Q#{pred_idx}"
 
-        ax1.set_title(f"Epoch {epoch:02d} | Bézier Curves (Cyan=GT, Colored=Pred)",
-                      color="white", fontsize=12, fontweight="bold")
+            ax1.plot(curve_px[:, 0], curve_px[:, 1], color=col, linewidth=3.0, linestyle="--", label=label_str)
+            ax1.scatter([p0[0] * 1024, p3[0] * 1024], [p0[1] * 1024, p3[1] * 1024],
+                       color="white", s=55, zorder=5, edgecolors=col, linewidths=2.0)
+            ax1.scatter([c1[0] * 1024, c2[0] * 1024], [c1[1] * 1024, c2[1] * 1024],
+                       color=col, s=35, marker="s", zorder=5)
+
+        ax1.set_title(f"Epoch {epoch:02d} | Bézier Splines (Cyan=GT, Colored=Pred with Class)",
+                      color="white", fontsize=11, fontweight="bold")
         ax1.axis("off")
+        ax1.legend(loc="lower left", facecolor="#161b22", labelcolor="white", fontsize=9)
 
         # Right: Metrics card
         ax2.set_facecolor("#161b22")
@@ -169,12 +181,14 @@ def render_anchor_overlay(
             f"[ANCHOR DIAGNOSTICS] Epoch {epoch:02d}\n"
             f"{'─' * 45}\n"
             f"TOTAL LOSS:     {total_loss:.4f}\n\n"
-            f"L_curve:        {loss_dict.get('l_curve', 0):.4f}  (Chamfer)\n"
-            f"L_cls:          {loss_dict.get('l_cls', 0):.4f}  (Focal)\n"
-            f"L_endpoint:     {loss_dict.get('l_endpoint', 0):.4f}  (P0/P3)\n"
+            f"L_curve:        {loss_dict.get('l_curve', 0):.4f}  (Ordered Arc L1)\n"
+            f"L_len:          {loss_dict.get('l_len', 0):.4f}  (Span Length)\n"
+            f"L_endpoint:     {loss_dict.get('l_endpoint', 0):.4f}  (P0/P3 Anchor)\n"
+            f"L_cls:          {loss_dict.get('l_cls', 0):.4f}  (Focal Class)\n"
+            f"L_aux_sal:      {loss_dict.get('l_aux_sal', 0):.4f}  (Saliency Mask)\n"
             f"L_smooth:       {loss_dict.get('l_smooth', 0):.4f}  (Curvature)\n\n"
-            f"Matched Queries: {len(matches)} / {cp_np.shape[0]}\n"
-            f"Active GT:       {len(active_gt)}\n"
+            f"Matched Active: {len(matches)} / {cp_np.shape[0]} Queries\n"
+            f"Active GT:       {len(active_gt)} Landmarks\n"
         )
         ax2.text(0.05, 0.95, card, transform=ax2.transAxes, color="#e6edf3",
                  fontsize=11, verticalalignment="top", fontfamily="monospace",

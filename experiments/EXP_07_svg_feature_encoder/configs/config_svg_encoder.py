@@ -42,7 +42,8 @@ class SVGEncoderConfig:
     gradient_clip_norm = 1.0
     
     # Loss weights
-    lambda_curve = 10.0         # L_curve: Chamfer distance (primary shape fitting)
+    lambda_curve = 10.0         # L_curve: Ordered Arc-Length L1 distance (primary trajectory fitting)
+    lambda_len = 2.0            # L_len: Curve span length match (prevents short noodle shortcut)
     lambda_cls = 2.0            # L_cls: Focal classification loss
     lambda_endpoint = 3.0       # L_endpoint: Endpoint anchoring
     lambda_smooth = 0.05        # L_smooth: Gentle curvature regularization
