@@ -38,8 +38,9 @@ def parse_args():
     parser.add_argument("--save_dir", type=str, default="checkpoints/EXP_08", help="Checkpoint save directory")
     parser.add_argument("--viz_interval", type=int, default=20, help="Diagnostic overlay visualization every N steps")
     parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases experiment tracking")
-    parser.add_argument("--wandb_project", type=str, default="Surgical_AI_LSTM_MDN", help="W&B project name")
-    parser.add_argument("--wandb_run_name", type=str, default="EXP_08_ResNet18_LSTM_MDN", help="W&B run name")
+    parser.add_argument("--wandb_key", type=str, default=config.wandb_key, help="W&B API Key")
+    parser.add_argument("--wandb_project", type=str, default=config.wandb_project, help="W&B project name")
+    parser.add_argument("--wandb_run_name", type=str, default=config.wandb_run_name, help="W&B run name")
     return parser.parse_args()
 
 
@@ -206,9 +207,13 @@ def main():
     
     # W&B initialization
     wandb_run = None
-    if args.wandb:
+    use_wandb = args.wandb or ("WANDB_API_KEY" in os.environ)
+    if use_wandb:
         try:
             import wandb
+            api_key = args.wandb_key or os.environ.get("WANDB_API_KEY", config.wandb_key)
+            if api_key:
+                wandb.login(key=api_key)
             wandb_run = wandb.init(
                 project=args.wandb_project,
                 name=args.wandb_run_name,
@@ -227,9 +232,10 @@ def main():
                     "lambda_eos": config.lambda_eos
                 }
             )
-            print("📊 W&B tracking enabled.")
-        except ImportError:
-            print("⚠️ wandb not installed. Logging to stdout only.")
+            print(f"📊 Weights & Biases initialized: Project='{args.wandb_project}', Run='{args.wandb_run_name}'")
+        except Exception as e:
+            print(f"⚠️ Could not initialize wandb: {e}")
+            wandb_run = None
     
     # 1. Datasets
     train_dataset = SequentialLandmarkDataset(
@@ -380,6 +386,11 @@ def main():
                     images[0], gt_polylines[0], valid_mask[0], gt_classes[0],
                     instance_outputs, global_step, epoch + 1, viz_path
                 )
+                if wandb_run is not None and os.path.exists(viz_path):
+                    try:
+                        wandb_run.log({"diagnostics/step_overlay": wandb.Image(viz_path)}, step=global_step)
+                    except Exception:
+                        pass
             
             global_step += 1
         

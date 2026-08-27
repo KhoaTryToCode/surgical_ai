@@ -49,7 +49,8 @@ python scripts/train_lstm_mdn.py \
     --batch_size 16 \
     --lr 1e-4 \
     --save_dir checkpoints/EXP_08 \
-    --wandb
+    --wandb \
+    --wandb_key 83f4544a22543e319c6009abceaac90b634c68a3
 ```
 
 ### Evaluation

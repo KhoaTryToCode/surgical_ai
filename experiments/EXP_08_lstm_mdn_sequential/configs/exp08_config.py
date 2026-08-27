@@ -86,6 +86,11 @@ class EXP08Config:
     # ---------- Soft Mask Rendering ----------
     soft_mask_sigma: float = 15.0   # Gaussian splatting sigma for differentiable mask rendering (pixels at 512x512)
     
+    # ---------- Weights & Biases ----------
+    wandb_key: str = "83f4544a22543e319c6009abceaac90b634c68a3"
+    wandb_project: str = "Surgical_AI_LSTM_MDN"
+    wandb_run_name: str = "EXP_08_ResNet18_LSTM_MDN"
+    
     # ---------- Dataset ----------
     dataset_dir: str = field(default_factory=resolve_dataset_dir)
 
