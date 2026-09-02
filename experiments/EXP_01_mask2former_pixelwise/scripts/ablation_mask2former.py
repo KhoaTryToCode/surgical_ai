@@ -5,6 +5,13 @@ import cv2
 import gc
 import argparse
 import numpy as np
+# NumPy 2.0+ compatibility for surface_distance and legacy libraries
+if not hasattr(np, "Inf"):
+    np.Inf = np.inf
+if not hasattr(np, "NAN"):
+    np.NAN = np.nan
+if not hasattr(np, "NaN"):
+    np.NaN = np.nan
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
