@@ -51,7 +51,7 @@ def setup_dataset(target_dir: str = "/content/L3D") -> str:
     print(f"📦 Setting up dataset directory structure in '{target_path}'...")
 
     splits = ["train", "val", "test"]
-    subdirs = ["images", "labels", "depth_anything_v2"]
+    subdirs = ["images", "labels", "masks_gt", "depth_anything_v2"]
 
     # Known candidate paths across Kaggle notebook, local, and custom environments
     known_mappings = {
@@ -66,6 +66,12 @@ def setup_dataset(target_dir: str = "/content/L3D") -> str:
             "/kaggle/input/l3d-train/Train/labels",
             "/kaggle/input/laparoscopic-liver-landmarks/train/labels",
             "data/laparoscopic_liver/train/labels",
+        ],
+        ("train", "masks_gt"): [
+            "/kaggle/input/datasets/khoatrytopublish/l3d-train/Train/masks_gt",
+            "/kaggle/input/l3d-train/Train/masks_gt",
+            "/kaggle/input/laparoscopic-liver-landmarks/train/masks_gt",
+            "data/laparoscopic_liver/train/masks_gt",
         ],
         ("train", "depth_anything_v2"): [
             "/kaggle/input/datasets/khoale05/l3d-depth/L3D/train/depth_anything_v2",
@@ -88,6 +94,12 @@ def setup_dataset(target_dir: str = "/content/L3D") -> str:
             "/kaggle/input/l3d-val/Val/labels",
             "/kaggle/input/laparoscopic-liver-landmarks/val/labels",
             "data/laparoscopic_liver/val/labels",
+        ],
+        ("val", "masks_gt"): [
+            "/kaggle/input/datasets/khoatrytopublish/l3d-val/Val/masks_gt",
+            "/kaggle/input/l3d-val/Val/masks_gt",
+            "/kaggle/input/laparoscopic-liver-landmarks/val/masks_gt",
+            "data/laparoscopic_liver/val/masks_gt",
         ],
         ("val", "depth_anything_v2"): [
             "/kaggle/input/datasets/khoale05/l3d-depth/L3D/val/depth_anything_v2",
