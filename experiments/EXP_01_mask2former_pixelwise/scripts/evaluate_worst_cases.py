@@ -39,10 +39,10 @@ for p in [SCRIPT_DIR, os.path.join(EXP_DIR, 'models'), os.path.join(REPO_ROOT, '
 
 try:
     from shared.utils.prepare_dataset import get_split
-    from shared.utils.dataset import load_image, load_mask
+    from shared.utils.dataset import load_image, load_depth, load_mask
 except ImportError:
     from utils.prepare_dataset import get_split
-    from utils.dataset import load_image, load_mask
+    from utils.dataset import load_image, load_depth, load_mask
 
 try:
     from transformers import (
@@ -82,6 +82,8 @@ def parse_args():
                         help="Dataset root containing val split")
     parser.add_argument("--output_dir", type=str, default="/kaggle/working/results_ablation/worst_cases",
                         help="Directory to save visual diagnostics and CSV summary")
+    parser.add_argument("--rgbd", action="store_true", default=False,
+                        help="Enable 4-channel RGB-D evaluation using Depth Anything V2 (SUB_02)")
     parser.add_argument("--top_k_save", type=int, default=15,
                         help="Number of worst-case multi-panel visual plots to export")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
@@ -89,19 +91,29 @@ def parse_args():
     return parser.parse_args()
 
 
-def resolve_checkpoint_path(ckpt_arg, mode):
+def resolve_checkpoint_path(ckpt_arg, mode, is_rgbd=False):
     if ckpt_arg and os.path.exists(ckpt_arg):
         return ckpt_arg
 
     mode_lower = mode.lower()
-    candidates = [
+    candidates = []
+    if is_rgbd:
+        candidates.extend([
+            "/kaggle/working/results_rgbd/best_swin_rgbd.pth",
+            "/kaggle/working/results_rgbd/latest_swin_rgbd.pth",
+            "checkpoints/best_swin_rgbd.pth",
+            "checkpoints/latest_swin_rgbd.pth",
+        ])
+    candidates.extend([
         f"/kaggle/working/results_ablation/{mode_lower}/best_{mode_lower}.pth",
         f"/kaggle/working/results_ablation/{mode_lower}/latest_{mode_lower}.pth",
         f"/kaggle/working/results_ablation/best_{mode_lower}.pth",
+        "/kaggle/working/results_rgbd/best_swin_rgbd.pth",
+        "/kaggle/working/results_rgbd/latest_swin_rgbd.pth",
         f"checkpoints/mask2former_baseline/{mode_lower}/best_{mode_lower}.pth",
         f"checkpoints/mask2former_baseline/{mode_lower}/latest_{mode_lower}.pth",
         f"checkpoints/best_{mode_lower}.pth",
-    ]
+    ])
     for c in candidates:
         if os.path.exists(c):
             return c
@@ -266,18 +278,49 @@ def generate_multipanel_figure(rgb_img, gt_2d, pred_map, sample_info, save_path)
     cv2.imwrite(str(save_path), cv2.cvtColor(final_canvas, cv2.COLOR_RGB2BGR))
 
 
+def adapt_model_to_rgbd(model):
+    """
+    Adapts Swin patch embedding projection from 3 to 4 channels for RGB-D weights.
+    """
+    for name, module in model.named_modules():
+        if isinstance(module, torch.nn.Conv2d) and module.in_channels == 3:
+            old_conv = module
+            new_conv = torch.nn.Conv2d(
+                in_channels=4,
+                out_channels=old_conv.out_channels,
+                kernel_size=old_conv.kernel_size,
+                stride=old_conv.stride,
+                padding=old_conv.padding,
+                dilation=old_conv.dilation,
+                groups=old_conv.groups,
+                bias=(old_conv.bias is not None)
+            )
+            with torch.no_grad():
+                new_conv.weight[:, :3, :, :] = old_conv.weight
+                new_conv.weight[:, 3:4, :, :] = old_conv.weight.mean(dim=1, keepdim=True)
+                if old_conv.bias is not None:
+                    new_conv.bias.copy_(old_conv.bias)
+
+            parent_name, child_name = name.rsplit(".", 1)
+            parent = model.get_submodule(parent_name)
+            setattr(parent, child_name, new_conv)
+            print(f"✅ Adapted '{name}' to 4 channels for RGB-D evaluation.")
+            return model
+    return model
+
+
 def main():
     args = parse_args()
     device = torch.device(args.device)
 
     print("=" * 80)
     print("🔍 MASK2FORMER VALIDATION INFERENCE & WORST-TO-BEST ANALYSIS")
-    print(f"   Mode: {args.mode}")
+    print(f"   Mode: {args.mode} | RGB-D Flag: {args.rgbd}")
     print(f"   Device: {device}")
     print("=" * 80)
 
     # 1. Resolve Checkpoint
-    ckpt_path = resolve_checkpoint_path(args.ckpt_path, args.mode)
+    ckpt_path = resolve_checkpoint_path(args.ckpt_path, args.mode, is_rgbd=args.rgbd)
     if not ckpt_path or not os.path.exists(ckpt_path):
         print(f"❌ Error: Checkpoint not found at '{ckpt_path}'.")
         print("   Please pass --ckpt_path /path/to/your/checkpoint.pth explicitly.")
@@ -324,6 +367,20 @@ def main():
         print(f"   Checkpoint metadata: Epoch={epoch_logged}, Best Val Dice={best_dice_logged}")
     else:
         state_dict = ckpt_obj
+
+    # Auto-detect if checkpoint has 4 channels (RGB-D)
+    is_rgbd = args.rgbd
+    for k, v in state_dict.items():
+        if "patch_embeddings.projection.weight" in k and v.shape[1] == 4:
+            is_rgbd = True
+            break
+
+    if is_rgbd:
+        print("💡 Detected 4-channel RGB-D checkpoint (Depth Anything V2 active).")
+        model = adapt_model_to_rgbd(model)
+        if args.output_dir == "/kaggle/working/results_ablation/worst_cases":
+            args.output_dir = "/kaggle/working/results_rgbd/worst_cases"
+
     model.load_state_dict(state_dict)
     model.eval()
     print("✅ Model loaded successfully in evaluation mode.")
@@ -341,6 +398,21 @@ def main():
 
             inputs = processor(images=[rgb_img], segmentation_maps=[gt_2d], return_tensors="pt")
             pixel_values = inputs["pixel_values"].to(device)
+
+            if is_rgbd:
+                depth_img = load_depth(img_path)
+                depth_tensor = torch.from_numpy(depth_img).float() / 255.0
+                depth_tensor = (depth_tensor - 0.5) / 0.25
+                depth_tensor = depth_tensor.unsqueeze(0).unsqueeze(0).to(device)
+                if depth_tensor.shape[-2:] != pixel_values.shape[-2:]:
+                    depth_tensor = F.interpolate(
+                        depth_tensor,
+                        size=pixel_values.shape[-2:],
+                        mode="bilinear",
+                        align_corners=False
+                    )
+                pixel_values = torch.cat([pixel_values, depth_tensor], dim=1)
+
             mask_labels = [m.to(device) for m in inputs["mask_labels"]]
             class_labels = [c.to(device) for c in inputs["class_labels"]]
 

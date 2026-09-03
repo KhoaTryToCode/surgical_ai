@@ -62,6 +62,7 @@ python experiments/EXP_01_mask2former_pixelwise/sub_experiments/SUB_01_toponet_p
 
 ### Sub-Experiment 02: Mask2Former RGB-D (Depth Anything V2 4th Channel)
 ```bash
+# Training:
 python experiments/EXP_01_mask2former_pixelwise/sub_experiments/SUB_02_mask2former_rgbd/scripts/train_rgbd.py \
   --data_path /kaggle/working/L3D \
   --save_dir /kaggle/working/results_rgbd \
@@ -69,4 +70,12 @@ python experiments/EXP_01_mask2former_pixelwise/sub_experiments/SUB_02_mask2form
   --lr 8e-5 \
   --batch_size 1 \
   --accumulation_steps 4
+
+# Failure Mode Evaluation (Ranked Worst to Best):
+python experiments/EXP_01_mask2former_pixelwise/scripts/evaluate_worst_cases.py \
+  --rgbd \
+  --ckpt_path /kaggle/working/results_rgbd/best_swin_rgbd.pth \
+  --data_path /kaggle/working/L3D \
+  --output_dir /kaggle/working/results_rgbd/worst_cases \
+  --top_k_save 15
 ```
