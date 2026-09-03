@@ -203,5 +203,71 @@ offset_k = R(theta_k) * delta_r
 p_k = p + offset_k
 f_context(p) = sum_{k=1}^{K_offsets} w_k * BilinearSample( F, p_k )
 
+---
 
+## 5. Patch-Level Bézier Curve Formulation & ViT Patch Merging (EXP9)
 
+### 5.1 Local Patch Bézier Curve Geometry
+Within patch (r, c) of size P x P, points are normalized to [0, 1]^2:
+u_local = (x - c * P) / P
+v_local = (y - r * P) / P
+
+A cubic Bézier curve is defined by 4 control points P_0, P_1, P_2, P_3 in [0, 1]^2:
+B(t) = (1 - t)^3 * P_0 + 3 * (1 - t)^2 * t * P_1 + 3 * (1 - t) * t^2 * P_2 + t^3 * P_3, for t in [0, 1]
+
+Properties:
+- P_0: Exact entry point into the patch along contour flow.
+- P_3: Exact exit point out of the patch along contour flow.
+- P_1, P_2: Intermediate shape control handles capturing curvature, curvature sign change (inflection points), and local bending.
+- Tangent at entry: T_0 = 3 * (P_1 - P_0)
+- Tangent at exit:  T_1 = 3 * (P_3 - P_2)
+
+For quadratic Bézier (3 control points P_0, P_1, P_2):
+B_quad(t) = (1 - t)^2 * P_0 + 2 * (1 - t) * t * P_1 + t^2 * P_2
+
+### 5.2 Closed-Form Least-Squares Bézier Fitting from Resampled Dense Points
+Given M dense points { q_k = (u_k, v_k) }_{k=1}^M inside patch (r, c) sorted by arc-length:
+1. Fixed Endpoints:
+   P_0 = q_1
+   P_3 = q_M
+
+2. Arc-length Parameter Assignment:
+   s_k = cumsum( || q_k - q_{k-1} ||_2 ), s_1 = 0
+   t_k = s_k / s_M in [0, 1]
+
+3. Residual System for Unknown Control Points P_1, P_2:
+   q_k - (1 - t_k)^3 * P_0 - t_k^3 * P_3 = 3 * (1 - t_k)^2 * t_k * P_1 + 3 * (1 - t_k) * t_k^2 * P_2
+   Let a_{k,1} = 3 * (1 - t_k)^2 * t_k, and a_{k,2} = 3 * (1 - t_k) * t_k^2.
+   A = [ a_{k,1}, a_{k,2} ] in R^{M x 2}
+   b = [ q_k - (1 - t_k)^3 * P_0 - t_k^3 * P_3 ] in R^{M x 2}
+
+4. Closed-Form Normal Equation Solution:
+   [ P_1 ; P_2 ] = (A^T * A + lambda * I)^{-1} * A^T * b
+
+If M == 2 (only 2 points): P_1 = (2 * P_0 + P_3) / 3, P_2 = (P_0 + 2 * P_3) / 3 (straight line degenerate).
+
+### 5.3 Differentiable Batch Point Sampling
+For N_s uniformly spaced samples t in { 0, 1/(N_s-1), ..., 1 }:
+Matrix of Bernstein basis: M_basis in R^{N_s x 4}
+Sampled Points:
+P_{sampled} = M_basis * [ P_0 ; P_1 ; P_2 ; P_3 ] in R^{N_s x 2}
+
+Point Loss:
+L_sample = (1 / N_s) * sum_{j=1}^{N_s} SmoothL1( hat_P_{sampled, j} - gt_P_{sampled, j} )
+
+### 5.4 Standard ViT Patch Merging Paradigms
+1. MAE Tensor Unpatchify / Fold (Dense Mask Reconstruction):
+   Each patch token z_{(r, c)} predicts a P x P raster stroke patch:
+   stroke_patch = MLP(z) or AnalyticalSplat(hat_B) in R^{P x P}
+   Fold: (B, G, G, P, P) -> Reshape -> (B, 1, G * P, G * P) = (B, 1, H, W)
+   Zero interpolation blur, exact spatial tiling.
+
+2. Global Coordinate Shift (Continuous Parametric SVG / Vector Output):
+   For active patches, unproject local Bézier control points to global image coordinates:
+   P_{global, j} = (c * P, r * P) + P_{local, j} * P
+   Draw directly via vector rendering engine (anti-aliased line / SVG cubic path "M P0 C P1 P2 P3").
+
+3. Graph Stitching (Topological Continuous Polyline Assembly):
+   Build adjacency graph where patch (r, c) connects to neighbor (r', c') if:
+   || P_{3}^{(r, c)} - P_{0}^{(r', c')} ||_2 < threshold_px.
+   Yields continuous, arbitrarily long anatomical curves.

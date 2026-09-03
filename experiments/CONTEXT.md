@@ -18,6 +18,7 @@ Defines decision criteria and workflow steps for scaffolding surgical landmark d
 
 - `experiments/EXP_01_mask2former_pixelwise/`: Pixel-wise landmark segmentation baseline & Mask2Former attention visualizations (includes `SUB_01_toponet_paper_reconstruction`).
 - `experiments/EXP_02_surgical_gemap/`: Main novel contribution applying geometric prompt learning (`surgical_gemap.py`) and depth prompts (`depth_anything_v2`) to surgical landmark detection.
+- `experiments/EXP_09_patch_vector_vit/`: Patch-Level Bézier Vector Vision Transformer (predicts continuous cubic Bézier control points per ViT patch and merges via Global Coordinate Shift).
 
 ---
 
