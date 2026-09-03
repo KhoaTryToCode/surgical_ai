@@ -36,7 +36,7 @@ def setup_dataset(target_dir: str = "/content/L3D") -> str:
     print(f"📦 Setting up dataset directory structure in '{target_path}'...")
 
     splits = ["train", "val", "test"]
-    subdirs = ["images", "labels"]
+    subdirs = ["images", "labels", "depth_anything_v2"]
 
     # Known candidate paths across Kaggle notebook, local, and custom environments
     known_mappings = {
@@ -52,6 +52,16 @@ def setup_dataset(target_dir: str = "/content/L3D") -> str:
             "/kaggle/input/laparoscopic-liver-landmarks/train/labels",
             "data/laparoscopic_liver/train/labels",
         ],
+        ("train", "depth_anything_v2"): [
+            "/kaggle/input/datasets/khoale05/l3d-depth/L3D/train/depth_anything_v2",
+            "/kaggle/input/datasets/khoale05/l3d-depth/L3D/Train/depth_anything_v2",
+            "/kaggle/input/l3d-depth/L3D/train/depth_anything_v2",
+            "/kaggle/input/l3d-depth/L3D/Train/depth_anything_v2",
+            "/kaggle/input/l3d-depth/train/depth_anything_v2",
+            "/kaggle/input/l3d-depth/Train/depth_anything_v2",
+            "data/laparoscopic_liver/train/depth_anything_v2",
+            "data/depth_maps/train/depth_anything_v2",
+        ],
         ("val", "images"): [
             "/kaggle/input/datasets/khoatrytopublish/l3d-val/Val/images",
             "/kaggle/input/l3d-val/Val/images",
@@ -64,6 +74,16 @@ def setup_dataset(target_dir: str = "/content/L3D") -> str:
             "/kaggle/input/laparoscopic-liver-landmarks/val/labels",
             "data/laparoscopic_liver/val/labels",
         ],
+        ("val", "depth_anything_v2"): [
+            "/kaggle/input/datasets/khoale05/l3d-depth/L3D/val/depth_anything_v2",
+            "/kaggle/input/datasets/khoale05/l3d-depth/L3D/Val/depth_anything_v2",
+            "/kaggle/input/l3d-depth/L3D/val/depth_anything_v2",
+            "/kaggle/input/l3d-depth/L3D/Val/depth_anything_v2",
+            "/kaggle/input/l3d-depth/val/depth_anything_v2",
+            "/kaggle/input/l3d-depth/Val/depth_anything_v2",
+            "data/laparoscopic_liver/val/depth_anything_v2",
+            "data/depth_maps/val/depth_anything_v2",
+        ],
         ("test", "images"): [
             "/kaggle/input/datasets/khoatrytopublish/l3d-test/Test/images",
             "/kaggle/input/l3d-test/Test/images",
@@ -75,6 +95,16 @@ def setup_dataset(target_dir: str = "/content/L3D") -> str:
             "/kaggle/input/l3d-test/Test/labels",
             "/kaggle/input/laparoscopic-liver-landmarks/test/labels",
             "data/laparoscopic_liver/test/labels",
+        ],
+        ("test", "depth_anything_v2"): [
+            "/kaggle/input/datasets/khoale05/l3d-depth/L3D/test/depth_anything_v2",
+            "/kaggle/input/datasets/khoale05/l3d-depth/L3D/Test/depth_anything_v2",
+            "/kaggle/input/l3d-depth/L3D/test/depth_anything_v2",
+            "/kaggle/input/l3d-depth/L3D/Test/depth_anything_v2",
+            "/kaggle/input/l3d-depth/test/depth_anything_v2",
+            "/kaggle/input/l3d-depth/Test/depth_anything_v2",
+            "data/laparoscopic_liver/test/depth_anything_v2",
+            "data/depth_maps/test/depth_anything_v2",
         ]
     }
 
@@ -85,7 +115,12 @@ def setup_dataset(target_dir: str = "/content/L3D") -> str:
             target_sub = target_path / split / sub
             target_sub.parent.mkdir(parents=True, exist_ok=True)
 
-            if target_sub.exists() or target_sub.is_symlink():
+            # Handle dangling/broken symlink
+            if target_sub.is_symlink() and not target_sub.exists():
+                print(f"🧹 Removing broken symlink: '{target_sub}'")
+                target_sub.unlink()
+
+            if target_sub.exists():
                 continue
 
             src_matched = None
@@ -94,8 +129,16 @@ def setup_dataset(target_dir: str = "/content/L3D") -> str:
                     src_matched = candidate
                     break
 
-            # If not found locally, download split via kagglehub
-            if not src_matched:
+            # Dynamic search in /kaggle/input if not in known_mappings
+            if not src_matched and os.path.exists("/kaggle/input"):
+                for root, dirs, _ in os.walk("/kaggle/input", followlinks=True):
+                    parts_lower = [p.lower() for p in Path(root).parts]
+                    if split in parts_lower and os.path.basename(root).lower() == sub.lower():
+                        src_matched = root
+                        break
+
+            # If not found locally and it's an original split (images/labels), download split via kagglehub
+            if not src_matched and sub in ["images", "labels"]:
                 if split not in downloaded_cache:
                     downloaded_cache[split] = download_via_kagglehub(split)
                 

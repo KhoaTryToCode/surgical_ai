@@ -46,10 +46,21 @@ def load_image(path):
 
 
 def load_depth(path):
-    img = cv2.imread(str(path).replace('images', 'depth').replace('jpg', 'png'), 0)
-    img = cv2.resize(img, (1024, 1024))
+    # Check depth_anything_v2 first, fallback to depth
+    path_str = str(path)
+    p_v2 = path_str.replace('images', 'depth_anything_v2').replace('.jpg', '.png')
+    if os.path.exists(p_v2):
+        img = cv2.imread(p_v2, cv2.IMREAD_GRAYSCALE)
+    else:
+        p_legacy = path_str.replace('images', 'depth').replace('.jpg', '.png')
+        img = cv2.imread(p_legacy, cv2.IMREAD_GRAYSCALE)
 
-    return img.astype(np.uint8)
+    if img is not None:
+        if img.shape[0] != 1024 or img.shape[1] != 1024:
+            img = cv2.resize(img, (1024, 1024), interpolation=cv2.INTER_LINEAR)
+        return img.astype(np.uint8)
+
+    return np.zeros((1024, 1024), dtype=np.uint8)
 
 
 def load_mask(path):
