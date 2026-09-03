@@ -278,13 +278,21 @@ def main():
             class_labels = [c.to(device) for c in inputs["class_labels"]]
 
             # 2. Normalize Depth and Concatenate as 4th Channel
-            # Depth normalized to [0, 1] then standardized around zero
             depth_tensor = torch.from_numpy(depth_img).float() / 255.0
             depth_tensor = (depth_tensor - 0.5) / 0.25
-            depth_tensor = depth_tensor.unsqueeze(0).unsqueeze(0).to(device)  # (1, 1, 1024, 1024)
+            depth_tensor = depth_tensor.unsqueeze(0).unsqueeze(0).to(device)
+
+            # Match depth spatial dimensions (H, W) to processor's rgb_pixels
+            if depth_tensor.shape[-2:] != rgb_pixels.shape[-2:]:
+                depth_tensor = F.interpolate(
+                    depth_tensor,
+                    size=rgb_pixels.shape[-2:],
+                    mode="bilinear",
+                    align_corners=False
+                )
 
             # RGB-D 4-Channel Input
-            pixel_values_4ch = torch.cat([rgb_pixels, depth_tensor], dim=1)  # (1, 4, 1024, 1024)
+            pixel_values_4ch = torch.cat([rgb_pixels, depth_tensor], dim=1)
 
             # 3. Model Forward
             outputs = model(
@@ -337,6 +345,14 @@ def main():
                 depth_tensor = torch.from_numpy(depth_img).float() / 255.0
                 depth_tensor = (depth_tensor - 0.5) / 0.25
                 depth_tensor = depth_tensor.unsqueeze(0).unsqueeze(0).to(device)
+
+                if depth_tensor.shape[-2:] != rgb_pixels.shape[-2:]:
+                    depth_tensor = F.interpolate(
+                        depth_tensor,
+                        size=rgb_pixels.shape[-2:],
+                        mode="bilinear",
+                        align_corners=False
+                    )
 
                 pixel_values_4ch = torch.cat([rgb_pixels, depth_tensor], dim=1)
 

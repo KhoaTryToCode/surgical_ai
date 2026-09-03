@@ -20,6 +20,21 @@ def download_via_kagglehub(split_name: str) -> str:
         print(f"⚠️ Could not download dataset via kagglehub ({e}).")
         return None
 
+def download_depth_via_kagglehub() -> str:
+    """
+    Downloads precomputed Depth Anything V2 maps from Kaggle via kagglehub.
+    """
+    try:
+        import kagglehub
+        handle = "khoale05/l3d-depth"
+        print(f"📥 Downloading Kaggle dataset '{handle}' via kagglehub...")
+        download_path = kagglehub.dataset_download(handle)
+        print(f"✅ Successfully downloaded '{handle}' to: '{download_path}'")
+        return download_path
+    except Exception as e:
+        print(f"⚠️ Could not download depth dataset via kagglehub ({e}).")
+        return None
+
 def setup_dataset(target_dir: str = "/content/L3D") -> str:
     """
     Sets up dataset symlinks for train, val, and test splits into target_dir:
@@ -137,18 +152,29 @@ def setup_dataset(target_dir: str = "/content/L3D") -> str:
                         src_matched = root
                         break
 
-            # If not found locally and it's an original split (images/labels), download split via kagglehub
-            if not src_matched and sub in ["images", "labels"]:
-                if split not in downloaded_cache:
-                    downloaded_cache[split] = download_via_kagglehub(split)
-                
-                dl_base = downloaded_cache[split]
-                if dl_base and os.path.exists(dl_base):
-                    # Search inside downloaded kagglehub folder for matching images/labels
-                    for root, dirs, _ in os.walk(dl_base, followlinks=True):
-                        if os.path.basename(root).lower() == sub:
-                            src_matched = root
-                            break
+            # If not found locally, download split via kagglehub
+            if not src_matched:
+                if sub in ["images", "labels"]:
+                    if split not in downloaded_cache:
+                        downloaded_cache[split] = download_via_kagglehub(split)
+                    
+                    dl_base = downloaded_cache[split]
+                    if dl_base and os.path.exists(dl_base):
+                        for root, dirs, _ in os.walk(dl_base, followlinks=True):
+                            if os.path.basename(root).lower() == sub:
+                                src_matched = root
+                                break
+                elif sub == "depth_anything_v2":
+                    if "depth" not in downloaded_cache:
+                        downloaded_cache["depth"] = download_depth_via_kagglehub()
+                    
+                    dl_depth = downloaded_cache["depth"]
+                    if dl_depth and os.path.exists(dl_depth):
+                        for root, dirs, _ in os.walk(dl_depth, followlinks=True):
+                            parts_lower = [p.lower() for p in Path(root).parts]
+                            if split in parts_lower and os.path.basename(root).lower() in ["depth_anything_v2", "depth"]:
+                                src_matched = root
+                                break
 
             if src_matched:
                 try:
