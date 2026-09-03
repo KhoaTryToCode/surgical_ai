@@ -30,7 +30,8 @@ def parse_args():
     parser.add_argument("--lr", type=float, default=config.learning_rate, help="Head learning rate")
     parser.add_argument("--backbone_lr_mult", type=float, default=config.backbone_lr_mult, help="Backbone lr multiplier")
     parser.add_argument("--save_dir", type=str, default="checkpoints/EXP_09", help="Directory to save model checkpoints")
-    parser.add_argument("--pretrained", action="store_true", default=config.pretrained, help="Use ImageNet pretrained ViT")
+    parser.add_argument("--backbone", type=str, default=config.backbone_name, help="ViT backbone (e.g. vit_base_patch16_224, vit_tiny_patch16_224)")
+    parser.add_argument("--amp", action="store_true", default=config.use_amp, help="Enable Automatic Mixed Precision on CUDA")
     parser.add_argument("--use_depth", action="store_true", default=config.use_depth, help="Ingest Depth Anything V2 as 4th channel")
     parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging")
     parser.add_argument("--wandb_key", type=str, default=config.wandb_key, help="W&B API key")
@@ -42,7 +43,8 @@ def main():
     args = parse_args()
     in_chans = 4 if args.use_depth else 3
     print("=" * 75)
-    print(f"🔥 [EXP_09] Training Patch-Level Bézier Vision Transformer (RGB-D: {args.use_depth}, Channels: {in_chans})")
+    print(f"🔥 [EXP_09] Training Patch-Level Bézier Vision Transformer")
+    print(f"🏛️ Backbone:   {args.backbone} | AMP Mixed Precision: {args.amp}")
     print(f"📂 Dataset:    {args.dataset_dir}")
     print(f"⚙️ Epochs:     {args.epochs} | Batch Size: {args.batch_size} | Base LR: {args.lr}")
     print(f"📐 Resolution: {config.image_size}×{config.image_size} | Patch: {config.patch_size}×{config.patch_size} (Grid: {config.grid_size}×{config.grid_size})")
@@ -108,9 +110,9 @@ def main():
 
     # Model
     model = PatchBezierViT(
-        backbone_name=config.backbone_name,
+        backbone_name=args.backbone,
         in_chans=in_chans,
-        pretrained=args.pretrained,
+        pretrained=True,
         image_size=config.image_size,
         patch_size=config.patch_size,
         num_classes=config.num_classes,
@@ -118,14 +120,15 @@ def main():
         dropout=config.dropout
     ).to(device)
 
-    # Criterion
+    # Criterion with class-weighted Focal Loss
+    weights_tensor = torch.tensor(config.class_weights, dtype=torch.float32).to(device) if hasattr(config, "class_weights") else None
     criterion = PatchBezierLoss(
         lambda_cls=config.lambda_cls,
         lambda_ctrl=config.lambda_ctrl,
         lambda_sample=config.lambda_sample,
         lambda_tan=config.lambda_tan,
         lambda_cont=config.lambda_cont,
-        focal_alpha=config.focal_alpha,
+        class_weights=weights_tensor,
         focal_gamma=config.focal_gamma,
         num_samples=config.num_sampled_points
     )
@@ -147,6 +150,7 @@ def main():
     ], weight_decay=config.weight_decay)
 
     scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=config.min_lr)
+    scaler = torch.cuda.amp.GradScaler(enabled=args.amp and device.type == "cuda")
 
     # Checkpoint directory
     os.makedirs(args.save_dir, exist_ok=True)
@@ -174,13 +178,16 @@ def main():
             active_mask = batch["active_mask"].to(device)
 
             optimizer.zero_grad()
-            pred_dict = model(images)
-            loss_dict = criterion(pred_dict, target_classes, target_beziers, active_mask)
+            with torch.cuda.amp.autocast(enabled=args.amp and device.type == "cuda"):
+                pred_dict = model(images)
+                loss_dict = criterion(pred_dict, target_classes, target_beziers, active_mask)
+                loss = loss_dict["loss"]
 
-            loss = loss_dict["loss"]
-            loss.backward()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
 
             train_loss_accum += loss.item()
             train_cls_accum += loss_dict["loss_cls"].item()
@@ -212,8 +219,9 @@ def main():
                 active_mask = batch["active_mask"].to(device)
                 target_masks = batch["target_masks"]  # (B, C, H, W)
 
-                pred_dict = model(images)
-                loss_dict = criterion(pred_dict, target_classes, target_beziers, active_mask)
+                with torch.cuda.amp.autocast(enabled=args.amp and device.type == "cuda"):
+                    pred_dict = model(images)
+                    loss_dict = criterion(pred_dict, target_classes, target_beziers, active_mask)
                 val_loss_accum += loss_dict["loss"].item()
 
                 # Vector to Pixel Conversion & Multi-class Dice Evaluation

@@ -62,11 +62,11 @@ class EXP09Config:
     stroke_thickness: int = 2        # Merging stroke thickness in pixels
     
     # ---------- Backbone ----------
-    backbone_name: str = "vit_tiny_patch16_224"
+    backbone_name: str = "vit_base_patch16_224"  # Strongest ViT: 86M params, 12 heads, 768 dim
     pretrained: bool = True
-    embed_dim: int = 192             # Embedding dimension for vit_tiny
+    embed_dim: int = 768             # Embedding dimension for vit_base
     depth: int = 12                  # Transformer depth
-    num_heads: int = 3               # Number of attention heads
+    num_heads: int = 12              # 12 attention heads for multi-landmark tracking
     mlp_ratio: float = 4.0
     dropout: float = 0.0
     
@@ -77,8 +77,9 @@ class EXP09Config:
     lambda_tan: float = 1.0          # Tangent cosine alignment weight
     lambda_cont: float = 0.5         # Adjacent patch endpoint continuity loss weight
     
-    # ---------- Focal Loss Hyperparams ----------
-    focal_alpha: float = 0.25
+    # ---------- Focal Loss Hyperparams & Class Weights ----------
+    # Class order: [0: Background, 1: Ridge, 2: Silhouette, 3: Ligament, 4: Gallbladder]
+    class_weights: tuple = (0.25, 1.0, 1.0, 2.5, 3.0)  # Heavy boost for rare Ligament and Gallbladder
     focal_gamma: float = 2.0
     
     # ---------- Training ----------
@@ -90,9 +91,10 @@ class EXP09Config:
     num_epochs: int = 80
     warmup_epochs: int = 5
     min_lr: float = 1e-6
+    use_amp: bool = True             # Automatic Mixed Precision for fast CUDA training
     
     # ---------- Thresholds ----------
-    confidence_thresh: float = 0.25  # Threshold for active patch during inference (0.25 for 5 classes)
+    confidence_thresh: float = 0.20  # Sensitive detection threshold to prevent missing subtle strokes
     
     # ---------- Weights & Biases ----------
     wandb_key: str = "83f4544a22543e319c6009abceaac90b634c68a3"

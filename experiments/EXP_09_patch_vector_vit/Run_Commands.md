@@ -38,20 +38,21 @@ os.chdir("/kaggle/working/Surgical-AI/experiments/EXP_09_patch_vector_vit")
 !python scripts/visualize_smoke_test_patch_vit.py
 ```
 
-### Cell 5: Launch RGB-D ViT Training (80 Epochs)
+### Cell 5: Launch Strongest ViT-Base Training (80 Epochs, vit_base_patch16_224, AMP)
 ```bash
 %%bash
 cd /kaggle/working/Surgical-AI/experiments/EXP_09_patch_vector_vit
 
 python scripts/train_patch_vit.py \
+    --backbone vit_base_patch16_224 \
     --dataset_dir /kaggle/working/L3D \
     --epochs 80 \
     --batch_size 16 \
     --lr 1e-4 \
     --backbone_lr_mult 0.1 \
+    --amp \
     --use_depth \
-    --pretrained \
-    --save_dir checkpoints/EXP_09 \
+    --save_dir checkpoints/EXP_09_base \
     --wandb \
     --wandb_key 83f4544a22543e319c6009abceaac90b634c68a3
 ```

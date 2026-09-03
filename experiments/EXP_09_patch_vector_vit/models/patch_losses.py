@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Optional, Dict
 try:
     from models.bezier_utils import sample_cubic_bezier_torch
 except ImportError:
@@ -9,13 +10,24 @@ except ImportError:
 
 class FocalLoss(nn.Module):
     """
-    Multi-Class Focal Loss to address extreme background patch imbalance (~90% background).
+    Multi-Class Focal Loss with inverse class frequency weighting.
+    Addresses both background dominance (~97% background) and landmark 
+    imbalance (rare Ligament and Gallbladder vs frequent Ridge/Silhouette).
     """
-    def __init__(self, alpha: float = 0.25, gamma: float = 2.0, reduction: str = 'mean'):
+    def __init__(
+        self,
+        class_weights: Optional[torch.Tensor] = None,
+        gamma: float = 2.0,
+        reduction: str = 'mean'
+    ):
         super().__init__()
-        self.alpha = alpha
         self.gamma = gamma
         self.reduction = reduction
+        if class_weights is not None:
+            self.register_buffer("class_weights", torch.as_tensor(class_weights, dtype=torch.float32))
+        else:
+            # Default: Background (0.25), Ridge (1.0), Silhouette (1.0), Ligament (2.5), Gallbladder (3.0)
+            self.register_buffer("class_weights", torch.tensor([0.25, 1.0, 1.0, 2.5, 3.0], dtype=torch.float32))
 
     def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """
@@ -26,11 +38,9 @@ class FocalLoss(nn.Module):
         ce_loss = F.cross_entropy(inputs, targets, reduction='none')
         pt = torch.exp(-ce_loss)  # probability of true class
         
-        # Alpha weight: down-weight background (class 0)
-        alpha_factor = torch.ones_like(targets, dtype=torch.float32) * self.alpha
-        alpha_factor[targets == 0] = (1.0 - self.alpha)
-        
-        focal_loss = alpha_factor * ((1.0 - pt) ** self.gamma) * ce_loss
+        # Per-class weight lookup
+        weights = self.class_weights.to(inputs.device)[targets]
+        focal_loss = weights * ((1.0 - pt) ** self.gamma) * ce_loss
         
         if self.reduction == 'mean':
             return focal_loss.mean()
@@ -42,7 +52,7 @@ class FocalLoss(nn.Module):
 class PatchBezierLoss(nn.Module):
     """
     Multi-task Loss Suite for EXP_09 Patch-Bézier ViT:
-    1. L_cls: Multi-Class Focal Loss across all 1024 patches
+    1. L_cls: Class-Weighted Multi-Class Focal Loss across all 1024 patches
     2. L_ctrl: Smooth L1 Loss on 4 Bézier Control Points (active patches only)
     3. L_sample: Differentiable Sampled Points L1 Loss along curve B(t)
     4. L_tan: Tangent direction cosine alignment at entry and exit
@@ -55,7 +65,7 @@ class PatchBezierLoss(nn.Module):
         lambda_sample: float = 5.0,
         lambda_tan: float = 1.0,
         lambda_cont: float = 0.5,
-        focal_alpha: float = 0.25,
+        class_weights: Optional[torch.Tensor] = None,
         focal_gamma: float = 2.0,
         num_samples: int = 10
     ):
@@ -67,7 +77,7 @@ class PatchBezierLoss(nn.Module):
         self.lambda_cont = lambda_cont
         self.num_samples = num_samples
         
-        self.focal_loss = FocalLoss(alpha=focal_alpha, gamma=focal_gamma, reduction='mean')
+        self.focal_loss = FocalLoss(class_weights=class_weights, gamma=focal_gamma, reduction='mean')
 
     def forward(
         self,
