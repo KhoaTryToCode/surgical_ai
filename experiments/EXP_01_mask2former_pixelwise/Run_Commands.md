@@ -51,6 +51,14 @@ python experiments/EXP_01_mask2former_pixelwise/scripts/evaluate_worst_cases.py 
   --top_k_save 15
 ```
 
+### Surgical Augmentation Diagnostic Visualizer (Before vs. After)
+```bash
+python experiments/EXP_01_mask2former_pixelwise/scripts/visualize_augmentations.py \
+  --data_path /kaggle/working/L3D \
+  --output_dir /kaggle/working/augmentation_visualizations \
+  --num_samples 3
+```
+
 ---
 
 ## 3. Sub-Experiment Execution Commands
