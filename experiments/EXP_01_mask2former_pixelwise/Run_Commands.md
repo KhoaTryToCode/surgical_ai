@@ -53,8 +53,20 @@ python experiments/EXP_01_mask2former_pixelwise/scripts/evaluate_worst_cases.py 
 
 ---
 
-## 3. Sub-Experiment Execution Commands (TopoNet Paper Metric Reconstruction)
+## 3. Sub-Experiment Execution Commands
 
+### Sub-Experiment 01: TopoNet Paper Metric Reconstruction
 ```bash
 python experiments/EXP_01_mask2former_pixelwise/sub_experiments/SUB_01_toponet_paper_reconstruction/scripts/train.py --config experiments/EXP_02_surgical_gemap/configs/toponet.yaml
+```
+
+### Sub-Experiment 02: Mask2Former RGB-D (Depth Anything V2 4th Channel)
+```bash
+python experiments/EXP_01_mask2former_pixelwise/sub_experiments/SUB_02_mask2former_rgbd/scripts/train_rgbd.py \
+  --data_path /kaggle/working/L3D \
+  --save_dir /kaggle/working/results_rgbd \
+  --epochs 60 \
+  --lr 8e-5 \
+  --batch_size 1 \
+  --accumulation_steps 4
 ```

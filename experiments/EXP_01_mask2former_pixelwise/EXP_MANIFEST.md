@@ -12,6 +12,9 @@
 
 ## 2. Architecture & Codebase Design
 - **Custom Scripts (`scripts/`):** `ablation_mask2former.py`, `visualize_attention.py`, `evaluate_worst_cases.py`.
+- **Sub-Experiments (`sub_experiments/`):**
+  - [`SUB_01_toponet_paper_reconstruction`](sub_experiments/SUB_01_toponet_paper_reconstruction/SUB_MANIFEST.md): TopoNet metric reproduction.
+  - [`SUB_02_mask2former_rgbd`](sub_experiments/SUB_02_mask2former_rgbd/SUB_MANIFEST.md): Mask2Former RGB-D with Depth Anything V2 4th channel.
 - **Shared Utilities Used:** `shared/utils/`.
 
 ---
