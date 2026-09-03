@@ -518,8 +518,13 @@ def main():
     print(f"\n💾 Saved full sorted results table to: '{csv_path}'")
 
     # 9. Save Visual Diagnostics for Top-K Worst Cases & Top-3 Best Cases
-    top_k = min(args.top_k_save, len(results_sorted))
-    print(f"\n🎨 Exporting {top_k} worst-case 4-panel visual failure maps...")
+    if args.top_k_save < 0 or args.top_k_save >= len(results_sorted):
+        top_k = len(results_sorted)
+        print(f"\n🎨 Exporting ALL {top_k} validation 4-panel visual maps (ranked #1 worst to #{top_k} best)...")
+    else:
+        top_k = args.top_k_save
+        print(f"\n🎨 Exporting top {top_k} worst-case 4-panel visual failure maps...")
+
     vis_dir = os.path.join(args.output_dir, "visual_diagnostics")
     os.makedirs(vis_dir, exist_ok=True)
 
@@ -528,12 +533,13 @@ def main():
         save_path = os.path.join(vis_dir, out_name)
         generate_multipanel_figure(item["rgb_img"], item["gt_2d"], item["pred_map"], item, save_path)
 
-    # Also save top 3 best cases for comparison
-    print("🎨 Exporting 3 best-case comparison plots...")
-    for item in results_sorted[-3:]:
-        out_name = f"BEST_rank{item['rank']:03d}_dice{item['dice']:.4f}_{Path(item['filename']).stem}.png"
-        save_path = os.path.join(vis_dir, out_name)
-        generate_multipanel_figure(item["rgb_img"], item["gt_2d"], item["pred_map"], item, save_path)
+    # If only saving a subset of worst cases, also export top 3 best cases for comparison
+    if top_k < len(results_sorted):
+        print("🎨 Exporting 3 best-case comparison plots...")
+        for item in results_sorted[-3:]:
+            out_name = f"BEST_rank{item['rank']:03d}_dice{item['dice']:.4f}_{Path(item['filename']).stem}.png"
+            save_path = os.path.join(vis_dir, out_name)
+            generate_multipanel_figure(item["rgb_img"], item["gt_2d"], item["pred_map"], item, save_path)
 
     print(f"✅ Visual diagnostics saved to: '{vis_dir}'")
     print("=" * 80)
