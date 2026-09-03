@@ -278,10 +278,13 @@ def generate_multipanel_figure(rgb_img, gt_2d, pred_map, sample_info, save_path)
     cv2.imwrite(str(save_path), cv2.cvtColor(final_canvas, cv2.COLOR_RGB2BGR))
 
 
-def adapt_model_to_rgbd(model):
+def adapt_model_to_rgbd(model, device=None):
     """
     Adapts Swin patch embedding projection from 3 to 4 channels for RGB-D weights.
     """
+    if device is None:
+        device = next(model.parameters()).device
+
     for name, module in model.named_modules():
         if isinstance(module, torch.nn.Conv2d) and module.in_channels == 3:
             old_conv = module
@@ -301,12 +304,13 @@ def adapt_model_to_rgbd(model):
                 if old_conv.bias is not None:
                     new_conv.bias.copy_(old_conv.bias)
 
+            new_conv = new_conv.to(device)
             parent_name, child_name = name.rsplit(".", 1)
             parent = model.get_submodule(parent_name)
             setattr(parent, child_name, new_conv)
-            print(f"✅ Adapted '{name}' to 4 channels for RGB-D evaluation.")
-            return model
-    return model
+            print(f"✅ Adapted '{name}' to 4 channels on device '{device}' for RGB-D evaluation.")
+            return model.to(device)
+    return model.to(device)
 
 
 def main():
@@ -377,11 +381,12 @@ def main():
 
     if is_rgbd:
         print("💡 Detected 4-channel RGB-D checkpoint (Depth Anything V2 active).")
-        model = adapt_model_to_rgbd(model)
+        model = adapt_model_to_rgbd(model, device=device)
         if args.output_dir == "/kaggle/working/results_ablation/worst_cases":
             args.output_dir = "/kaggle/working/results_rgbd/worst_cases"
 
     model.load_state_dict(state_dict)
+    model = model.to(device)
     model.eval()
     print("✅ Model loaded successfully in evaluation mode.")
 
