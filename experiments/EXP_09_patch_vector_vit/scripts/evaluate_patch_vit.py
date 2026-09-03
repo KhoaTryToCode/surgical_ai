@@ -147,9 +147,9 @@ def main():
             sample_dice = compute_dice_score(pred_bin, gt_bin)
             dice_scores.append(sample_dice)
 
-            # Save qualitative visual figure for first 5 samples
-            if i < 5:
-                img_np = img_tensor.squeeze(0).cpu().numpy() * std + mean
+            # Save qualitative visual figure for first 10 samples
+            if i < 10:
+                img_np = img_tensor.squeeze(0)[:3].cpu().numpy() * std + mean
                 img_np = np.clip(img_np.transpose(1, 2, 0), 0.0, 1.0)
 
                 gt_canvas = merge_patch_beziers_to_image(
@@ -160,20 +160,42 @@ def main():
                     stroke_thickness=config.stroke_thickness
                 )
 
-                fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+                # Overlays
+                gt_overlay = img_np.copy()
+                gt_active = gt_canvas.sum(axis=-1) > 0
+                gt_overlay[gt_active] = gt_canvas[gt_active] / 255.0 * 0.85 + gt_overlay[gt_active] * 0.15
+
+                pred_overlay = img_np.copy()
+                pred_active_mask = pred_canvas.sum(axis=-1) > 0
+                pred_overlay[pred_active_mask] = pred_canvas[pred_active_mask] / 255.0 * 0.85 + pred_overlay[pred_active_mask] * 0.15
+
+                # Alignment Overlay: Green = GT, Red = Pred, Yellow = Overlap
+                align_canvas = np.zeros((config.image_size, config.image_size, 3), dtype=np.float32)
+                align_canvas[gt_active, 1] = 1.0       # Green for GT
+                align_canvas[pred_active_mask, 0] = 1.0 # Red for Pred
+                # Overlap becomes Yellow (Red + Green)
+
+                align_overlay = img_np.copy() * 0.5 + align_canvas * 0.5
+                align_overlay = np.clip(align_overlay, 0.0, 1.0)
+
+                fig, axes = plt.subplots(1, 4, figsize=(24, 6))
                 axes[0].imshow(img_np)
-                axes[0].set_title("Input Frame", fontsize=12)
+                axes[0].set_title(f"Sample {i:02d}: Input Frame", fontsize=12)
                 axes[0].axis("off")
 
-                axes[1].imshow(gt_canvas)
-                axes[1].set_title(f"Ground Truth Bézier Merge (Active: {np.sum(act_mask)})", fontsize=12)
+                axes[1].imshow(gt_overlay)
+                axes[1].set_title(f"Ground Truth Curves ({np.sum(act_mask)} patches)", fontsize=12)
                 axes[1].axis("off")
 
-                axes[2].imshow(pred_canvas)
-                axes[2].set_title(f"Predicted Bézier Merge (Dice: {sample_dice:.3f})", fontsize=12)
+                axes[2].imshow(pred_overlay)
+                axes[2].set_title(f"Predicted Bézier Curves (Dice: {sample_dice:.3f})", fontsize=12)
                 axes[2].axis("off")
 
-                fig_path = os.path.join(args.output_dir, f"sample_{i:02d}.png")
+                axes[3].imshow(align_overlay)
+                axes[3].set_title(f"Alignment (Green: GT, Red: Pred, Yellow: Match)", fontsize=12)
+                axes[3].axis("off")
+
+                fig_path = os.path.join(args.output_dir, f"val_sample_{i:02d}.png")
                 plt.tight_layout()
                 plt.savefig(fig_path, dpi=150, bbox_inches="tight")
                 plt.close()
