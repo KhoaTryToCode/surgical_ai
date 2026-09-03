@@ -281,16 +281,21 @@ def main():
             pred_dict = model(image_tensor)
 
         # 4. Rasterize Raw Patch Béziers (Contains Parallel Bursts)
-        raw_pred_result = merge_patch_beziers_to_image(
-            patch_logits=pred_dict["patch_logits"][0],
-            patch_beziers=pred_dict["patch_beziers"][0],
+        patch_probs = torch.softmax(pred_dict["patch_logits"][0], dim=-1).cpu().numpy()
+        patch_beziers = pred_dict["patch_beziers"][0].cpu().numpy()
+
+        raw_pred_canvas, raw_class_masks = merge_patch_beziers_to_image(
+            patch_classes=patch_probs,
+            patch_beziers=patch_beziers,
             patch_size=config.patch_size,
             img_size=config.image_size,
             threshold=args.threshold,
-            stroke_thickness=args.stroke_thickness
+            stroke_thickness=args.stroke_thickness,
+            return_class_masks=True
         )
-        raw_pred_canvas = raw_pred_result["canvas"]  # (H, W, 3) RGB
-        raw_class_mask = raw_pred_result["class_mask"]  # (H, W) uint8 with values 0..4
+        raw_class_mask = np.zeros((config.image_size, config.image_size), dtype=np.uint8)
+        for c in range(1, 5):
+            raw_class_mask[raw_class_masks[c - 1] > 0] = c
         raw_bin_mask = (raw_class_mask > 0).astype(np.uint8)
 
         # 5. Apply Technique B: Morphological Skeletonization / Thinning
