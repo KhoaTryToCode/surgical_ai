@@ -4,6 +4,7 @@ import sys
 import argparse
 import time
 import numpy as np
+import cv2
 import torch
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
@@ -17,7 +18,7 @@ if exp_root not in sys.path:
 from configs.exp09_config import config
 from models.patch_vector_vit import PatchBezierViT
 from models.patch_losses import PatchBezierLoss
-from models.patch_merger import merge_patch_beziers_to_image, batch_vector_to_pixel_masks, compute_batch_dice
+from models.patch_merger import merge_patch_beziers_to_image, batch_vector_to_pixel_masks, compute_batch_dice, render_epoch_diagnostic_figure
 from utils.dataset_patch_vit import PatchBezierLandmarkDataset
 
 
@@ -149,6 +150,9 @@ def main():
 
     # Checkpoint directory
     os.makedirs(args.save_dir, exist_ok=True)
+    vis_dir = os.path.join(args.save_dir, "epoch_visuals")
+    os.makedirs(vis_dir, exist_ok=True)
+    fixed_val_sample = val_dataset[0] if len(val_dataset) > 0 else None
     best_val_loss = float("inf")
     best_val_dice = 0.0
 
@@ -231,6 +235,27 @@ def main():
         avg_val_bin_dice = val_bin_dice_accum / max(val_batches, 1)
         avg_val_macro_dice = val_macro_dice_accum / max(val_batches, 1)
 
+        # Render visual prediction overlay on fixed validation sample
+        diag_rgb = None
+        if fixed_val_sample is not None:
+            with torch.no_grad():
+                fix_img = fixed_val_sample["image"].unsqueeze(0).to(device)
+                pred_fix = model(fix_img)
+                diag_rgb = render_epoch_diagnostic_figure(
+                    img_tensor=fixed_val_sample["image"],
+                    pred_logits=pred_fix["patch_logits"],
+                    pred_beziers=pred_fix["patch_beziers"],
+                    tgt_classes=fixed_val_sample["target_classes"],
+                    tgt_beziers=fixed_val_sample["target_beziers"],
+                    epoch=epoch,
+                    patch_size=config.patch_size,
+                    img_size=config.image_size,
+                    threshold=config.confidence_thresh,
+                    top_k_fallback=25
+                )
+                vis_path = os.path.join(vis_dir, f"epoch_{epoch:03d}.png")
+                cv2.imwrite(vis_path, cv2.cvtColor(diag_rgb, cv2.COLOR_RGB2BGR))
+
         print(
             f"Epoch [{epoch:03d}/{args.epochs:03d}] | "
             f"Train Loss: {avg_train_loss:.4f} (Cls: {avg_cls_loss:.4f}, Ctrl: {avg_ctrl_loss:.4f}, Sample: {avg_sample_loss:.4f}) | "
@@ -238,7 +263,7 @@ def main():
         )
 
         if use_wandb:
-            wandb.log({
+            log_payload = {
                 "epoch": epoch,
                 "train/loss": avg_train_loss,
                 "train/loss_cls": avg_cls_loss,
@@ -248,7 +273,13 @@ def main():
                 "val/dice_binary": avg_val_bin_dice,
                 "val/dice_macro": avg_val_macro_dice,
                 "lr": optimizer.param_groups[1]['lr']
-            })
+            }
+            if diag_rgb is not None:
+                import wandb
+                log_payload["val/prediction_overlay"] = wandb.Image(
+                    diag_rgb, caption=f"Validation Prediction Overlay - Epoch {epoch:03d}"
+                )
+            wandb.log(log_payload)
 
         # Save Best Model (prioritize highest validation binary Dice)
         if avg_val_bin_dice > best_val_dice:

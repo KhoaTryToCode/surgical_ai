@@ -27,10 +27,11 @@ def merge_patch_beziers_to_image(
     patch_beziers: np.ndarray,
     patch_size: int = 16,
     img_size: int = 512,
-    threshold: float = 0.5,
+    threshold: float = 0.25,
     stroke_thickness: int = 2,
     num_samples_per_curve: int = 12,
-    return_class_masks: bool = False
+    return_class_masks: bool = False,
+    top_k_fallback: int = 0
 ):
     """
     Merges local patch Bézier predictions into a high-resolution landmark image
@@ -41,10 +42,11 @@ def merge_patch_beziers_to_image(
         patch_beziers: (G, G, 4, 2) local control points in [0, 1]^2.
         patch_size: 16 pixels per patch.
         img_size: 512 pixels.
-        threshold: Minimum probability threshold if patch_classes is a probability distribution.
+        threshold: Minimum probability threshold for active patches (default: 0.25).
         stroke_thickness: Rasterized line width in pixels.
         num_samples_per_curve: Number of continuous interpolation points along each cubic Bézier arc.
         return_class_masks: If True, also returns (C, H, W) binary masks per landmark class.
+        top_k_fallback: If active count is 0, activate top-K most confident patches (useful for early epoch diagnostics).
         
     Returns:
         canvas_rgb: (img_size, img_size, 3) uint8 RGB image of rendered curves.
@@ -59,6 +61,17 @@ def merge_patch_beziers_to_image(
         cls_map = np.argmax(probs, axis=-1)  # (G, G)
         conf_map = np.max(probs[:, :, 1:], axis=-1) if probs.shape[-1] > 1 else np.zeros_like(cls_map)
         active = (cls_map > 0) & (conf_map >= threshold)
+        
+        # If no patch exceeds threshold (e.g. early training), activate top-k most confident patches
+        if active.sum() == 0 and top_k_fallback > 0:
+            flat_conf = conf_map.flatten()
+            sorted_indices = np.argsort(flat_conf)[-top_k_fallback:]
+            # Filter out near-zero noise
+            valid_indices = [idx for idx in sorted_indices if flat_conf[idx] > 0.05]
+            if len(valid_indices) > 0:
+                active_flat = np.zeros_like(flat_conf, dtype=bool)
+                active_flat[valid_indices] = True
+                active = active_flat.reshape(cls_map.shape)
     else:
         cls_map = patch_classes.astype(np.int32)
         active = (cls_map > 0)
@@ -253,3 +266,96 @@ def compute_batch_dice(
         "macro_class_dice": macro_class_dice,
         "class_dice": {k: (float(np.mean(v)) if v else 0.0) for k, v in class_dices.items()}
     }
+
+
+def render_epoch_diagnostic_figure(
+    img_tensor: torch.Tensor,
+    pred_logits: torch.Tensor,
+    pred_beziers: torch.Tensor,
+    tgt_classes: torch.Tensor,
+    tgt_beziers: torch.Tensor,
+    epoch: int,
+    patch_size: int = 16,
+    img_size: int = 512,
+    threshold: float = 0.25,
+    top_k_fallback: int = 30
+) -> np.ndarray:
+    """
+    Renders a 3-panel side-by-side diagnostic image (uint8 RGB):
+    [Input Surgical Frame] | [Ground Truth Béziers] | [Model Prediction Overlay]
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    
+    # 1. Denormalize input frame (use first 3 RGB channels)
+    mean = np.array([0.485, 0.456, 0.406]).reshape(3, 1, 1)
+    std = np.array([0.229, 0.224, 0.225]).reshape(3, 1, 1)
+    img_rgb = img_tensor[:3].detach().cpu().numpy() * std + mean
+    img_rgb = np.clip(img_rgb.transpose(1, 2, 0), 0.0, 1.0)
+    
+    # 2. Render Ground Truth Canvas
+    gt_canvas = merge_patch_beziers_to_image(
+        patch_classes=tgt_classes.detach().cpu().numpy(),
+        patch_beziers=tgt_beziers.detach().cpu().numpy(),
+        patch_size=patch_size,
+        img_size=img_size,
+        stroke_thickness=2
+    )
+    
+    # 3. Render Model Prediction Canvas
+    # Reshape if flat
+    grid_size = img_size // patch_size
+    if pred_logits.ndim == 3 and pred_logits.shape[1] != grid_size:
+        pred_logits = pred_logits.view(1, grid_size, grid_size, -1)
+    if pred_beziers.ndim == 4 and pred_beziers.shape[1] != grid_size:
+        pred_beziers = pred_beziers.view(1, grid_size, grid_size, 4, 2)
+        
+    probs = torch.softmax(pred_logits, dim=-1).detach().cpu().numpy().squeeze(0)  # (G, G, C+1)
+    beziers = pred_beziers.detach().cpu().numpy().squeeze(0)                      # (G, G, 4, 2)
+    
+    max_conf = float(np.max(probs[:, :, 1:]))
+    cls_map = np.argmax(probs, axis=-1)
+    active_thresh = int(np.sum((cls_map > 0) & (np.max(probs[:, :, 1:], axis=-1) >= threshold)))
+    
+    pred_canvas = merge_patch_beziers_to_image(
+        patch_classes=probs,
+        patch_beziers=beziers,
+        patch_size=patch_size,
+        img_size=img_size,
+        threshold=threshold,
+        stroke_thickness=2,
+        top_k_fallback=top_k_fallback
+    )
+    
+    # 4. Create Overlays
+    gt_overlay = img_rgb.copy()
+    gt_mask = gt_canvas.sum(axis=-1) > 0
+    gt_overlay[gt_mask] = gt_canvas[gt_mask] / 255.0 * 0.8 + gt_overlay[gt_mask] * 0.2
+    
+    pred_overlay = img_rgb.copy()
+    pred_mask = pred_canvas.sum(axis=-1) > 0
+    num_pred_px = int(pred_mask.sum())
+    pred_overlay[pred_mask] = pred_canvas[pred_mask] / 255.0 * 0.8 + pred_overlay[pred_mask] * 0.2
+    
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    axes[0].imshow(img_rgb)
+    axes[0].set_title("Input Surgical Frame", fontsize=12)
+    axes[0].axis("off")
+    
+    axes[1].imshow(gt_overlay)
+    axes[1].set_title("Ground Truth Béziers", fontsize=12)
+    axes[1].axis("off")
+    
+    status_text = f"Pred Epoch {epoch:02d} | MaxConf: {max_conf:.3f} | Active>Thresh: {active_thresh} | RenderedPx: {num_pred_px}"
+    axes[2].imshow(pred_overlay)
+    axes[2].set_title(status_text, fontsize=12)
+    axes[2].axis("off")
+    
+    plt.tight_layout()
+    fig.canvas.draw()
+    rgba = np.asarray(fig.canvas.buffer_rgba())
+    rgb_out = rgba[:, :, :3].copy()
+    plt.close(fig)
+    
+    return rgb_out

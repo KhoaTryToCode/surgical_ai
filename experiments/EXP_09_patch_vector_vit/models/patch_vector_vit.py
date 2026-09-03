@@ -83,8 +83,8 @@ class PatchBezierViT(nn.Module):
         # Initialize heads
         nn.init.normal_(self.class_head[-1].weight, std=0.01)
         nn.init.constant_(self.class_head[-1].bias, 0.0)
-        # Prior bias for background class to prevent exploding gradients early
-        self.class_head[-1].bias.data[0] = 2.0  # Background class prior
+        # Prior bias for background class to gently favor background without suppressing landmarks
+        self.class_head[-1].bias.data[0] = 0.5  # Balanced background class prior
         
         nn.init.normal_(self.bezier_head[-2].weight, std=0.01)
         nn.init.constant_(self.bezier_head[-2].bias, 0.0)

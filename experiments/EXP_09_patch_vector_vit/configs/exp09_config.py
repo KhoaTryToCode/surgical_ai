@@ -92,7 +92,7 @@ class EXP09Config:
     min_lr: float = 1e-6
     
     # ---------- Thresholds ----------
-    confidence_thresh: float = 0.5   # Threshold for active patch during inference
+    confidence_thresh: float = 0.25  # Threshold for active patch during inference (0.25 for 5 classes)
     
     # ---------- Weights & Biases ----------
     wandb_key: str = "83f4544a22543e319c6009abceaac90b634c68a3"
