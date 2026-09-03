@@ -28,12 +28,13 @@ from utils.dataset_patch_vit import PatchBezierLandmarkDataset
 
 def parse_args():
     parser = argparse.ArgumentParser(description="EXP_09: Evaluate Patch-Bézier ViT")
-    parser.add_argument("--checkpoint", type=str, default="", help="Path to model checkpoint (.pth)")
+    parser.add_argument("--checkpoint", type=str, default="checkpoints/EXP_09_base/best_model.pth", help="Path to model checkpoint (.pth)")
+    parser.add_argument("--backbone", type=str, default=config.backbone_name, help="ViT backbone (e.g. vit_base_patch16_224)")
     parser.add_argument("--dataset_dir", type=str, default=config.dataset_dir, help="Dataset directory")
     parser.add_argument("--split", type=str, default="val", help="Dataset split (val or train)")
-    parser.add_argument("--threshold", type=float, default=config.confidence_thresh, help="Patch confidence threshold")
+    parser.add_argument("--threshold", type=float, default=config.confidence_thresh, help="Patch confidence threshold (default: 0.20)")
     parser.add_argument("--output_dir", type=str, default="outputs/eval_results", help="Directory to save evaluation figures")
-    parser.add_argument("--max_eval_samples", type=int, default=50, help="Maximum samples to evaluate")
+    parser.add_argument("--max_eval_samples", type=int, default=122, help="Maximum samples to evaluate (default: 122 for full val set)")
     parser.add_argument("--use_depth", action="store_true", default=config.use_depth, help="Ingest Depth Anything V2 as 4th channel")
     return parser.parse_args()
 
@@ -50,10 +51,21 @@ def compute_dice_score(pred_mask: np.ndarray, gt_mask: np.ndarray, eps: float = 
 def main():
     args = parse_args()
     in_chans = 4 if args.use_depth else 3
+
+    # Auto-resolve checkpoint path
+    checkpoint_path = args.checkpoint
+    if not os.path.exists(checkpoint_path):
+        for candidate in ["checkpoints/EXP_09_base/best_model.pth", "checkpoints/EXP_09/best_model.pth"]:
+            if os.path.exists(candidate):
+                checkpoint_path = candidate
+                break
+
     print("=" * 75)
     print(f"📊 [EXP_09] Evaluating Patch-Level Bézier Vision Transformer (RGB-D: {args.use_depth}, Channels: {in_chans})")
-    print(f"📂 Dataset:    {args.dataset_dir} (Split: {args.split})")
-    print(f"🎯 Threshold:  {args.threshold}")
+    print(f"📦 Checkpoint:  {checkpoint_path}")
+    print(f"🏛️ Backbone:    {args.backbone}")
+    print(f"📂 Dataset:     {args.dataset_dir} (Split: {args.split})")
+    print(f"🎯 Threshold:   {args.threshold}")
     print("=" * 75)
 
     device = torch.device("cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"))
@@ -61,7 +73,7 @@ def main():
 
     # Initialize model
     model = PatchBezierViT(
-        backbone_name=config.backbone_name,
+        backbone_name=args.backbone,
         in_chans=in_chans,
         pretrained=False,
         image_size=config.image_size,
@@ -70,13 +82,15 @@ def main():
         embed_dim=config.embed_dim
     ).to(device)
 
-    if args.checkpoint and os.path.exists(args.checkpoint):
-        print(f"📦 Loading weights from: {args.checkpoint}")
-        ckpt = torch.load(args.checkpoint, map_location=device)
+    if os.path.exists(checkpoint_path):
+        print(f"📦 Loading weights from: {checkpoint_path}")
+        ckpt = torch.load(checkpoint_path, map_location=device)
         state_dict = ckpt.get("model_state_dict", ckpt)
         model.load_state_dict(state_dict)
+        if "val_bin_dice" in ckpt:
+            print(f"   🏆 Best Training Val Dice: {ckpt['val_bin_dice']:.4f} (Epoch {ckpt.get('epoch', '?')})")
     else:
-        print("⚠️ No checkpoint found. Running evaluation in diagnostic mode.")
+        print(f"⚠️ Checkpoint '{checkpoint_path}' not found. Running in diagnostic mode.")
 
     model.eval()
 

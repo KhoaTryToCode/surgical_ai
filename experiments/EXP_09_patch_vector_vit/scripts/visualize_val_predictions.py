@@ -27,11 +27,12 @@ from utils.dataset_patch_vit import PatchBezierLandmarkDataset
 
 def parse_args():
     parser = argparse.ArgumentParser(description="EXP_09: Visualize Patch-Bézier ViT Predictions on Validation Set")
-    parser.add_argument("--checkpoint", type=str, default="checkpoints/EXP_09/best_model.pth", help="Path to trained model checkpoint")
+    parser.add_argument("--checkpoint", type=str, default="checkpoints/EXP_09_base/best_model.pth", help="Path to model checkpoint (.pth)")
+    parser.add_argument("--backbone", type=str, default=config.backbone_name, help="ViT backbone (e.g. vit_base_patch16_224)")
     parser.add_argument("--dataset_dir", type=str, default=config.dataset_dir, help="Path to surgical dataset")
     parser.add_argument("--split", type=str, default="val", help="Dataset split (val or train)")
-    parser.add_argument("--num_samples", type=int, default=6, help="Number of samples to visualize")
-    parser.add_argument("--threshold", type=float, default=0.25, help="Confidence threshold for active patches (e.g. 0.25 or 0.50)")
+    parser.add_argument("--num_samples", type=int, default=10, help="Number of samples to visualize")
+    parser.add_argument("--threshold", type=float, default=config.confidence_thresh, help="Confidence threshold for active patches (default: 0.20)")
     parser.add_argument("--output_dir", type=str, default="outputs/val_visualizations", help="Directory to save visual PNGs")
     parser.add_argument("--use_depth", action="store_true", default=config.use_depth, help="Ingest Depth Anything V2 as 4th channel")
     parser.add_argument("--show", action="store_true", help="Display interactive matplotlib figures (for Jupyter notebooks)")
@@ -48,9 +49,18 @@ def compute_dice(pred_bin: np.ndarray, gt_bin: np.ndarray, eps: float = 1e-6) ->
 
 def main():
     args = parse_args()
+    # Auto-resolve checkpoint path
+    checkpoint_path = args.checkpoint
+    if not os.path.exists(checkpoint_path):
+        for candidate in ["checkpoints/EXP_09_base/best_model.pth", "checkpoints/EXP_09/best_model.pth"]:
+            if os.path.exists(candidate):
+                checkpoint_path = candidate
+                break
+
     print("=" * 75)
     print("🎨 [EXP_09] Visualizing Patch-Bézier ViT Predictions on Validation Split")
-    print(f"📦 Checkpoint:  {args.checkpoint}")
+    print(f"📦 Checkpoint:  {checkpoint_path}")
+    print(f"🏛️ Backbone:    {args.backbone}")
     print(f"📂 Dataset:     {args.dataset_dir} (Split: {args.split})")
     print(f"🎯 Threshold:   {args.threshold}")
     print(f"🖼️  Num Samples: {args.num_samples}")
@@ -62,7 +72,7 @@ def main():
 
     # 1. Initialize Model
     model = PatchBezierViT(
-        backbone_name=config.backbone_name,
+        backbone_name=args.backbone,
         in_chans=in_chans,
         pretrained=False,
         image_size=config.image_size,
@@ -72,15 +82,15 @@ def main():
     ).to(device)
 
     # 2. Load Checkpoint Weights
-    if os.path.exists(args.checkpoint):
-        print(f"✅ Loading checkpoint: {args.checkpoint}")
-        ckpt = torch.load(args.checkpoint, map_location=device)
+    if os.path.exists(checkpoint_path):
+        print(f"✅ Loading checkpoint: {checkpoint_path}")
+        ckpt = torch.load(checkpoint_path, map_location=device)
         state_dict = ckpt.get("model_state_dict", ckpt)
         model.load_state_dict(state_dict)
         if "val_bin_dice" in ckpt:
             print(f"   🏆 Checkpoint Val Dice: {ckpt['val_bin_dice']:.4f} (Epoch {ckpt.get('epoch', '?')})")
     else:
-        print(f"⚠️ Warning: Checkpoint '{args.checkpoint}' not found! Using initialized weights.")
+        print(f"⚠️ Warning: Checkpoint '{checkpoint_path}' not found! Using initialized weights.")
 
     model.eval()
 
