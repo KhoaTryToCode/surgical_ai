@@ -11,7 +11,7 @@
 ---
 
 ## 2. Architecture & Codebase Design
-- **Custom Scripts (`scripts/`):** `ablation_mask2former.py`, `visualize_attention.py`.
+- **Custom Scripts (`scripts/`):** `ablation_mask2former.py`, `visualize_attention.py`, `evaluate_worst_cases.py`.
 - **Shared Utilities Used:** `shared/utils/`.
 
 ---

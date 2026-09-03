@@ -30,6 +30,15 @@ python experiments/EXP_01_mask2former_pixelwise/scripts/ablation_mask2former.py
 python experiments/EXP_01_mask2former_pixelwise/scripts/visualize_attention.py
 ```
 
+### Validation Failure Mode Analysis (Ranked Worst to Best)
+```bash
+python experiments/EXP_01_mask2former_pixelwise/scripts/evaluate_worst_cases.py \
+  --mode Swin_MaskedAttn \
+  --data_path /kaggle/working/L3D \
+  --output_dir /kaggle/working/results_ablation/worst_cases \
+  --top_k_save 15
+```
+
 ---
 
 ## 3. Sub-Experiment Execution Commands (TopoNet Paper Metric Reconstruction)
