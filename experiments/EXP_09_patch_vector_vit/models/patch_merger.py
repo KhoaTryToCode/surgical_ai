@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import torch
 try:
     from models.bezier_utils import get_bernstein_matrix_numpy, sample_cubic_bezier_numpy
 except ImportError:
@@ -135,3 +136,120 @@ def extract_global_beziers(
             })
             
     return curves
+
+
+def batch_vector_to_pixel_masks(
+    patch_logits: torch.Tensor,
+    patch_beziers: torch.Tensor,
+    patch_size: int = 16,
+    img_size: int = 512,
+    threshold: float = 0.5,
+    stroke_thickness: int = 2,
+    num_classes: int = 4
+) -> np.ndarray:
+    """
+    Converts a batch of patch Bézier vectors to multi-class pixel raster masks.
+    
+    Args:
+        patch_logits: (B, G, G, C+1) or (B, num_patches, C+1) torch.Tensor
+        patch_beziers: (B, G, G, 4, 2) or (B, num_patches, 4, 2) torch.Tensor
+        patch_size: pixels per patch (e.g. 16)
+        img_size: image resolution (e.g. 512)
+        threshold: confidence threshold for landmark activation
+        stroke_thickness: line thickness in pixels (e.g. 2)
+        num_classes: number of landmark classes (4)
+        
+    Returns:
+        batch_masks: (B, num_classes, img_size, img_size) float32 numpy array
+    """
+    B = patch_logits.shape[0]
+    grid_size = img_size // patch_size
+    
+    if patch_logits.ndim == 3:
+        patch_logits = patch_logits.view(B, grid_size, grid_size, -1)
+    if patch_beziers.ndim == 4 and patch_beziers.shape[1] != grid_size:
+        patch_beziers = patch_beziers.view(B, grid_size, grid_size, 4, 2)
+        
+    probs = torch.softmax(patch_logits, dim=-1).detach().cpu().numpy()
+    beziers = patch_beziers.detach().cpu().numpy()
+    
+    batch_masks = np.zeros((B, num_classes, img_size, img_size), dtype=np.float32)
+    for b in range(B):
+        _, class_masks = merge_patch_beziers_to_image(
+            patch_classes=probs[b],
+            patch_beziers=beziers[b],
+            patch_size=patch_size,
+            img_size=img_size,
+            threshold=threshold,
+            stroke_thickness=stroke_thickness,
+            return_class_masks=True
+        )
+        batch_masks[b] = class_masks
+        
+    return batch_masks
+
+
+def compute_batch_dice(
+    pred_masks: np.ndarray,
+    target_masks: np.ndarray,
+    eps: float = 1e-6,
+    active_only: bool = True
+) -> dict:
+    """
+    Computes Dice similarity metrics between predicted and target pixel masks.
+    
+    Args:
+        pred_masks: (B, C, H, W) numpy array
+        target_masks: (B, C, H, W) numpy array or torch.Tensor
+        eps: numerical epsilon
+        active_only: compute per-class dice only on classes present in GT or Pred
+        
+    Returns:
+        dict with:
+            binary_dice: float (all landmark classes combined)
+            macro_class_dice: float (macro average across landmark classes)
+            class_dice: dict of {1: ridge_dice, 2: sil_dice, 3: lig_dice, 4: gall_dice}
+    """
+    if isinstance(target_masks, torch.Tensor):
+        target_masks = target_masks.detach().cpu().numpy()
+        
+    B, C, H, W = pred_masks.shape
+    sample_binary_dices = []
+    class_dices = {c: [] for c in range(1, C + 1)}
+    
+    for b in range(B):
+        # 1. Binary Dice (any landmark vs background)
+        pred_bin = (pred_masks[b].sum(axis=0) > 0).astype(np.float32)
+        tgt_bin = (target_masks[b].sum(axis=0) > 0).astype(np.float32)
+        
+        inter_bin = np.sum(pred_bin * tgt_bin)
+        total_bin = np.sum(pred_bin) + np.sum(tgt_bin)
+        
+        if total_bin < eps:
+            sample_binary_dices.append(1.0)
+        else:
+            sample_binary_dices.append(float((2.0 * inter_bin + eps) / (total_bin + eps)))
+            
+        # 2. Per-class Dice
+        for c in range(C):
+            cls_id = c + 1
+            p_c = pred_masks[b, c]
+            t_c = target_masks[b, c]
+            total_c = np.sum(p_c) + np.sum(t_c)
+            if total_c < eps:
+                if not active_only:
+                    class_dices[cls_id].append(1.0)
+            else:
+                inter_c = np.sum(p_c * t_c)
+                dice_c = float((2.0 * inter_c + eps) / (total_c + eps))
+                class_dices[cls_id].append(dice_c)
+                
+    mean_binary_dice = float(np.mean(sample_binary_dices)) if sample_binary_dices else 0.0
+    mean_class_scores = [np.mean(v) for v in class_dices.values() if len(v) > 0]
+    macro_class_dice = float(np.mean(mean_class_scores)) if mean_class_scores else mean_binary_dice
+    
+    return {
+        "binary_dice": mean_binary_dice,
+        "macro_class_dice": macro_class_dice,
+        "class_dice": {k: (float(np.mean(v)) if v else 0.0) for k, v in class_dices.items()}
+    }

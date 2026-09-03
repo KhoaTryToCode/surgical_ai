@@ -17,7 +17,7 @@ if exp_root not in sys.path:
 from configs.exp09_config import config
 from models.patch_vector_vit import PatchBezierViT
 from models.patch_losses import PatchBezierLoss
-from models.patch_merger import merge_patch_beziers_to_image
+from models.patch_merger import merge_patch_beziers_to_image, batch_vector_to_pixel_masks, compute_batch_dice
 from utils.dataset_patch_vit import PatchBezierLandmarkDataset
 
 
@@ -150,6 +150,7 @@ def main():
     # Checkpoint directory
     os.makedirs(args.save_dir, exist_ok=True)
     best_val_loss = float("inf")
+    best_val_dice = 0.0
 
     # Training Loop
     for epoch in range(1, args.epochs + 1):
@@ -193,9 +194,11 @@ def main():
         avg_ctrl_loss = train_ctrl_accum / max(num_batches, 1)
         avg_sample_loss = train_sample_accum / max(num_batches, 1)
 
-        # Validation Step
+        # Validation Step with Vector-to-Pixel Mask Conversion & Dice Score
         model.eval()
         val_loss_accum = 0.0
+        val_bin_dice_accum = 0.0
+        val_macro_dice_accum = 0.0
         val_batches = 0
         with torch.no_grad():
             for batch in val_loader:
@@ -203,18 +206,35 @@ def main():
                 target_classes = batch["target_classes"].to(device)
                 target_beziers = batch["target_beziers"].to(device)
                 active_mask = batch["active_mask"].to(device)
+                target_masks = batch["target_masks"]  # (B, C, H, W)
 
                 pred_dict = model(images)
                 loss_dict = criterion(pred_dict, target_classes, target_beziers, active_mask)
                 val_loss_accum += loss_dict["loss"].item()
+
+                # Vector to Pixel Conversion & Multi-class Dice Evaluation
+                pred_pixel_masks = batch_vector_to_pixel_masks(
+                    patch_logits=pred_dict["patch_logits"],
+                    patch_beziers=pred_dict["patch_beziers"],
+                    patch_size=config.patch_size,
+                    img_size=config.image_size,
+                    threshold=config.confidence_thresh,
+                    stroke_thickness=config.stroke_thickness,
+                    num_classes=config.num_classes
+                )
+                batch_dice = compute_batch_dice(pred_pixel_masks, target_masks)
+                val_bin_dice_accum += batch_dice["binary_dice"]
+                val_macro_dice_accum += batch_dice["macro_class_dice"]
                 val_batches += 1
 
         avg_val_loss = val_loss_accum / max(val_batches, 1)
+        avg_val_bin_dice = val_bin_dice_accum / max(val_batches, 1)
+        avg_val_macro_dice = val_macro_dice_accum / max(val_batches, 1)
 
         print(
             f"Epoch [{epoch:03d}/{args.epochs:03d}] | "
             f"Train Loss: {avg_train_loss:.4f} (Cls: {avg_cls_loss:.4f}, Ctrl: {avg_ctrl_loss:.4f}, Sample: {avg_sample_loss:.4f}) | "
-            f"Val Loss: {avg_val_loss:.4f} | LR: {optimizer.param_groups[1]['lr']:.2e}"
+            f"Val Loss: {avg_val_loss:.4f} | Val Dice: {avg_val_bin_dice:.4f} (Macro: {avg_val_macro_dice:.4f}) | LR: {optimizer.param_groups[1]['lr']:.2e}"
         )
 
         if use_wandb:
@@ -225,11 +245,14 @@ def main():
                 "train/loss_ctrl": avg_ctrl_loss,
                 "train/loss_sample": avg_sample_loss,
                 "val/loss": avg_val_loss,
+                "val/dice_binary": avg_val_bin_dice,
+                "val/dice_macro": avg_val_macro_dice,
                 "lr": optimizer.param_groups[1]['lr']
             })
 
-        # Save Best Model
-        if avg_val_loss < best_val_loss:
+        # Save Best Model (prioritize highest validation binary Dice)
+        if avg_val_bin_dice > best_val_dice:
+            best_val_dice = avg_val_bin_dice
             best_val_loss = avg_val_loss
             best_path = os.path.join(args.save_dir, "best_model.pth")
             torch.save({
@@ -237,9 +260,11 @@ def main():
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "val_loss": best_val_loss,
+                "val_bin_dice": best_val_dice,
+                "val_macro_dice": avg_val_macro_dice,
                 "config": vars(config)
             }, best_path)
-            print(f"   🌟 New best model saved to: {best_path} (Val Loss: {best_val_loss:.4f})")
+            print(f"   🌟 New best model saved to: {best_path} (Val Dice: {best_val_dice:.4f}, Val Loss: {best_val_loss:.4f})")
 
         # Periodic checkpoint
         if epoch % 20 == 0:
@@ -247,7 +272,7 @@ def main():
             torch.save(model.state_dict(), ckpt_path)
 
     print("=" * 75)
-    print(f"🏁 Training complete! Best Val Loss: {best_val_loss:.4f}")
+    print(f"🏁 Training complete! Best Val Dice: {best_val_dice:.4f} (Val Loss: {best_val_loss:.4f})")
     print("=" * 75)
 
 
