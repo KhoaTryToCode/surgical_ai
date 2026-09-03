@@ -18,7 +18,19 @@ cd Surgical_AI
 
 ---
 
-## 2. Model Execution Commands
+## 2. Dataset Preparation & Precomputations
+
+### Precompute Depth Anything V2 (Train, Val, Test)
+```bash
+python shared/utils/precompute_depth_anything.py \
+  --data_path /kaggle/working/L3D \
+  --batch_size 8 \
+  --model_id depth-anything/Depth-Anything-V2-Base-hf
+```
+
+---
+
+## 3. Model Execution Commands
 
 ### Mask2Former Baseline Ablation Run
 ```bash
