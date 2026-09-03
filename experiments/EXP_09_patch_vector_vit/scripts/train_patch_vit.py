@@ -1,5 +1,14 @@
 import os
+import warnings
+
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", module="torch.amp.*")
+warnings.filterwarnings("ignore", module="torch.cuda.amp.*")
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 import sys
 import argparse
 import time
@@ -150,7 +159,10 @@ def main():
     ], weight_decay=config.weight_decay)
 
     scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=config.min_lr)
-    scaler = torch.cuda.amp.GradScaler(enabled=args.amp and device.type == "cuda")
+    try:
+        scaler = torch.amp.GradScaler('cuda', enabled=args.amp and device.type == "cuda")
+    except Exception:
+        scaler = torch.cuda.amp.GradScaler(enabled=args.amp and device.type == "cuda")
 
     # Checkpoint directory
     os.makedirs(args.save_dir, exist_ok=True)
@@ -178,7 +190,12 @@ def main():
             active_mask = batch["active_mask"].to(device)
 
             optimizer.zero_grad()
-            with torch.cuda.amp.autocast(enabled=args.amp and device.type == "cuda"):
+            try:
+                amp_ctx = torch.amp.autocast('cuda', enabled=args.amp and device.type == "cuda")
+            except Exception:
+                amp_ctx = torch.cuda.amp.autocast(enabled=args.amp and device.type == "cuda")
+
+            with amp_ctx:
                 pred_dict = model(images)
                 loss_dict = criterion(pred_dict, target_classes, target_beziers, active_mask)
                 loss = loss_dict["loss"]
@@ -219,7 +236,12 @@ def main():
                 active_mask = batch["active_mask"].to(device)
                 target_masks = batch["target_masks"]  # (B, C, H, W)
 
-                with torch.cuda.amp.autocast(enabled=args.amp and device.type == "cuda"):
+                try:
+                    val_amp_ctx = torch.amp.autocast('cuda', enabled=args.amp and device.type == "cuda")
+                except Exception:
+                    val_amp_ctx = torch.cuda.amp.autocast(enabled=args.amp and device.type == "cuda")
+
+                with val_amp_ctx:
                     pred_dict = model(images)
                     loss_dict = criterion(pred_dict, target_classes, target_beziers, active_mask)
                 val_loss_accum += loss_dict["loss"].item()

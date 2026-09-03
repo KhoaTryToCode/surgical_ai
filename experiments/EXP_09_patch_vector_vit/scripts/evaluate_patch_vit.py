@@ -1,5 +1,12 @@
 import os
+import warnings
+
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", module="torch.amp.*")
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+
 import sys
 import argparse
 import numpy as np
