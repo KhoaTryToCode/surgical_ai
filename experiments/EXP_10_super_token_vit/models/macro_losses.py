@@ -43,6 +43,7 @@ class MacroPatchLoss(nn.Module):
         lambda_sample: float = 5.0,
         lambda_tan: float = 1.0,
         lambda_cont: float = 1.5,
+        lambda_tan_cont: float = 1.0,
         macro_grid_size: int = 8,
         macro_patch_size: int = 64
     ):
@@ -52,6 +53,7 @@ class MacroPatchLoss(nn.Module):
         self.lambda_sample = lambda_sample
         self.lambda_tan = lambda_tan
         self.lambda_cont = lambda_cont
+        self.lambda_tan_cont = lambda_tan_cont
         self.macro_grid_size = macro_grid_size
         self.macro_patch_size = macro_patch_size
         
@@ -90,7 +92,7 @@ class MacroPatchLoss(nn.Module):
             gt_sampled = sample_cubic_bezier_batch(gt_active_ctrl, num_samples=10)
             loss_sample = F.l1_loss(pred_sampled, gt_sampled)
             
-            # Tangent direction alignment
+            # Tangent direction alignment inside patch
             pred_tan_start = pred_active_ctrl[:, 1] - pred_active_ctrl[:, 0]
             gt_tan_start = gt_active_ctrl[:, 1] - gt_active_ctrl[:, 0]
             pred_tan_end = pred_active_ctrl[:, 3] - pred_active_ctrl[:, 2]
@@ -104,8 +106,9 @@ class MacroPatchLoss(nn.Module):
             loss_sample = torch.tensor(0.0, device=device)
             loss_tan = torch.tensor(0.0, device=device)
             
-        # 3. Inter-Macro Endpoint Continuity Loss (Adjacent Macro-Patches)
+        # 3. Inter-Macro Endpoint (C0) and Tangent (C1) Continuity Loss
         loss_cont = torch.tensor(0.0, device=device)
+        loss_tan_cont = torch.tensor(0.0, device=device)
         cont_pairs = 0
         G = self.macro_grid_size
         P = self.macro_patch_size
@@ -113,14 +116,18 @@ class MacroPatchLoss(nn.Module):
         # Check horizontal adjacent neighbors: (r, c) and (r, c+1)
         for r in range(G):
             for c in range(G - 1):
-                # Active in both and belonging to the same landmark class
                 mask_pair = active_mask[:, r, c] & active_mask[:, r, c + 1] & (target_classes[:, r, c] == target_classes[:, r, c + 1])
                 if mask_pair.sum() > 0:
-                    # Global exit point of left patch: c*P + P3*P
+                    # C0 Continuity: endpoint distance
                     exit_pt = c * P + macro_beziers[mask_pair, r, c, 3] * P
-                    # Global entry point of right patch: (c+1)*P + P0*P
                     entry_pt = (c + 1) * P + macro_beziers[mask_pair, r, c + 1, 0] * P
                     loss_cont = loss_cont + F.l1_loss(exit_pt / P, entry_pt / P)
+                    
+                    # C1 Continuity: tangent vector alignment
+                    vec_exit = macro_beziers[mask_pair, r, c, 3] - macro_beziers[mask_pair, r, c, 2]
+                    vec_entry = macro_beziers[mask_pair, r, c + 1, 1] - macro_beziers[mask_pair, r, c + 1, 0]
+                    cos_sim = F.cosine_similarity(vec_exit, vec_entry + 1e-6, dim=-1)
+                    loss_tan_cont = loss_tan_cont + (1.0 - cos_sim).mean()
                     cont_pairs += 1
                     
         # Check vertical adjacent neighbors: (r, c) and (r+1, c)
@@ -131,10 +138,16 @@ class MacroPatchLoss(nn.Module):
                     exit_pt = r * P + macro_beziers[mask_pair, r, c, 3] * P
                     entry_pt = (r + 1) * P + macro_beziers[mask_pair, r + 1, c, 0] * P
                     loss_cont = loss_cont + F.l1_loss(exit_pt / P, entry_pt / P)
+                    
+                    vec_exit = macro_beziers[mask_pair, r, c, 3] - macro_beziers[mask_pair, r, c, 2]
+                    vec_entry = macro_beziers[mask_pair, r + 1, c, 1] - macro_beziers[mask_pair, r + 1, c, 0]
+                    cos_sim = F.cosine_similarity(vec_exit, vec_entry + 1e-6, dim=-1)
+                    loss_tan_cont = loss_tan_cont + (1.0 - cos_sim).mean()
                     cont_pairs += 1
                     
         if cont_pairs > 0:
             loss_cont = loss_cont / float(cont_pairs)
+            loss_tan_cont = loss_tan_cont / float(cont_pairs)
             
         # Total Weighted Loss
         total_loss = (
@@ -142,7 +155,8 @@ class MacroPatchLoss(nn.Module):
             self.lambda_ctrl * loss_ctrl +
             self.lambda_sample * loss_sample +
             self.lambda_tan * loss_tan +
-            self.lambda_cont * loss_cont
+            self.lambda_cont * loss_cont +
+            self.lambda_tan_cont * loss_tan_cont
         )
         
         return {
@@ -151,5 +165,6 @@ class MacroPatchLoss(nn.Module):
             "loss_ctrl": loss_ctrl,
             "loss_sample": loss_sample,
             "loss_tan": loss_tan,
-            "loss_cont": loss_cont
+            "loss_cont": loss_cont,
+            "loss_tan_cont": loss_tan_cont
         }

@@ -93,6 +93,7 @@ def run_smoke_test():
         lambda_sample=config.lambda_sample,
         lambda_tan=config.lambda_tan,
         lambda_cont=config.lambda_cont,
+        lambda_tan_cont=config.lambda_tan_cont,
         macro_grid_size=8,
         macro_patch_size=64
     )
@@ -110,7 +111,8 @@ def run_smoke_test():
     print(f"    - L_ctrl (Smooth L1):      {loss_dict['loss_ctrl'].item():.4f}")
     print(f"    - L_sample (Curve L1):     {loss_dict['loss_sample'].item():.4f}")
     print(f"    - L_tan (Tangent):         {loss_dict['loss_tan'].item():.4f}")
-    print(f"    - L_cont (Continuity):     {loss_dict['loss_cont'].item():.4f}")
+    print(f"    - L_cont (C0 Continuity):  {loss_dict['loss_cont'].item():.4f}")
+    print(f"    - L_tan_cont (C1 Tangent): {loss_dict['loss_tan_cont'].item():.4f}")
     
     assert not torch.isnan(total_loss), "Loss contains NaN!"
     print("  ✅ Macro loss computation passed.")
@@ -122,11 +124,13 @@ def run_smoke_test():
     total_loss.backward()
     
     assert model.macro_merge[0].weight.grad is not None, "Gradients failed to reach macro_merge conv!"
-    assert model.relational_transformer.layers[0].linear1.weight.grad is not None, "Gradients failed to reach relational transformer!"
+    assert model.macro_peg1.conv[0].weight.grad is not None, "Gradients failed to reach macro_peg1!"
+    assert model.transformer_block1.linear1.weight.grad is not None, "Gradients failed to reach transformer_block1!"
     assert model.bezier_head[1].weight.grad is not None, "Gradients failed to reach bezier_head!"
     
     print(f"  • macro_merge Grad Norm:     {model.macro_merge[0].weight.grad.norm().item():.5f}")
-    print(f"  • relational_trans Grad Norm:{model.relational_transformer.layers[0].linear1.weight.grad.norm().item():.5f}")
+    print(f"  • macro_peg1 Grad Norm:      {model.macro_peg1.conv[0].weight.grad.norm().item():.5f}")
+    print(f"  • trans_block1 Grad Norm:    {model.transformer_block1.linear1.weight.grad.norm().item():.5f}")
     print(f"  • bezier_head Grad Norm:     {model.bezier_head[1].weight.grad.norm().item():.5f}")
     
     # Test global coordinate reconstruction and rendering

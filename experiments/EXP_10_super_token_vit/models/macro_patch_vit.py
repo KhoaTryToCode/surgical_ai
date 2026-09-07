@@ -4,15 +4,54 @@ import torch.nn.functional as F
 import timm
 
 
+class PositionalEncodingGenerator(nn.Module):
+    """
+    Conditional Positional Encoding Generator (PEG / CPVT, Chu et al.).
+    
+    Generates dynamic, continuous positional signals directly from 2D visual feature maps
+    via a depthwise convolution with zero-padding.
+    
+    Properties:
+    1. Tissue-Adaptive: When the organ is retracted, rotated, or flipped (Patient 40),
+       the generated positional embeddings naturally deform and rotate WITH the tissue.
+    2. Translation Equivariant: Eliminates hardcoded absolute coordinates that cause
+       pos_embed conflicts.
+    3. Smooth: Promotes continuous tangent alignment between neighboring patches.
+    """
+    def __init__(self, embed_dim: int = 768, kernel_size: int = 3):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(
+                embed_dim,
+                embed_dim,
+                kernel_size=kernel_size,
+                stride=1,
+                padding=kernel_size // 2,
+                groups=embed_dim,
+                bias=True
+            ),
+            nn.GroupNorm(num_groups=32, num_channels=embed_dim),
+            nn.GELU()
+        )
+
+    def forward(self, x_tokens: torch.Tensor, grid_h: int = 8, grid_w: int = 8) -> torch.Tensor:
+        B, N, D = x_tokens.shape
+        x_2d = x_tokens.transpose(1, 2).contiguous().view(B, D, grid_h, grid_w)
+        pos = self.conv(x_2d)
+        pos_tokens = pos.flatten(2).transpose(1, 2).contiguous()
+        return x_tokens + pos_tokens
+
+
 class MacroPatchViT(nn.Module):
     """
-    EXP_10: Macro-Patch Geometric Vision Transformer (Way A).
+    EXP_10: Macro-Patch Geometric Vision Transformer with Soft Positional Encoding (PEG).
     
     Pipeline:
     1. ViT-Base Backbone (in_chans=4 RGB-D) -> Micro-tokens: (B, 1024, 768) on 32x32 grid (16px patches)
     2. Spatial Macro-Merge: 4x4 grouping conv -> Macro-tokens: (B, 64, 768) on 8x8 grid (64px patches)
-    3. Inter-Macro Relational Transformer: 2 layers of all-to-all self-attention for global organ pose
-    4. Per-Macro Dual Heads:
+    3. Dynamic Soft Positional Encoding (PEG): Content-driven positional signal deforming with organ
+    4. Inter-Macro Relational Transformer: Multi-stage self-attention with intermediate PEG
+    5. Per-Macro Dual Heads:
        - Classification Head: Linear(D -> 256 -> 5) -> (B, 8, 8, 5)
        - Bézier Head: MLP(D -> 256 -> 8) + Sigmoid -> (B, 8, 8, 4, 2) in local patch [0, 1]^2
     """
@@ -84,11 +123,12 @@ class MacroPatchViT(nn.Module):
             nn.GELU()
         )
         
-        # Macro positional embeddings for 8x8 grid
-        self.macro_pos_embed = nn.Parameter(torch.randn(1, self.num_macro_patches, self.embed_dim) * 0.02)
+        # 3. Dynamic Soft Positional Encoding Generator (PEG) - No rigid static lookup!
+        self.macro_peg1 = PositionalEncodingGenerator(embed_dim=self.embed_dim, kernel_size=3)
+        self.macro_peg2 = PositionalEncodingGenerator(embed_dim=self.embed_dim, kernel_size=3)
         
-        # 3. Inter-Macro Relational Transformer (All-to-all self-attention for global organ pose)
-        macro_encoder_layer = nn.TransformerEncoderLayer(
+        # 4. Inter-Macro Relational Transformer (All-to-all self-attention for global organ pose)
+        macro_encoder_layer1 = nn.TransformerEncoderLayer(
             d_model=self.embed_dim,
             nhead=macro_heads,
             dim_feedforward=self.embed_dim * 4,
@@ -97,7 +137,17 @@ class MacroPatchViT(nn.Module):
             batch_first=True,
             norm_first=True
         )
-        self.relational_transformer = nn.TransformerEncoder(macro_encoder_layer, num_layers=macro_depth)
+        macro_encoder_layer2 = nn.TransformerEncoderLayer(
+            d_model=self.embed_dim,
+            nhead=macro_heads,
+            dim_feedforward=self.embed_dim * 4,
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True
+        )
+        self.transformer_block1 = macro_encoder_layer1
+        self.transformer_block2 = macro_encoder_layer2
         self.macro_norm = nn.LayerNorm(self.embed_dim)
         
         # 4. Macro Classification Head (0 = background, 1..num_classes = surgical landmarks)
@@ -164,11 +214,13 @@ class MacroPatchViT(nn.Module):
         
         # Reshape to token sequence: (B, D, 8, 8) -> (B, 64, D)
         macro_tokens = macro_spatial.permute(0, 2, 3, 1).contiguous().view(B, self.num_macro_patches, self.embed_dim)
-        macro_tokens = macro_tokens + self.macro_pos_embed
         
-        # 3. Inter-Macro Relational Transformer (All-to-All Self-Attention)
-        macro_context = self.relational_transformer(macro_tokens)
-        macro_context = self.macro_norm(macro_context)
+        # 3. Dynamic Soft Positional Encoding & Relational Transformer (Multi-Stage PEG)
+        macro_tokens = self.macro_peg1(macro_tokens, macro_g, macro_g)
+        macro_tokens = self.transformer_block1(macro_tokens)
+        macro_tokens = self.macro_peg2(macro_tokens, macro_g, macro_g)
+        macro_tokens = self.transformer_block2(macro_tokens)
+        macro_context = self.macro_norm(macro_tokens)
         
         # 4. Predictions on the 64 Macro-Patches
         flat_logits = self.class_head(macro_context)                    # (B, 64, C+1)

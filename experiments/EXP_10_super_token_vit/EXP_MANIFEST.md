@@ -25,32 +25,43 @@ Given RGB-D input $X$ of shape $(B, 4, 512, 512)$:
 Reshape micro-tokens to 2D spatial feature map:
 - micro_spatial = reshape(micro_tokens) -> Shape: (B, D, 32, 32)
 - macro_spatial = Conv2d(kernel_size=4, stride=4)(micro_spatial) -> Shape: (B, D, 8, 8)
-- macro_tokens = reshape(macro_spatial) + macro_pos_embed -> Shape: (B, 64, D)
-Each macro-token aggregates the visual details of 16 constituent micro-patches covering a $64\times 64$ px territory.
+- macro_tokens = reshape(macro_spatial) -> Shape: (B, 64, D)
+Each macro-token aggregates visual details of 16 constituent micro-patches covering a 64x64 px territory.
 
-### C. Inter-Macro Relational Attention (Global Organ Pose)
+### C. Dynamic Soft Positional Encoding Generator (PEG / CPVT)
+Instead of rigid, static lookup tables (nn.Parameter pos_embed) that clash when the organ is inverted or retracted (Patient 40):
+- pos_signal = Conv2d(groups=D, kernel_size=3, padding=1)(macro_spatial)
+- macro_tokens = macro_tokens + pos_signal
+Because the positional signal is derived via zero-padded depthwise convolutions over the 2D feature map, the coordinate frame dynamically deforms, translates, and rotates WITH the anatomical liver tissue.
+
+### D. Inter-Macro Relational Attention (Multi-Stage PEG)
 The 64 macro-tokens attend to each other across the entire organ:
-- macro_context = TransformerEncoder(macro_tokens) -> Shape: (B, 64, D)
-Macro-patch $(1, 2)$ at the top-left directly exchanges geometric signals with macro-patch $(7, 6)$ at the bottom-right. When surgical graspers rotate or retract the liver lobe (Patient 40), the relational attention weights adjust to the transformed coordinate system.
+- macro_tokens = PEG_1(macro_tokens)
+- macro_tokens = TransformerEncoderLayer_1(macro_tokens)
+- macro_tokens = PEG_2(macro_tokens)
+- macro_tokens = TransformerEncoderLayer_2(macro_tokens)
+- macro_context = LayerNorm(macro_tokens) -> Shape: (B, 64, D)
+Macro-patch (1, 2) at the top-left directly exchanges geometric signals with macro-patch (7, 6) at the bottom-right. When surgical graspers rotate or retract the liver lobe (Patient 40), the dynamic PEG signals and relational attention weights adjust to the transformed organ frame.
 
-### D. Per-Macro Dual Prediction Heads
-For each macro-patch $(r, c)$ where $r \in [0, 7], c \in [0, 7]$:
+### E. Per-Macro Dual Prediction Heads
+For each macro-patch (r, c) where r in [0, 7], c in [0, 7]:
 - macro_logits = Linear(D -> 256 -> 5) -> Shape: (B, 8, 8, 5)  [0: BG, 1: Ridge, 2: Silhouette, 3: Ligament, 4: Gallbladder]
 - macro_beziers = Sigmoid(MLP(D -> 256 -> 8)) -> Shape: (B, 8, 8, 4, 2)  [P0, P1, P2, P3] in [0, 1]^2
 
-### E. Spatial Coordinate Anchoring (Anti-Teleport Guarantee)
-Global coordinates on the $512\times 512$ image canvas:
+### F. Spatial Coordinate Anchoring (Anti-Teleport Guarantee)
+Global coordinates on the 512x512 image canvas:
 - P_global_x = c * 64 + P_local_x * 64
 - P_global_y = r * 64 + P_local_y * 64
-Because $P_{\text{local}} \in [0, 1]$, the curve predicted by macro-patch $(r, c)$ is strictly locked within $[c\cdot 64, (c+1)\cdot 64] \times [r\cdot 64, (r+1)\cdot 64]$.
+Because P_local in [0, 1], the curve predicted by macro-patch (r, c) is strictly locked within [c*64, (c+1)*64] x [r*64, (r+1)*64].
 
-### F. Multi-Task Macro Loss Objective
-Total_Loss = lambda_cls * L_cls + lambda_ctrl * L_ctrl + lambda_sample * L_sample + lambda_tan * L_tan + lambda_cont * L_cont
+### G. Multi-Task Macro Loss Objective
+Total_Loss = lambda_cls * L_cls + lambda_ctrl * L_ctrl + lambda_sample * L_sample + lambda_tan * L_tan + lambda_cont * L_cont + lambda_tan_cont * L_tan_cont
 - L_cls: MacroFocalLoss(macro_logits, target_classes)
 - L_ctrl: Smooth_L1(macro_beziers[active], target_beziers[active], beta=0.02)
 - L_sample: L1(sampled_bezier_pts, target_sampled_pts)
-- L_tan: (1 - cos_similarity(P1 - P0, P1_gt - P0_gt)) + (1 - cos_similarity(P3 - P2, P3_gt - P2_gt))
-- L_cont: Mean L1 distance between exit point of patch $(r, c)$ and entry point of adjacent active patch $(r', c')$
+- L_tan: Endpoint tangent alignment inside patch: (1 - cos(P1 - P0, P1_gt - P0_gt)) + (1 - cos(P3 - P2, P3_gt - P2_gt))
+- L_cont: C0 Endpoint continuity: Mean L1 distance between exit point of patch (r, c) and entry point of adjacent active patch (r', c')
+- L_tan_cont: C1 Tangent angle continuity: (1 - cos(P3(r,c) - P2(r,c), P1(r',c') - P0(r',c'))) across adjacent active patches, preventing matchstick kinks
 
 ---
 
@@ -92,7 +103,8 @@ experiments/EXP_10_super_token_vit/
 | `lambda_cls` | 2.0 | Macro classification Focal loss |
 | `lambda_ctrl` | 5.0 | Control point coordinate Smooth L1 |
 | `lambda_sample` | 5.0 | Sampled curve L1 loss |
-| `lambda_tan` | 1.0 | Tangent cosine alignment |
-| `lambda_cont` | 1.5 | Adjacent macro-patch endpoint continuity loss |
+| `lambda_tan` | 1.0 | Tangent cosine alignment inside patch |
+| `lambda_cont` | 1.5 | Adjacent macro-patch endpoint (C0) continuity loss |
+| `lambda_tan_cont` | 1.0 | Adjacent macro-patch tangent angle (C1) continuity loss |
 | `learning_rate` | 1e-4 | Head learning rate with 0.1x backbone multiplier (1e-5) |
 | `batch_size` | 16 | Optimized for single 16GB GPU (T4 / P100 / RTX 3090) |

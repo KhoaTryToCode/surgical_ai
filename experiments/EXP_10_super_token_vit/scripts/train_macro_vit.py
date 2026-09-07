@@ -156,6 +156,7 @@ def main():
         lambda_sample=5.0,
         lambda_tan=1.0,
         lambda_cont=1.5,
+        lambda_tan_cont=1.0,
         macro_grid_size=512 // args.macro_patch_size,
         macro_patch_size=args.macro_patch_size
     )
@@ -173,6 +174,7 @@ def main():
         train_ctrl_accum = 0.0
         train_sample_accum = 0.0
         train_cont_accum = 0.0
+        train_tan_cont_accum = 0.0
 
         for batch_idx, batch in enumerate(train_loader):
             img = batch["image"].to(device, non_blocking=True)
@@ -199,6 +201,7 @@ def main():
             train_ctrl_accum += loss_dict["loss_ctrl"].item()
             train_sample_accum += loss_dict["loss_sample"].item()
             train_cont_accum += loss_dict["loss_cont"].item()
+            train_tan_cont_accum += loss_dict["loss_tan_cont"].item()
 
         scheduler.step()
         num_batches = max(len(train_loader), 1)
@@ -207,6 +210,7 @@ def main():
         t_ctrl = train_ctrl_accum / num_batches
         t_samp = train_sample_accum / num_batches
         t_cont = train_cont_accum / num_batches
+        t_tcont = train_tan_cont_accum / num_batches
 
         # -------------------------------------------------------------
         # Validation Evaluation

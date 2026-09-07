@@ -81,7 +81,8 @@ class EXP10Config:
     lambda_ctrl: float = 5.0         # Control point Smooth L1 weight (active patches)
     lambda_sample: float = 5.0       # Sampled curve L1 weight
     lambda_tan: float = 1.0          # Tangent cosine alignment weight
-    lambda_cont: float = 1.5         # Adjacent macro-patch endpoint continuity loss weight
+    lambda_cont: float = 1.5         # Adjacent macro-patch endpoint (C0) continuity loss weight
+    lambda_tan_cont: float = 1.0     # Adjacent macro-patch tangent angle (C1) continuity loss weight
     
     # Class weights for focal loss: [0: Background, 1: Ridge, 2: Silhouette, 3: Ligament, 4: Gallbladder]
     class_weights: tuple = (0.20, 1.0, 1.0, 2.5, 3.0)
