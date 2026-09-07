@@ -31,26 +31,26 @@ def resolve_dataset_dir() -> str:
 @dataclass
 class EXP10Config:
     """
-    Configuration for EXP_10: Super-Token Geometric ViT.
+    Configuration for EXP_10: Macro-Patch Geometric Vision Transformer (Way A).
     
-    Architecture:
+    Key Principles:
     - Input resolution: 512x512
-    - Channels: 4 (RGB + Depth Anything V2) or 3 (RGB-only)
-    - Patch size P = 16 (Grid: 32x32 = 1024 patches)
-    - ViT Backbone: timm vit_base_patch16_224 (in_chans=4) or modular ViT encoder fallback
-    - Global Organ Pose Conditioning via [CLS] token (captures organ flip/retraction for Patient 40)
-    - Super-Token Cross-Attention: Soft pooling of 1024 patches into C=4 landmark super-tokens
-    - Global Curve Decoder: 6 control points (K=6) in [0, 1]^2 -> 12 parameters per landmark
-    - Dual-Domain Supervision: Vector Smooth L1 (JSON) + Differentiable Soft Dice (GT Mask) + Attention BCE
+    - Channels: 4 (RGB + Depth Anything V2)
+    - Micro-Patch size (ViT): P_micro = 16 px -> Grid 32x32 = 1,024 micro-tokens
+    - Macro-Patch size (Prediction): P_macro = 64 px -> Grid 8x8 = 64 macro-tokens
+    - Merge factor: 4x4 micro-patches (16 tokens) -> 1 macro-patch
+    - Inter-Macro Relational Attention: All-to-all self-attention on 64 macro-tokens for global organ pose
+    - Spatial Anchor: Local coordinates in [0, 1] scaled by 64 and shifted by (c*64, r*64)
+    - Continuity: Inter-macro endpoint continuity loss + 80% fewer boundary seams
     """
     # ---------- Geometry & Grid Specs ----------
     image_size: int = 512            # Input resolution (512x512)
-    patch_size: int = 16             # P = 16 px -> Grid 32x32
-    grid_size: int = 32              # 512 / 16 = 32
-    num_patches: int = 1024          # 32 x 32 = 1024
-    num_classes: int = 4             # 1: Ridge, 2: Silhouette, 3: Falciform Ligament, 4: Gallbladder Boundary
+    micro_patch_size: int = 16       # ViT feature patch size (16 px)
+    macro_patch_size: int = 64       # Macro-patch size for prediction (64 px)
+    grid_size: int = 8               # 512 / 64 = 8x8 macro-grid
+    num_patches: int = 64            # 8 x 8 = 64 macro-tokens
+    num_classes: int = 4             # 1: Ridge, 2: Silhouette, 3: Falciform Ligament, 4: Gallbladder (0: Background)
     
-    # Class names mapping (1-indexed for landmark queries)
     class_names: tuple = (
         "Anterior Ridge",
         "Liver Silhouette",
@@ -58,34 +58,34 @@ class EXP10Config:
         "Gallbladder Boundary"
     )
     
-    # ---------- Depth Anything V2 Modality ----------
-    use_depth: bool = True           # Ingest precomputed Depth Anything V2 maps as 4th channel
-    in_chans: int = 4                # 4 channels: [R, G, B, Depth]
+    # ---------- Modality ----------
+    use_depth: bool = True           # RGB-D 4 channels
+    in_chans: int = 4
     
-    # ---------- Global 6-Point Spline Curve Specs ----------
-    num_ctrl_points: int = 6         # K = 6 control points per landmark curve (P0..P5 in [0, 1]^2)
-    curve_sample_points: int = 64    # Number of evaluation points along curve for rendering/loss
-    stroke_thickness_px: float = 2.0 # Target stroke thickness in rasterized evaluation masks
+    # ---------- Cubic Bézier Specs ----------
+    spline_step_px: float = 8.0      # Polyline arc-length resampling step
+    num_ctrl_points: int = 4         # Cubic Bézier: P0, P1, P2, P3 inside each 64x64 macro-patch
+    num_sampled_points: int = 10     # Points sampled along curve for loss/continuity
+    stroke_thickness: int = 2        # Evaluation stroke thickness in pixels
     
-    # ---------- Backbone & Attention Specs ----------
-    backbone_name: str = "vit_base_patch16_224"  # ViT-Base: 86M params, 12 heads, 768 dim
+    # ---------- Backbone & Macro Transformer ----------
+    backbone_name: str = "vit_base_patch16_224"  # ViT-Base (86M params)
     pretrained: bool = True
-    embed_dim: int = 768             # Embedding dimension for vit_base
-    depth: int = 12                  # Transformer depth
-    num_heads: int = 12              # 12 attention heads
-    mlp_ratio: float = 4.0
+    embed_dim: int = 768
+    macro_depth: int = 2             # 2 relational self-attention layers on the 64 macro-tokens
+    macro_heads: int = 8             # 8 heads for inter-macro relational reasoning
     dropout: float = 0.0
-    cross_attn_heads: int = 8        # Multi-head cross-attention for super-token aggregation
     
-    # ---------- Loss Weights (Dual-Domain Supervision) ----------
-    lambda_attn: float = 2.0         # Patch-level attention heatmap BCE loss weight
-    lambda_vector: float = 5.0       # Global 6-control-point Smooth L1 loss weight
-    lambda_dice: float = 5.0         # Differentiable soft Dice loss weight against GT mask
-    lambda_exist: float = 1.5        # Landmark visibility/existence classification BCE loss weight
+    # ---------- Loss Weights ----------
+    lambda_cls: float = 2.0          # Macro classification Focal Loss weight
+    lambda_ctrl: float = 5.0         # Control point Smooth L1 weight (active patches)
+    lambda_sample: float = 5.0       # Sampled curve L1 weight
+    lambda_tan: float = 1.0          # Tangent cosine alignment weight
+    lambda_cont: float = 1.5         # Adjacent macro-patch endpoint continuity loss weight
     
-    # ---------- Focal Loss Hyperparams for Attention ----------
+    # Class weights for focal loss: [0: Background, 1: Ridge, 2: Silhouette, 3: Ligament, 4: Gallbladder]
+    class_weights: tuple = (0.20, 1.0, 1.0, 2.5, 3.0)
     focal_gamma: float = 2.0
-    focal_alpha: float = 0.75        # Favor sparse landmark patch foreground
     
     # ---------- Training Hyperparameters ----------
     batch_size: int = 16
@@ -96,13 +96,11 @@ class EXP10Config:
     num_epochs: int = 80
     warmup_epochs: int = 5
     min_lr: float = 1e-6
-    use_amp: bool = True             # Automatic Mixed Precision for CUDA training
+    use_amp: bool = True             # AMP on CUDA
     
     # ---------- Thresholds ----------
-    existence_thresh: float = 0.35   # Landmark existence probability threshold
-    attn_viz_thresh: float = 0.10    # Threshold for highlighting active patches in visualizer
+    confidence_thresh: float = 0.30  # Macro-patch activation threshold
     
     # ---------- Weights & Biases ----------
     wandb_key: str = "83f4544a22543e319c6009abceaac90b634c68a3"
-    wandb_project: str = "Surgical_AI_EXP10"
-    wandb_entity: str = ""
+    wandb_project: str = "Surgical_AI_EXP10_Macro"
