@@ -17,11 +17,13 @@ Usage:
 
 import os
 import sys
+import types
 import argparse
 import json
 import numpy as np
 import cv2
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -35,15 +37,34 @@ for p in [bcrnet_root, ws_root]:
 try:
     from adet import _C
 except ImportError:
+    mock_c = types.ModuleType("adet._C")
+    sys.modules["adet._C"] = mock_c
+
     import adet.layers.ms_deform_attn as ms_module
-    class _MockC:
-        @staticmethod
-        def ms_deform_attn_forward(value, shapes, starts, locs, weights, step):
-            return ms_module.ms_deform_attn_core_pytorch(value, shapes, locs, weights)
-        @staticmethod
-        def ms_deform_attn_backward(*args, **kwargs):
-            return None
-    ms_module._C = _MockC
+
+    def _fallback_forward(self, query, reference_points, input_flatten, input_spatial_shapes, input_level_start_index, input_padding_mask=None):
+        N, Len_q, _ = query.shape
+        N, Len_in, _ = input_flatten.shape
+        value = self.value_proj(input_flatten)
+        if input_padding_mask is not None:
+            value = value.masked_fill(input_padding_mask[..., None], float(0))
+        value = value.view(N, Len_in, self.n_heads, self.d_model // self.n_heads)
+        sampling_offsets = self.sampling_offsets(query).view(N, Len_q, self.n_heads, self.n_levels, self.n_points, 2)
+        attention_weights = self.attention_weights(query).view(N, Len_q, self.n_heads, self.n_levels * self.n_points)
+        attention_weights = F.softmax(attention_weights, -1).view(N, Len_q, self.n_heads, self.n_levels, self.n_points)
+
+        if reference_points.shape[-1] == 2:
+            offset_normalizer = torch.stack([input_spatial_shapes[..., 1], input_spatial_shapes[..., 0]], -1)
+            sampling_locations = reference_points[:, :, None, :, None, :] + sampling_offsets / offset_normalizer[None, None, None, :, None, :]
+        elif reference_points.shape[-1] == 4:
+            sampling_locations = reference_points[:, :, None, :, None, :2] + sampling_offsets / self.n_points * reference_points[:, :, None, :, None, 2:] * 0.5
+        else:
+            raise ValueError(f"Last dim of reference_points must be 2 or 4, got {reference_points.shape[-1]}")
+
+        output = ms_module.ms_deform_attn_core_pytorch(value, input_spatial_shapes, sampling_locations, attention_weights)
+        return self.output_proj(output)
+
+    ms_module.MSDeformAttn.forward = _fallback_forward
 
 from utils.bezier_dataset import BezierDataset, collate_fun
 from adet.modeling.bezier_detection import TransformerPureDetector
@@ -63,7 +84,6 @@ def compute_assd(pred_mask: np.ndarray, gt_mask: np.ndarray) -> float:
         return float(assd(pred_mask, gt_mask))
     except Exception:
         from scipy.ndimage import distance_transform_edt
-        # Extract boundaries
         kernel = np.ones((3, 3), np.uint8)
         pred_boundary = pred_mask & ~cv2.erode(pred_mask.astype(np.uint8), kernel, iterations=1)
         gt_boundary = gt_mask & ~cv2.erode(gt_mask.astype(np.uint8), kernel, iterations=1)

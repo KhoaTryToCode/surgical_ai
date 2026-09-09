@@ -25,4 +25,6 @@ env/
 *.log
 wandb/
 runs/
+.build_csrc/
+build/
 
