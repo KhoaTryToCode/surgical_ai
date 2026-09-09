@@ -271,3 +271,60 @@ L_sample = (1 / N_s) * sum_{j=1}^{N_s} SmoothL1( hat_P_{sampled, j} - gt_P_{samp
    Build adjacency graph where patch (r, c) connects to neighbor (r', c') if:
    || P_{3}^{(r, c)} - P_{0}^{(r', c')} ||_2 < threshold_px.
    Yields continuous, arbitrarily long anatomical curves.
+
+---
+
+## 6. Mathematical Specs for BCRNet (5th-Order Bezier Curve Refinement)
+
+### 6.1 5th-Order Parametric Bézier Representation
+Each curvilinear landmark is represented by 6 2D control points in normalized coordinates [0, 1]^2:
+b = [ b_1, b_2, b_3, b_4, b_5, b_6 ] in R^{6 x 2}
+
+Explicit trajectory B(t) for t in [0, 1]:
+B(t) = sum_{j=0}^5 C(5, j) * (1 - t)^{5-j} * t^j * b_{j+1}
+
+### 6.2 Adaptive Curve Proposal Initialization (ACPI)
+On high-level feature map f_4:
+For pixel i at normalized image coordinate c_i = (c_{ix}, c_{iy}) in [0, 1]^2, predict offset Delta b_i in R^12:
+b_{i}^j = ( sigma( Delta b_{ix}^j + logit(c_{ix}) ), sigma( Delta b_{iy}^j + logit(c_{iy}) ) )
+where sigma(z) = 1 / (1 + exp(-z)), and logit(p) = ln(p / (1 - p)).
+
+Initial top-K proposal selection per class m:
+hat_B^0 = { b_k | k in topk(s) }
+
+### 6.3 Hierarchical Curve Refinement (HCR)
+Sequential coarse-to-fine feature stages:
+Stage 1 on {f_3, f_4} -> Stage 2 on {f_2, f_3} -> Stage 3 on {f_1, f_2}
+
+Point Queries:
+- N - 1 = 25 uniformly spaced curve points P_s on B(t)
+- 1 center global point P* = B(0.5)
+Reference point coordinate tensor:
+P = [ P_s, P* ] in R^{M x K x N x 2}  (M = 3, K = 10, N = 26)
+
+Query Formulation:
+Q_p = MLP(PE(P)) in R^{M x K x N x C}
+Q = Q_p + Q_s (where Q_s is a learnable content query)
+
+Deformable cross-attention + 3-way structured self-attention:
+1. Intra-curve attention along dimension N (curve vertex continuity)
+2. Inter-curve attention along dimension K (proposal competition)
+3. Inter-category attention along dimension M (anatomical landmark relationships)
+
+Offset regression: P_s <- P_s + Delta P_s
+Refit new 5th-order Bézier curve hat_B from updated points P_s.
+
+### 6.4 Multi-Stage Loss & Sigmoid Annealing Schedule
+Auxiliary Deep Supervision on CNN decoder:
+L_s = sum_{l=1}^4 Dice( hat_S^l, S )
+
+Proposal Induction Loss on ACPI confidence:
+L_ind = BCE( hat_s_init, s* )
+where s* = 1 at GT landmark midpoints, 0 elsewhere.
+
+Annealing decay weight:
+lambda_d = 1 - sigma( (epoch - 10) / 2 )
+
+Overall Objective (supervised across initialization h=0 and 3 refinement stages h=1, 2, 3):
+L = lambda_d * (lambda_s * L_s + lambda_ind * L_ind) + (1 - lambda_d) * sum_{h=0}^3 [ lambda_cs * L_cs(hat_s^h) + lambda_crv * L_crv(hat_B^h) ]
+Hyperparameters: lambda_s = 10.0, lambda_ind = 1.0, lambda_cs = 1.0, lambda_crv = 1.0.
