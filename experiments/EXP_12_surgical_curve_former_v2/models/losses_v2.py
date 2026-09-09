@@ -290,12 +290,15 @@ class SurgicalCurveFormerV2Loss(nn.Module):
                     best_k = torch.argmin(bidir_errs)
                     stage_crv = stage_crv + bidir_errs[best_k]
                     
-                    # Score cross-entropy: best_k should have high confidence
+                    # Score cross-entropy: best_k should have high confidence (AMP-safe float32)
                     target_scores = torch.zeros_like(scores_h[b, m])
                     target_scores[best_k] = 1.0
-                    cs_loss = F.binary_cross_entropy(scores_h[b, m], target_scores)
+                    p_score = scores_h[b, m].float().clamp(1e-6, 1.0 - 1e-6)
+                    t_score = target_scores.float()
+                    cs_loss = -(t_score * torch.log(p_score) + (1.0 - t_score) * torch.log(1.0 - p_score)).mean()
                     stage_cs = stage_cs + cs_loss
                     count += 1
+
 
             if count > 0:
                 l_crv_total = l_crv_total + (stage_crv / count)
