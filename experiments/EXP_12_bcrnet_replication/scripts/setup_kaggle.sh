@@ -4,6 +4,8 @@ set -e
 
 echo "🚀 [1/4] Installing Python dependencies..."
 pip install -q \
+    fvcore \
+    iopath \
     einops \
     scipy \
     shapely \

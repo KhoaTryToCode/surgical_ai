@@ -77,6 +77,12 @@ if len(c_ext_files) == 0:
 
     MSDeformAttn.forward = _fallback_forward
 
+try:
+    import fvcore
+except ImportError:
+    import subprocess
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "fvcore", "iopath"], check=True)
+
 from utils.bezier_dataset import BezierDataset, collate_fun
 from adet.modeling.bezier_detection import TransformerPureDetector
 from utils.config_utils import load_config
