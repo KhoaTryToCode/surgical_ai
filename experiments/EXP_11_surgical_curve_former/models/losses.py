@@ -338,11 +338,13 @@ class HCRCurveLoss(nn.Module):
         best_idx = dist_per_prop.argmin(dim=-1)  # (B, M)
 
         # Gather best proposal ctrl pts: (B, M, K_ctrl, 2)
-        idx_exp = best_idx.unsqueeze(-1).unsqueeze(-1).expand(B, M, 1, K_ctrl, 2)
+        # best_idx: (B, M) → (B, M, 1, 1, 1) → expand → (B, M, 1, K_ctrl, 2)
+        idx_exp = best_idx.unsqueeze(2).unsqueeze(3).unsqueeze(4).expand(B, M, 1, K_ctrl, 2)
         best_pred_ctrl = ctrl_pts_pred.gather(dim=2, index=idx_exp).squeeze(2)  # (B, M, K_ctrl, 2)
 
         # Gather best proposal samples
-        idx_samp_exp = best_idx.unsqueeze(-1).unsqueeze(-1).expand(B, M, 1, self.N, 2)
+        # best_idx: (B, M) → (B, M, 1, 1, 1) → expand → (B, M, 1, N, 2)
+        idx_samp_exp = best_idx.unsqueeze(2).unsqueeze(3).unsqueeze(4).expand(B, M, 1, self.N, 2)
         best_pred_samp = pred_sampled.gather(dim=2, index=idx_samp_exp).squeeze(2)  # (B, M, N, 2)
 
         # ─── Apply only on active (present) classes ───────────────────────────
@@ -508,8 +510,8 @@ class SurgicalCurveFormerLoss(nn.Module):
             conf_targets = torch.zeros_like(conf_logits_h)
             for b_ in range(B_h):
                 for m_ in range(M_h):
-                    if active_mask[b_, m_]:
-                        conf_targets[b_, m_, best_idx[b_, m_]] = 1.0
+                    if active_mask[b_, m_].item():
+                        conf_targets[b_, m_, best_idx[b_, m_].item()] = 1.0
 
             L_cs_total = L_cs_total + self.focal(conf_logits_h, conf_targets)
 
