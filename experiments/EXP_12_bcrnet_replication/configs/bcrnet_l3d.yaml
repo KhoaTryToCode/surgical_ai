@@ -1,0 +1,139 @@
+# Configuration for EXP_12: BCRNet Replication on L3D Dataset
+CUDNN_BENCHMARK: false
+INPUT:
+  CROP:
+    CROP_INSTANCE: false
+    ENABLED: true
+    SIZE:
+    - 0.1
+    - 0.1
+    TYPE: relative_range
+  FORMAT: RGB
+  HFLIP_TRAIN: false
+  MASK_FORMAT: polygon
+  MAX_SIZE_TEST: 2000
+  MAX_SIZE_TRAIN: 2000
+  MIN_SIZE_TEST: 100
+  MIN_SIZE_TRAIN:
+  - 800
+  - 900
+  - 1000
+  - 1100
+  - 1200
+  MIN_SIZE_TRAIN_SAMPLING: choice
+  RANDOM_FLIP: horizontal
+  ROTATE: false
+MODEL:
+  ANCHOR_GENERATOR:
+    ANGLES:
+    - - -90
+      - 0
+      - 90
+    ASPECT_RATIOS:
+    - - 0.5
+      - 1.0
+      - 2.0
+    NAME: DefaultAnchorGenerator
+    OFFSET: 0.0
+    SIZES:
+    - - 32
+      - 64
+      - 128
+      - 256
+      - 512
+  BACKBONE:
+    ANTI_ALIAS: false
+    FREEZE_AT: 2
+    NAME: build_resnet_backbone
+  DEVICE: cuda
+  KEYPOINT_ON: false
+  LOAD_PROPOSALS: false
+  MASK_ON: false
+  META_ARCHITECTURE: TransformerPureDetector
+  MOBILENET: false
+  PIXEL_MEAN:
+  - 123.675
+  - 116.28
+  - 103.53
+  PIXEL_STD:
+  - 58.395
+  - 57.12
+  - 57.375
+  TRANSFORMER:
+    AUX_LOSS: true
+    DEC_LAYERS: 6
+    DEC_N_POINTS: 4
+    DIM_FEEDFORWARD: 1024
+    DROPOUT: 0.0
+    ENABLED: true
+    ENC_LAYERS: 6
+    ENC_N_POINTS: 4
+    HIDDEN_DIM: 256
+    INFERENCE_TH_TEST: 0.35
+    LOSS:
+      AUX_LOSS: true
+      BEZIER_CLASS_WEIGHT: 1.0
+      BEZIER_COORD_WEIGHT: 1.0
+      BEZIER_SAMPLE_POINTS: 25
+      BOUNDARY_WEIGHT: 0.5
+      FOCAL_ALPHA: 0.25
+      FOCAL_GAMMA: 2.0
+      LANGUAGE_WEIGHT: 1.0
+      POINT_CLASS_WEIGHT: 1.0
+      POINT_COORD_WEIGHT: 1.0
+      POINT_TEXT_WEIGHT: 0.5
+      TEXT_PENALTY: 20.0
+    NHEADS: 8
+    NUM_FEATURE_LEVELS: 3
+    NUM_POINTS: 25
+    NUM_QUERIES: 10
+    BEZIER_DEGREE: 5
+    LANDMARK_CLASS: 3
+    POSITION_EMBEDDING_SCALE: 6.283185307179586
+    TEMPERATURE: 10000
+    VOC_SIZE: 37
+OUTPUT_DIR: /kaggle/working/checkpoints/EXP_12_bcrnet_replication
+SEED: 42
+SOLVER:
+  AMP:
+    ENABLED: false
+  BASE_LR: 1.0e-05
+  BASE_LR_END: 0.0
+  BIAS_LR_FACTOR: 1.0
+  CHECKPOINT_PERIOD: 10
+  CLIP_GRADIENTS:
+    CLIP_TYPE: full_model
+    CLIP_VALUE: 0.1
+    ENABLED: true
+    NORM_TYPE: 2.0
+  GAMMA: 0.1
+  IMS_PER_BATCH: 2
+  LR_BACKBONE: 1.0e-06
+  LR_BACKBONE_NAMES:
+  - backbone.0
+  LR_LINEAR_PROJ_MULT: 1.0
+  LR_LINEAR_PROJ_NAMES:
+  - reference_points
+  - sampling_offsets
+  LR_SCHEDULER_NAME: WarmupMultiStepLR
+  MAX_ITER: 50000
+  MOMENTUM: 0.9
+  NESTEROV: false
+  NUM_DECAYS: 3
+  OPTIMIZER: ADAMW
+  REFERENCE_WORLD_SIZE: 0
+  RESCALE_INTERVAL: false
+  STEPS:
+  - 100000
+  WARMUP_FACTOR: 0.001
+  WARMUP_ITERS: 0
+  WARMUP_METHOD: linear
+  WEIGHT_DECAY: 0.0001
+  WEIGHT_DECAY_BIAS: null
+  WEIGHT_DECAY_NORM: 0.0
+TEST:
+  AUG:
+    ENABLED: false
+  DETECTIONS_PER_IMAGE: 100
+  EVAL_PERIOD: 100000000
+VERSION: 2

@@ -1,0 +1,233 @@
+"""
+Training Runner for EXP_12: BCRNet Paper Replication
+====================================================
+Faithful execution wrapper for BCRNet (MICCAI 2025):
+- Dynamically imports TransformerPureDetector & BezierDataset from `repos/BCRNet/`
+- Implements exact BCRNet dynamic loss scheduling: lambda(epoch) = 1 - sigmoid((epoch - 10) / 2)
+- Supports W&B offline / online logging
+- Tracks best validation Dice and saves periodic checkpoints
+
+Usage:
+  python experiments/EXP_12_bcrnet_replication/scripts/train_bcrnet.py \
+      --config experiments/EXP_12_bcrnet_replication/configs/bcrnet_l3d.yaml \
+      --data_path /kaggle/working/L3D \
+      --epochs 80 \
+      --bs 2 \
+      --save_path /kaggle/working/checkpoints/EXP_12_bcrnet_replication
+"""
+
+import os
+import sys
+import argparse
+import numpy as np
+import cv2
+import torch
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+
+ws_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
+bcrnet_root = os.path.join(ws_root, "repos/BCRNet")
+for p in [bcrnet_root, ws_root]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+# Automatic PyTorch fallback if CUDA C extension is not compiled
+try:
+    from adet import _C
+except ImportError:
+    print("⚠️ adet._C CUDA extension not found. Enabling pure PyTorch MSDeformAttn fallback...")
+    import adet.layers.ms_deform_attn as ms_module
+    class _MockC:
+        @staticmethod
+        def ms_deform_attn_forward(value, shapes, starts, locs, weights, step):
+            return ms_module.ms_deform_attn_core_pytorch(value, shapes, locs, weights)
+        @staticmethod
+        def ms_deform_attn_backward(*args, **kwargs):
+            raise NotImplementedError("Pure PyTorch backward not implemented; run build_adet_ext.py for CUDA training")
+    ms_module._C = _MockC
+
+from utils.bezier_dataset import BezierDataset, collate_fun
+from adet.modeling.bezier_detection import TransformerPureDetector
+from utils.config_utils import load_config
+
+
+def cal_loss(loss_dict, loss_weight):
+    loss = 0
+    for key, value in loss_dict.items():
+        if key in loss_weight:
+            loss = loss + loss_weight[key] * value
+        else:
+            loss = loss + value
+    return loss
+
+
+def evaluation(pred, gt):
+    smooth = 1e-5
+    intersection = np.sum(pred * gt)
+    dice = (2.0 * intersection + smooth) / (np.sum(pred) + np.sum(gt) + smooth)
+    iou = dice / (2.0 - dice)
+    return iou, dice
+
+
+def metrix(results, targets):
+    gt = np.stack([lm['landmark_mask'].cpu().numpy() for lm in targets[0]], -1)
+    pred = np.zeros_like(gt)
+    for m, lm in enumerate(results[0]):
+        curves = lm['ctrl_points'].cpu().numpy()
+        for curve_points in curves:
+            for i in range(1, len(curve_points)):
+                pt1 = tuple(map(int, curve_points[i - 1]))
+                pt2 = tuple(map(int, curve_points[i]))
+                pred[:, :, m] = cv2.line(pred[:, :, m].copy(), pt1, pt2, [1], 30)
+    iou, dice = evaluation(pred, gt)
+    return iou, dice
+
+
+def main(args):
+    device = args.device if torch.cuda.is_available() else "cpu"
+    print(f"🚀 Initializing BCRNet training on device: {device}")
+    print(f"   Config:    {args.config}")
+    print(f"   Data path: {args.data_path}")
+    print(f"   Save path: {args.save_path}")
+    print(f"   Epochs:    {args.epochs} | Batch size: {args.bs}")
+
+    # Configure W&B
+    use_wandb = False
+    if args.wandb:
+        try:
+            import wandb
+            if args.wandb_key:
+                wandb.login(key=args.wandb_key)
+            else:
+                os.environ.setdefault("WANDB_MODE", "offline")
+            wandb.init(project='landmark_bcrnet_replication', name=os.path.basename(args.save_path))
+            use_wandb = True
+            print("   ✅ W&B tracking initialized.")
+        except Exception as e:
+            print(f"   ⚠️ Could not initialize W&B ({e}). Proceeding without W&B.")
+
+    # Datasets & Loaders
+    train_dir = os.path.join(args.data_path, 'Train')
+    val_dir = os.path.join(args.data_path, 'Val')
+
+    if not os.path.exists(train_dir):
+        raise FileNotFoundError(f"Train directory not found: {train_dir}. Please run prepare_data.py first.")
+
+    train_dataset = BezierDataset(train_dir, device=device)
+    val_dataset = BezierDataset(val_dir, device=device)
+    train_loader = DataLoader(train_dataset, batch_size=args.bs, shuffle=True, collate_fn=collate_fun)
+    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, collate_fn=collate_fun)
+    print(f"   📊 Train samples: {len(train_dataset)} | Val samples: {len(val_dataset)}")
+
+    # Model & Config
+    cfg = load_config(args.config)
+    cfg.MODEL.DEVICE = device
+    model = TransformerPureDetector(cfg).to(device)
+
+    start_epoch = 0
+    best_dice = 0.0
+
+    if args.model_path and os.path.exists(args.model_path):
+        print(f"   🔄 Loading checkpoint: {args.model_path}")
+        model_checkpoint = torch.load(args.model_path, map_location=device)
+        model.load_state_dict(model_checkpoint['model'])
+        if 'epoch-' in args.model_path:
+            start_epoch = int(args.model_path.split('-')[-1].split('.')[0])
+        print(f"   Resuming from epoch: {start_epoch}")
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
+    # Sigmoid loss schedule: lambda(epoch) = 1 - sigmoid((epoch - 10) / 2)
+    def sigmoid_weight(e):
+        t = torch.tensor((float(e) - 10.0) / 2.0, device=device)
+        return 1.0 - torch.sigmoid(t)
+
+    for epoch in range(start_epoch + 1, args.epochs + 1):
+        lam = sigmoid_weight(epoch)
+        loss_weights = {
+            'loss_ce_enc': 1.0 - lam,
+            'loss_pos_enc': lam,
+            'segmentation_loss': lam,
+        }
+
+        model.train()
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{args.epochs}")
+        epoch_losses = []
+
+        for batch_data in pbar:
+            results = model(batch_data, return_loss=True)
+            loss = cal_loss(results, loss_weights)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            loss_val = loss.item()
+            epoch_losses.append(loss_val)
+            pbar.set_postfix({'epoch': epoch, 'loss': f"{loss_val:.4f}"})
+
+        mean_loss = float(np.mean(epoch_losses)) if epoch_losses else 0.0
+        if use_wandb:
+            wandb.log({'epoch': epoch, 'train_loss': mean_loss, 'lambda': lam.item()})
+
+        # Periodic Evaluation (default every 10 epochs or final epoch)
+        if epoch % args.eval_period == 0 or epoch == args.epochs:
+            ckpt_file = os.path.join(args.save_path, f"epoch-{epoch}.pt")
+            torch.save({'model': model.state_dict(), 'epoch': epoch}, ckpt_file)
+            print(f"\n💾 Saved checkpoint: {ckpt_file}")
+
+            # Validation pass
+            model.eval()
+            with torch.no_grad():
+                ious = []
+                dices = []
+                val_pbar = tqdm(val_loader, desc=f"Validation Epoch {epoch}")
+                for batch_data in val_pbar:
+                    img, depth, sam_feature, targets, info = batch_data
+                    results = model(batch_data)
+                    iou, dice = metrix(results, targets)
+                    ious.append(iou)
+                    dices.append(dice)
+                    val_pbar.set_postfix({'Val_epoch': epoch, 'Dice': f"{dice*100:.2f}%", 'IoU': f"{iou*100:.2f}%"})
+
+                mean_val_dice = float(np.mean(dices)) if dices else 0.0
+                mean_val_iou = float(np.mean(ious)) if ious else 0.0
+                print(f"📊 [Epoch {epoch}] Val Mean Dice: {mean_val_dice*100:.2f}% | Val Mean IoU: {mean_val_iou*100:.2f}%")
+
+                if use_wandb:
+                    wandb.log({'epoch': epoch, 'val_dice': mean_val_dice, 'val_iou': mean_val_iou})
+
+                if mean_val_dice > best_dice:
+                    best_dice = mean_val_dice
+                    best_file = os.path.join(args.save_path, "best_model.pt")
+                    torch.save({'model': model.state_dict(), 'epoch': epoch, 'val_dice': best_dice}, best_file)
+                    print(f"⭐ New best model saved ({best_dice*100:.2f}% DSC) -> {best_file}")
+
+    print("\n" + "=" * 80)
+    print(f"✅ Training completed! Best validation DSC: {best_dice*100:.2f}%")
+    print(f"   Checkpoints stored in: {args.save_path}")
+    print("=" * 80)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="EXP_12: BCRNet Training Runner")
+    default_cfg = os.path.join(os.path.dirname(__file__), "../configs/bcrnet_l3d.yaml")
+    default_data = "/kaggle/working/L3D" if os.path.exists("/kaggle") else os.path.join(ws_root, "data/L3D")
+    default_save = "/kaggle/working/checkpoints/EXP_12_bcrnet_replication" if os.path.exists("/kaggle") else os.path.join(ws_root, "checkpoints/EXP_12_bcrnet_replication")
+
+    parser.add_argument('--config', default=default_cfg)
+    parser.add_argument('--data_path', default=default_data)
+    parser.add_argument('--epochs', type=int, default=80)
+    parser.add_argument('--bs', type=int, default=2)
+    parser.add_argument('--lr', type=float, default=1e-5)
+    parser.add_argument('--weight_decay', type=float, default=1e-4)
+    parser.add_argument('--eval_period', type=int, default=10)
+    parser.add_argument('--save_path', default=default_save)
+    parser.add_argument('--model_path', default=None)
+    parser.add_argument('--device', default='cuda:0' if torch.cuda.is_available() else 'cpu')
+    parser.add_argument('--wandb', action='store_true', default=False)
+    parser.add_argument('--wandb_key', default="")
+
+    args = parser.parse_args()
+    os.makedirs(args.save_path, exist_ok=True)
+    main(args=args)
