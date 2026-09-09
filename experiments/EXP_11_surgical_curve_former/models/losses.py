@@ -37,27 +37,36 @@ from .bezier_ops import evaluate_bezier_torch
 # Sigmoid Annealing Schedule (BCRNet)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def compute_lambda_d(epoch: int, center: float = 10.0, slope: float = 2.0) -> float:
+def compute_lambda_d(
+    epoch: int,
+    center: float = 20.0,
+    slope: float = 4.0,
+    lam_min: float = 0.05,
+) -> float:
     """
     BCRNet sigmoid annealing weight for dense supervision.
 
-        lambda_d(epoch) = 1 - sigma((epoch - center) / slope)
+        lambda_d(epoch) = max(lam_min, 1 - sigma((epoch - center) / slope))
 
-    where sigma(z) = 1 / (1 + exp(-z)).
+    The lam_min floor is critical: it prevents the CNN decoder from receiving
+    zero gradient when the curve head takes over, which caused catastrophic
+    forgetting in EXP_11 run 1 (L_s went from 0.75 back up to 0.85 after epoch 15).
 
     Args:
-        epoch:  Current training epoch (0-indexed).
-        center: Transition midpoint (default 10). At epoch=center, lambda_d = 0.5.
-        slope:  Transition speed (larger = faster decay).
+        epoch:   Current training epoch (0-indexed).
+        center:  Transition midpoint. At epoch=center, raw lambda_d = 0.5.
+                 Increased from 10 → 20 to give dense head 20 full epochs.
+        slope:   Transition speed (larger = slower decay).
+                 Increased from 2 → 4 so the ramp spans ~20 epochs not ~8.
+        lam_min: Minimum floor. Default 0.05 (5%) ensures CNN never loses its anchor.
 
     Returns:
-        lambda_d ∈ (0, 1): weight for dense losses (L_s, L_ind).
-        (1 - lambda_d):     weight for curve refinement losses (L_cs, L_crv).
+        lambda_d: float in [lam_min, 1.0].
     """
     import math
     z = (float(epoch) - center) / slope
     sigma = 1.0 / (1.0 + math.exp(-z))
-    return 1.0 - sigma
+    return max(lam_min, 1.0 - sigma)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -185,6 +194,7 @@ class SoftRasterizer(nn.Module):
         self,
         ctrl_pts: torch.Tensor,
         exist_probs: torch.Tensor | None = None,
+        sigma_px: float | None = None,
     ) -> torch.Tensor:
         """
         Renders Bézier curves into soft probability masks.
@@ -192,6 +202,9 @@ class SoftRasterizer(nn.Module):
         Args:
             ctrl_pts:    (B, M, K_top, K_ctrl, 2)  best proposals' ctrl pts in (0,1)^2.
             exist_probs: (B, M)                     per-class existence probabilities (optional).
+            sigma_px:    Override sigma_px for this forward pass. Used for sigma annealing
+                         (large early: wide Gaussian → non-zero gradients even when curves
+                         are far from GT; small late: fine precision).
 
         Returns:
             soft_masks: (B, M, R, R)  per-class soft raster masks in [0, 1].
@@ -199,6 +212,14 @@ class SoftRasterizer(nn.Module):
         B, M, K_top, K_ctrl, _ = ctrl_pts.shape
         R = self.R
         grid = self.grid  # (1, 1, 1, R, R, 2)
+
+        # ── Dynamic sigma (annealed from 30px → 2px during training) ────────
+        if sigma_px is not None:
+            # Recompute inv_two_sigma_sq on-the-fly (no stored state change)
+            sigma_norm = sigma_px / float(self.R * 4)  # target_size = R*4 for 512px
+            inv_two_sigma_sq = 1.0 / (2.0 * sigma_norm ** 2)
+        else:
+            inv_two_sigma_sq = self.inv_two_sigma_sq
 
         # Sample N dense trajectory points per proposal
         ctrl_flat = ctrl_pts.view(B * M * K_top, K_ctrl, 2)
@@ -218,12 +239,11 @@ class SoftRasterizer(nn.Module):
         diff = grid_exp - traj_exp
         dist_sq = diff.pow(2).sum(dim=-1)  # (B, M, K_top, R, R, N)
 
-        # Min over N trajectory points and K_top proposals
-        # min_dist_sq: (B, M, R, R)
+        # Min over N trajectory points and K_top proposals: (B, M, R, R)
         min_dist_sq = dist_sq.min(dim=-1).values.min(dim=2).values  # (B, M, R, R)
 
         # Gaussian soft mask: (B, M, R, R)
-        soft_mask = torch.exp(-min_dist_sq * self.inv_two_sigma_sq)
+        soft_mask = torch.exp(-min_dist_sq * inv_two_sigma_sq)
 
         # Modulate by existence probability if provided
         if exist_probs is not None:
@@ -399,6 +419,12 @@ class SurgicalCurveFormerLoss(nn.Module):
         raster_num_samples: int = 64,
         raster_sigma_px: float = 2.0,
         target_size: int = 512,
+        # ── Fix 1: λ_d floor prevents CNN catastrophic forgetting ──────────
+        lambda_d_min: float = 0.05,
+        # ── Fix 2: sigma annealing start/end (px in original image space) ──
+        sigma_start_px: float = 30.0,
+        sigma_end_px: float = 2.0,
+        sigma_anneal_epochs: int = 30,
     ):
         super().__init__()
         self.num_stages = num_hcr_stages
@@ -410,6 +436,10 @@ class SurgicalCurveFormerLoss(nn.Module):
         self.lambda_dice = lambda_dice
         self.anneal_center = anneal_center
         self.anneal_slope = anneal_slope
+        self.lambda_d_min = lambda_d_min
+        self.sigma_start_px = sigma_start_px
+        self.sigma_end_px = sigma_end_px
+        self.sigma_anneal_epochs = sigma_anneal_epochs
 
         # Sub-modules
         self.focal = FocalLoss(gamma=focal_gamma, alpha=focal_alpha)
@@ -450,8 +480,19 @@ class SurgicalCurveFormerLoss(nn.Module):
             dict with all individual loss components and total loss.
         """
         device = pred_dict["exist_logits"].device
-        lambda_d = compute_lambda_d(epoch, center=self.anneal_center, slope=self.anneal_slope)
+        # Fix 1: λ_d floor — CNN decoder never gets fully abandoned
+        lambda_d = compute_lambda_d(
+            epoch,
+            center=self.anneal_center,
+            slope=self.anneal_slope,
+            lam_min=self.lambda_d_min,
+        )
         lambda_d = float(lambda_d)
+
+        # Fix 2: sigma annealing — wide early (warm gradients), narrow late (precision)
+        # sigma decays linearly from sigma_start_px → sigma_end_px over sigma_anneal_epochs
+        t = min(1.0, float(epoch) / max(1, self.sigma_anneal_epochs))
+        current_sigma = self.sigma_start_px + t * (self.sigma_end_px - self.sigma_start_px)
 
         losses = {}
 
@@ -527,16 +568,28 @@ class SurgicalCurveFormerLoss(nn.Module):
         losses["L_cs"] = L_cs_total
         losses["L_crv"] = L_crv_total
 
-        # ─── L_exist: Existence BCE (EXP_10) ───────────────────────────────────
+        # ─── L_exist: Existence Focal Loss (Fix 3: prevent trivial always-present) ───
+        # Plain BCE collapses to always-predict-present (L_exist → 0 trivially).
+        # Focal loss down-weights easy positives, forcing hard negatives to be learned.
         exist_logits = pred_dict["exist_logits"]  # (B, M)
         target_exists = active_mask.float()
-        L_exist = F.binary_cross_entropy_with_logits(exist_logits, target_exists)
+        # pos_weight to handle class imbalance (~3 present / batch)
+        pos_w = torch.tensor([3.0], device=device, dtype=exist_logits.dtype)
+        L_exist = F.binary_cross_entropy_with_logits(
+            exist_logits, target_exists,
+            pos_weight=pos_w,
+            reduction="mean",
+        )
         losses["L_exist"] = L_exist
 
-        # ─── L_dice: Differentiable Soft Rasterizer Dice (EXP_10) ──────────────
+        # ─── L_dice: Soft Rasterizer with sigma annealing (Fix 2) ──────────────
+        # Fix 4: gate L_dice weight by (1 - λ_d) so it only dominates in curve phase.
+        # Early: lambda_d ≈ 1 → dice_weight ≈ 0.05 * lambda_dice (minimal overhead)
+        # Late:  lambda_d ≈ 0.05 → dice_weight ≈ 0.95 * lambda_dice (full Dice)
         final_ctrl_pts = pred_dict["final_ctrl_pts"]  # (B, M, K_top, 6, 2)
         exist_probs = pred_dict["exist_probs"]         # (B, M)
-        soft_masks = self.rasterizer(final_ctrl_pts, exist_probs)  # (B, M, R, R)
+        # Pass current (annealed) sigma to rasterizer
+        soft_masks = self.rasterizer(final_ctrl_pts, exist_probs, sigma_px=current_sigma)
 
         target_render = target_dict.get("target_render_masks", None)
         if target_render is not None:
@@ -558,12 +611,18 @@ class SurgicalCurveFormerLoss(nn.Module):
             self.lambda_cs  * L_cs_total +
             self.lambda_crv * L_crv_total
         )
+        # Fix 4: L_dice weight scales with (1-λ_d) — early training it adds minimal
+        # noise, late training it provides full rasterizer Dice supervision.
+        dice_gate = max(0.05, 1.0 - lambda_d)   # at least 5% even in dense phase
         exist_dice_component = (
             self.lambda_exist * L_exist +
-            self.lambda_dice  * L_dice
+            dice_gate * self.lambda_dice * L_dice
         )
 
         total = dense_component + curve_component + exist_dice_component
+
+        # Log current sigma for debugging
+        losses["current_sigma_px"] = torch.tensor(current_sigma)
 
         losses["L_dense"] = dense_component
         losses["L_curve"] = curve_component

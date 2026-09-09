@@ -62,50 +62,48 @@ if torch.cuda.is_available():
 
 ---
 
-## 2. Full Training Run (T4 × 2 / P100 / A100, 60 Epochs)
+## 2. Full Training Run — EXP_11 Run 2 (Fixed Hyperparameters)
 
-```python
-# ── Cell 5: Train SurgicalCurveFormer ─────────────────────────────────────
-os.chdir("/kaggle/working/surgical_ai")
-
-cmd = [
-    "python", "experiments/EXP_11_surgical_curve_former/scripts/train_exp11.py",
-    "--dataset_dir",      "/kaggle/working/L3D",
-    "--epochs",           "60",
-    "--batch_size",       "4",
-    "--lr",               "1e-5",
-    "--backbone_lr_mult", "0.1",
-    "--acpi_top_k",       "10",
-    "--hcr_stages",       "3",
-    "--amp",
-    "--use_depth",
-    "--save_dir",         "/kaggle/working/checkpoints/EXP_11",
-    "--wandb",
-    "--wandb_key",        "83f4544a22543e319c6009abceaac90b634c68a3",
-]
-subprocess.run(cmd, check=True)
-```
-
-**Or equivalently from the Kaggle terminal:**
+> **Run 1 result:** 13.81% Dice. Root causes diagnosed and fixed. See below.
 
 ```bash
-cd /kaggle/working/surgical_ai
+cd /kaggle/working/surgical_ai && git pull origin main
 export PYTHONPATH="/kaggle/working/surgical_ai/experiments/EXP_11_surgical_curve_former:/kaggle/working/surgical_ai:$PYTHONPATH"
 
 python experiments/EXP_11_surgical_curve_former/scripts/train_exp11.py \
-    --dataset_dir      /kaggle/working/L3D \
-    --epochs           60 \
-    --batch_size       4 \
-    --lr               1e-5 \
-    --backbone_lr_mult 0.1 \
-    --acpi_top_k       10 \
-    --hcr_stages       3 \
+    --dataset_dir       /kaggle/working/L3D \
+    --epochs            80 \
+    --batch_size        4 \
+    --lr                5e-5 \
+    --backbone_lr_mult  0.1 \
+    --acpi_top_k        10 \
+    --hcr_stages        3 \
+    --anneal_center     20.0 \
+    --anneal_slope      4.0 \
+    --lambda_d_min      0.05 \
+    --sigma_start_px    30.0 \
+    --sigma_end_px      2.0 \
+    --sigma_anneal_epochs 30 \
     --amp \
     --use_depth \
-    --save_dir         /kaggle/working/checkpoints/EXP_11 \
+    --save_dir          /kaggle/working/checkpoints/EXP_11_run2 \
     --wandb \
-    --wandb_key        83f4544a22543e319c6009abceaac90b634c68a3
+    --wandb_key         83f4544a22543e319c6009abceaac90b634c68a3
 ```
+
+### What each fix does
+
+| Fix | Parameter | Run 1 (broken) | Run 2 (fixed) | Why |
+|:---|:---|:---:|:---:|:---|
+| λ_d floor | `lambda_d_min` | 0.0 | **0.05** | CNN decoder never loses gradient → no forgetting |
+| Slower anneal | `anneal_center` | 10 | **20** | Dense head gets 20 full epochs before transition |
+| Slower anneal | `anneal_slope` | 2 | **4** | Ramp spans 20 epochs not 8 |
+| Sigma warm-start | `sigma_start_px` | 2px | **30px** | Wide Gaussian → useful gradients even when curves are far |
+| Sigma decay | `sigma_end_px` | 2px | **2px** | Final precision unchanged |
+| L_dice gating | (in losses.py) | constant | **scales with (1-λ_d)** | Rasterizer only dominates when curve head is active |
+| Higher LR | `--lr` | 1e-5 | **5e-5** | Faster convergence for random-initialized curve head |
+
+
 
 ---
 

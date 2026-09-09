@@ -40,9 +40,15 @@ def parse_args():
     p.add_argument("--dataset_dir",       type=str,   default=resolve_dataset_dir())
     p.add_argument("--epochs",            type=int,   default=cfg.num_epochs)
     p.add_argument("--batch_size",        type=int,   default=cfg.batch_size)
-    p.add_argument("--lr",                type=float, default=cfg.learning_rate)
+    p.add_argument("--lr",                type=float, default=5e-5)          # was 1e-5, raised for faster curve head learning
     p.add_argument("--backbone_lr_mult",  type=float, default=cfg.backbone_lr_mult)
     p.add_argument("--weight_decay",      type=float, default=cfg.weight_decay)
+    p.add_argument("--anneal_center",     type=float, default=20.0)           # was 10, now 20 for longer dense phase
+    p.add_argument("--anneal_slope",      type=float, default=4.0)            # was 2, now 4 for slower transition
+    p.add_argument("--lambda_d_min",      type=float, default=0.05)           # NEW: floor prevents CNN forgetting
+    p.add_argument("--sigma_start_px",    type=float, default=30.0)           # NEW: wide Gaussian for early gradients
+    p.add_argument("--sigma_end_px",      type=float, default=2.0)            # NEW: narrow final for precision
+    p.add_argument("--sigma_anneal_epochs",type=int,  default=30)             # NEW: sigma reaches 2px by epoch 30
     p.add_argument("--save_dir",          type=str,   default=cfg.save_dir)
     p.add_argument("--acpi_top_k",        type=int,   default=cfg.acpi_top_k)
     p.add_argument("--hcr_stages",        type=int,   default=3)
@@ -191,7 +197,12 @@ def main():
         num_hcr_stages=args.hcr_stages,
         lambda_s=10.0, lambda_ind=1.0, lambda_cs=1.0,
         lambda_crv=1.0, lambda_exist=1.5, lambda_dice=5.0,
-        anneal_center=10.0, anneal_slope=2.0,
+        anneal_center=args.anneal_center,
+        anneal_slope=args.anneal_slope,
+        lambda_d_min=args.lambda_d_min,
+        sigma_start_px=args.sigma_start_px,
+        sigma_end_px=args.sigma_end_px,
+        sigma_anneal_epochs=args.sigma_anneal_epochs,
         raster_render_size=128, raster_num_samples=64,
         raster_sigma_px=2.0, target_size=512,
     ).to(device)
@@ -245,10 +256,13 @@ def main():
                     epoch_losses[k].append(losses[k].item() if torch.is_tensor(losses[k]) else losses[k])
 
             if step % 20 == 0:
+                sigma_now = losses.get("current_sigma_px", torch.tensor(0.0))
+                sigma_val = sigma_now.item() if torch.is_tensor(sigma_now) else sigma_now
                 print(
                     f"  Ep {epoch+1:>3}/{args.epochs}  Step {step:>4}/{len(train_loader)}"
                     f"  L={loss.item():.4f}  L_s={losses['L_s'].item():.3f}"
                     f"  L_crv={losses['L_crv'].item():.3f}  λ_d={lam_d:.3f}"
+                    f"  σ={sigma_val:.1f}px"
                 )
 
         scheduler.step()
