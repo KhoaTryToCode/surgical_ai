@@ -38,8 +38,9 @@ python3 experiments/EXP_12_surgical_curve_former_v2/scripts/train_exp12.py \
     --use_depth \
     --save_dir /kaggle/working/checkpoints/EXP_12 \
     --wandb \
-    --wandb_key <YOUR_WANDB_API_KEY>
+    --wandb_key 83f4544a22543e319c6009abceaac90b634c68a3
 ```
+
 
 ---
 

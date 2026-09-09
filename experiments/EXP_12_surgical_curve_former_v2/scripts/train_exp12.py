@@ -61,8 +61,9 @@ def parse_args():
     p.add_argument("--amp",              action="store_true", default=cfg.amp)
     p.add_argument("--use_depth",        action="store_true", default=cfg.use_depth)
     p.add_argument("--wandb",            action="store_true", default=cfg.wandb)
-    p.add_argument("--wandb_key",        type=str,   default="")
+    p.add_argument("--wandb_key",        type=str,   default=cfg.wandb_key)
     p.add_argument("--device",           type=str,   default="")
+
     p.add_argument("--num_workers",      type=int,   default=cfg.num_workers)
     return p.parse_args()
 
@@ -170,16 +171,23 @@ def main():
     if use_wandb:
         try:
             import wandb
-            if args.wandb_key:
-                wandb.login(key=args.wandb_key)
-            wandb.init(
-                project="Surgical_AI_EXP12_SurgicalCurveFormerV2",
-                name=f"EXP12_OmniGeometric_v2_k{args.acpi_top_k}",
-                config=vars(args),
-            )
+            cfg_key = getattr(cfg, "wandb_key", "83f4544a22543e319c6009abceaac90b634c68a3")
+            key = args.wandb_key or os.environ.get("WANDB_API_KEY", cfg_key)
+            if key:
+                wandb.login(key=key)
+                wandb.init(
+                    project=getattr(cfg, "wandb_project", "Surgical_AI_EXP12_SurgicalCurveFormerV2"),
+                    entity=getattr(cfg, "wandb_entity", "10423057-vietnamese-german-university"),
+                    name=f"EXP12_OmniGeometric_v2_k{args.acpi_top_k}",
+                    config=vars(args),
+                )
+            else:
+                print("⚠️  No W&B key found. Continuing without remote logging.")
+                use_wandb = False
         except Exception as e:
             print(f"⚠️  W&B init failed ({e}). Proceeding without remote logging.")
             use_wandb = False
+
 
     # ── Dataset & Loaders ──────────────────────────────────────────────────
     train_ds = SurgicalCurveFormerDataset(

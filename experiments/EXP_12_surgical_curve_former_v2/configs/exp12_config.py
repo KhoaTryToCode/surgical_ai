@@ -83,6 +83,8 @@ class EXP12Config:
 
     # --- Tracking ---
     wandb: bool = True
+    wandb_key: str = "83f4544a22543e319c6009abceaac90b634c68a3"
     wandb_project: str = "Surgical_AI_EXP12_SurgicalCurveFormerV2"
     wandb_entity: str = "10423057-vietnamese-german-university"
     wandb_run_name: str = "EXP12_OmniGeometric_v2"
+
