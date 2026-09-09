@@ -24,19 +24,16 @@ from torch.utils.data import DataLoader
 
 exp_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 workspace_root = os.path.abspath(os.path.join(exp_root, "../.."))
-if exp_root not in sys.path:
-    sys.path.insert(0, exp_root)
 if workspace_root not in sys.path:
     sys.path.insert(0, workspace_root)
-
-# Import dataset from EXP_11
-exp11_path = os.path.join(workspace_root, "experiments/EXP_11_surgical_curve_former")
-if exp11_path not in sys.path:
-    sys.path.insert(0, exp11_path)
+if exp_root not in sys.path:
+    sys.path.insert(0, exp_root)
 
 from configs.exp12_config import EXP12Config, resolve_dataset_dir
 from models.surgical_curve_former_v2 import SurgicalCurveFormerV2
 from utils.dataset import SurgicalCurveFormerDataset
+
+
 
 
 def parse_args():
