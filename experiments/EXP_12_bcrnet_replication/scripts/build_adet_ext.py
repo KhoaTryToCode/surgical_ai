@@ -103,13 +103,14 @@ def build_extension():
 
     from setuptools import setup
     old_argv = sys.argv
+    old_cwd = os.getcwd()
     sys.argv = [
         "setup.py",
         "build_ext",
-        f"--build-lib={bcrnet_dir}",
         "--inplace",
     ]
     try:
+        os.chdir(bcrnet_dir)
         setup(
             name="adet_extension",
             ext_modules=[ext],
@@ -117,6 +118,7 @@ def build_extension():
         )
         print("✅ Successfully built adet._C extension in repos/BCRNet!")
     finally:
+        os.chdir(old_cwd)
         sys.argv = old_argv
 
 
