@@ -83,6 +83,27 @@ except ImportError:
     import subprocess
     subprocess.run([sys.executable, "-m", "pip", "install", "-q", "fvcore", "iopath"], check=True)
 
+from adet.utils.curve_utils import BezierSampler, upcast
+
+def _adaptive_get_sample_points(self, control_points_matrix):
+    if control_points_matrix.numel() == 0:
+        return control_points_matrix
+    k = control_points_matrix.shape[-2]
+    if self.bernstein_matrix.shape[1] != k:
+        self.degree = k - 1
+        self.bezier_coeff = self.get_bezier_coefficient()
+        self.bernstein_matrix = self.get_bernstein_matrix()
+    if self.bernstein_matrix.device != control_points_matrix.device:
+        self.bernstein_matrix = self.bernstein_matrix.to(control_points_matrix.device)
+    return upcast(self.bernstein_matrix).matmul(upcast(control_points_matrix))
+
+BezierSampler.get_sample_points = _adaptive_get_sample_points
+
+_orig_bezier_sampler_init = BezierSampler.__init__
+def _patched_bezier_sampler_init(self, num_sample_points, degree=5):
+    _orig_bezier_sampler_init(self, num_sample_points, degree=degree)
+BezierSampler.__init__ = _patched_bezier_sampler_init
+
 from utils.bezier_dataset import BezierDataset, collate_fun
 from adet.modeling.bezier_detection import TransformerPureDetector
 from utils.config_utils import load_config
