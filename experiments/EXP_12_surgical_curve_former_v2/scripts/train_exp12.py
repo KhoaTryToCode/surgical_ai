@@ -168,25 +168,20 @@ def main():
 
     # ── W&B Setup ──────────────────────────────────────────────────────────
     use_wandb = args.wandb
-    if use_wandb:
+    if use_wandb and args.wandb_key:
         try:
             import wandb
-            cfg_key = getattr(cfg, "wandb_key", "83f4544a22543e319c6009abceaac90b634c68a3")
-            key = args.wandb_key or os.environ.get("WANDB_API_KEY", cfg_key)
-            if key:
-                wandb.login(key=key)
-                wandb.init(
-                    project=getattr(cfg, "wandb_project", "Surgical_AI_EXP12_SurgicalCurveFormerV2"),
-                    entity=getattr(cfg, "wandb_entity", "10423057-vietnamese-german-university"),
-                    name=f"EXP12_OmniGeometric_v2_k{args.acpi_top_k}",
-                    config=vars(args),
-                )
-            else:
-                print("⚠️  No W&B key found. Continuing without remote logging.")
-                use_wandb = False
+            wandb.login(key=args.wandb_key)
+            wandb.init(
+                project="Surgical_AI_EXP12_SurgicalCurveFormerV2",
+                entity="10423057-vietnamese-german-university",
+                name=f"EXP12_OmniGeometric_v2_k{args.acpi_top_k}",
+                config=vars(args),
+            )
         except Exception as e:
-            print(f"⚠️  W&B init failed ({e}). Proceeding without remote logging.")
+            print(f"⚠️  W&B init failed: {e}. Continuing without remote logging.")
             use_wandb = False
+
 
 
     # ── Dataset & Loaders ──────────────────────────────────────────────────
