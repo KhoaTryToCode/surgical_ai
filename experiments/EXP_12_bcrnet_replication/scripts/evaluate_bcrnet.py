@@ -18,6 +18,7 @@ Usage:
 import os
 import sys
 import types
+import glob
 import argparse
 import json
 import numpy as np
@@ -33,18 +34,27 @@ for p in [bcrnet_root, ws_root]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
-# Automatic PyTorch fallback if CUDA C extension is not compiled
-try:
-    from adet import _C
-except ImportError:
-    mock_c = types.ModuleType("adet._C")
-    sys.modules["adet._C"] = mock_c
+# Check if compiled _C extension exists on disk
+c_ext_files = glob.glob(os.path.join(bcrnet_root, "adet/_C*.so")) + glob.glob(os.path.join(bcrnet_root, "adet/_C*.pyd"))
+if len(c_ext_files) == 0:
+    print("⚠️ adet._C CUDA extension not found. Enabling native PyTorch autograd MSDeformAttn fallback...")
+    adet_pkg = types.ModuleType('adet')
+    adet_pkg.__path__ = [os.path.join(bcrnet_root, 'adet')]
+    sys.modules['adet'] = adet_pkg
 
-    import adet.layers.ms_deform_attn as ms_module
+    mock_c = types.ModuleType('adet._C')
+    mock_c.ms_deform_attn_forward = lambda *args, **kwargs: None
+    mock_c.ms_deform_attn_backward = lambda *args, **kwargs: None
+    adet_pkg._C = mock_c
+    sys.modules['adet._C'] = mock_c
+
+    from adet.layers.ms_deform_attn import MSDeformAttn, ms_deform_attn_core_pytorch
 
     def _fallback_forward(self, query, reference_points, input_flatten, input_spatial_shapes, input_level_start_index, input_padding_mask=None):
         N, Len_q, _ = query.shape
         N, Len_in, _ = input_flatten.shape
+        assert (input_spatial_shapes[:, 0] * input_spatial_shapes[:, 1]).sum() == Len_in
+
         value = self.value_proj(input_flatten)
         if input_padding_mask is not None:
             value = value.masked_fill(input_padding_mask[..., None], float(0))
@@ -61,10 +71,10 @@ except ImportError:
         else:
             raise ValueError(f"Last dim of reference_points must be 2 or 4, got {reference_points.shape[-1]}")
 
-        output = ms_module.ms_deform_attn_core_pytorch(value, input_spatial_shapes, sampling_locations, attention_weights)
+        output = ms_deform_attn_core_pytorch(value, input_spatial_shapes, sampling_locations, attention_weights)
         return self.output_proj(output)
 
-    ms_module.MSDeformAttn.forward = _fallback_forward
+    MSDeformAttn.forward = _fallback_forward
 
 from utils.bezier_dataset import BezierDataset, collate_fun
 from adet.modeling.bezier_detection import TransformerPureDetector
