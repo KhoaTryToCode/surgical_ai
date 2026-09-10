@@ -414,3 +414,73 @@ p_exist = 1 / (1 + exp(-e_logit))
 final_scores = proposal_scores * p_exist
 final_raster = S_cauchy * p_exist
 
+---
+
+# Branch 5: Master Synthesis Architecture — Combining Mask2Former + TopoNet clDice + BCRNet (EXP_13)
+
+### 5.1 Motivation & The Core Synergistic Breakthrough
+
+Previous individual methods exhibited reciprocal strengths and weaknesses:
+1. **Mask2Former + TopoNet Loss (EXP_01):** Reached 68% pixel Dice on L3D by using masked attention to isolate foreground thin landmarks from specular abdominal reflections, coupled with TopoNet's centerline clDice to prevent line fragmentation. However, it only outputs discrete raster masks, lacking the smooth parametric continuous splines needed for 3D surgical augmented reality.
+2. **BCRNet (MICCAI 2025 SOTA, 69.57%):** Reached SOTA by parameterizing landmarks directly as 5th-order continuous Bézier curves with sub-pixel resolution and explicit tangent vectors. However, it relies on a weak 4-layer CNN decoder that hits a 66% ceiling, and its ACPI module uses a blind 16x16 grid search on noisy heatmaps, making it susceptible to cold-start proposal collapse.
+3. **The Master Synthesis (Mask2Former-BCRNet):**
+   - Replace BCRNet's naive CNN decoder with Mask2Former's Multi-Scale Pixel Decoder & Masked Attention Transformer Decoder.
+   - Supervise the Mask2Former pixel branch with TopoNet's soft centerline clDice loss.
+   - Bridge Mask2Former's localized query embeddings directly into BCRNet's Bézier control point initialization (bypassing blind grid ACPI).
+   - Perform Hierarchical Curve Refinement (HCR) on Mask2Former's mask-gated multi-scale feature maps.
+   - Dual-output benefit: The system simultaneously outputs state-of-the-art pixel masks (>70% Dice) and smooth, sub-pixel continuous 5th-order Bézier curves for surgical robotic AR overlay.
+
+---
+
+### 5.2 Mathematical Formulation for Mask2Former-BCRNet (Plain Math)
+
+#### 1. Input Multi-Scale Representations:
+Input image X in R^{B x 4 x H x W} (RGB-D from Depth Anything V2).
+Multi-Scale Pixel Decoder outputs:
+F_1 in R^{B x 256 x (H/4) x (W/4)}
+F_2 in R^{B x 256 x (H/8) x (W/8)}
+F_3 in R^{B x 256 x (H/16) x (W/16)}
+F_4 in R^{B x 256 x (H/32) x (W/32)}
+
+#### 2. Masked Cross-Attention Decoder:
+Query matrix Q in R^{N x 256} interacts with F via masked cross-attention:
+Attn_mask = -inf if M_prev(x, y) <= 0.5 else 0.0
+Q_next = Softmax( (Q * W_q) * (F * W_k)^T / sqrt(d) + Attn_mask ) * (F * W_v)
+Pixel Logits M_pred in R^{B x 4 x H x W} (0: Background, 1: Falciform, 2: Ridge, 3: Silhouette).
+
+#### 3. TopoNet Centerline clDice Supervision on Mask2Former Masks:
+Let S_pred = MorphSkeleton( Sigmoid( M_pred ) )
+Let S_gt = MorphSkeleton( Y_gt )
+Topological Precision:
+T_prec = sum( S_pred * Y_gt ) / ( sum( S_pred ) + eps )
+Topological Sensitivity:
+T_sens = sum( S_gt * Sigmoid( M_pred ) ) / ( sum( S_gt ) + eps )
+clDice = ( 2 * T_prec * T_sens ) / ( T_prec + T_sens + eps )
+L_topo = 1.0 - clDice
+
+#### 4. Query-to-Curve Bridge (Bypassing Blind ACPI):
+Each landmark query embedding q_c in R^{256} directly regresses 6 initial Bézier control points:
+Delta_0 = MLP_bridge( q_c ) in R^{6 x 2}
+b_{j, 0} = clamp( anchor_j + 0.4 * tanh( Delta_{0, j} ), 0.0, 1.0 )
+Where anchor_j are class-prior centerline coordinates along [0, 1]^2.
+
+#### 5. Mask-Gated Hierarchical Curve Refinement (M-HCR):
+Sample N=26 points along B(t) = sum_{k=0}^5 C(5, k) * (1-t)^{5-k} * t^k * b_k.
+Feature modulation:
+F_gated = F_pixel * ( 1.0 + Sigmoid( M_pred ) )
+Deformable cross-attention samples F_gated at reference points B(t_i).
+Factored 3-Way Self-Attention enforces:
+- Intra-curve smoothness along t in [0, 1]
+- Inter-proposal competition
+- Inter-category spatial layout
+Iterative control point update across 3 stages:
+b_{k, stage+1} = clamp( b_{k, stage} + 0.2 * tanh( Delta_stage ), 0.0, 1.0 )
+
+#### 6. Dual Continuous-Discrete Joint Loss:
+L_total = L_m2f_bce_dice + lambda_topo * L_topo + lambda_crv * L_crv + lambda_contain * L_contain
+Where:
+L_crv = min( || B_pred(t) - B_gt(t) ||_1, || B_pred(t) - flip(B_gt(t)) ||_1 )
+L_contain = (1 / N) * sum_{i=1}^N [ 1.0 - Sigmoid( M_pred( B(t_i) ) ) ]
+(L_contain forces the continuous Bézier curve to reside strictly within the high-probability ridge of the Mask2Former pixel mask).
+
+
