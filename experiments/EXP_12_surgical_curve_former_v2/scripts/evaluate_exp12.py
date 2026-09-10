@@ -178,10 +178,24 @@ def evaluate_and_visualize():
                 # Visual Plotting Condition
                 should_plot = args.all_plots or is_target or (plots_saved < args.max_plots)
                 if should_plot:
-                    rgb_norm = x[b, :3].cpu().numpy().transpose(1, 2, 0)
-                    rgb_img = np.clip(rgb_norm * 255.0, 0, 255).astype(np.uint8)
+                    # Fix: Load original image directly or properly un-normalize from ImageNet mean/std
+                    rgb_img = None
+                    if os.path.exists(img_path):
+                        img_bgr = cv2.imread(img_path)
+                        if img_bgr is not None:
+                            if img_bgr.shape[:2] != (512, 512):
+                                img_bgr = cv2.resize(img_bgr, (512, 512), interpolation=cv2.INTER_LINEAR)
+                            rgb_img = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+
+                    if rgb_img is None:
+                        rgb_norm = x[b, :3].cpu().numpy().transpose(1, 2, 0)
+                        mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+                        std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+                        rgb_denorm = np.clip((rgb_norm * std + mean) * 255.0, 0, 255).astype(np.uint8)
+                        rgb_img = rgb_denorm
 
                     fig, axes = plt.subplots(1, 4, figsize=(22, 5.5))
+
 
                     # 1. RGB
                     axes[0].imshow(rgb_img)
