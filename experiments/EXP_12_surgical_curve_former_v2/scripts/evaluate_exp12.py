@@ -234,8 +234,10 @@ def evaluate_and_visualize():
                     s_info = []
                     for m in range(3):
                         if exist_p[b, m].item() > 0.5:
-                            ctrl = final_curves[b, m, 0].numpy()  # (6, 2)
+                            best_k = int(torch.argmax(out["final_scores"][b, m]).item()) if "final_scores" in out else 0
+                            ctrl = final_curves[b, m, best_k].numpy()  # (6, 2)
                             pts = np.einsum("ng, gy -> ny", M_bern, ctrl) * 512.0
+
                             pts_int = pts.astype(np.int32).reshape((-1, 1, 2))
                             cv2.polylines(spline_overlay, [pts_int], False, class_colors[m], 3)
                             # Draw control polygon in white
