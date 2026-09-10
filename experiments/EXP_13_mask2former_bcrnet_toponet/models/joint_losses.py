@@ -84,8 +84,9 @@ class JointUnifiedLoss(nn.Module):
         for b in range(B):
             for m in range(M):
                 if gt_exists[b, m] < 0.5:
-                    # Penalize false-positive proposals
-                    loss_score = loss_score + F.binary_cross_entropy(pred_scores[b, m], torch.zeros_like(pred_scores[b, m]))
+                    # Penalize false-positive proposals (AMP-safe)
+                    p_score = pred_scores[b, m].float().clamp(1e-6, 1.0 - 1e-6)
+                    loss_score = loss_score - torch.log(1.0 - p_score).mean()
                     continue
 
                 valid_count += 1
@@ -118,11 +119,14 @@ class JointUnifiedLoss(nn.Module):
                 cos_sim = torch.max(cos_fwd, cos_rev)
                 loss_tangent = loss_tangent + torch.mean(1.0 - cos_sim)
 
-                # Proposal confidence supervision
+                # Proposal confidence supervision (AMP-safe analytical formulation)
                 # Best proposal target is 1.0, others target 0.0
                 score_target = torch.zeros(K, device=device)
                 score_target[best_k] = 1.0
-                loss_score = loss_score + F.binary_cross_entropy(pred_scores[b, m], score_target)
+                p_score = pred_scores[b, m].float().clamp(1e-6, 1.0 - 1e-6)
+                t_score = score_target.float()
+                bce = -(t_score * torch.log(p_score) + (1.0 - t_score) * torch.log(1.0 - p_score)).mean()
+                loss_score = loss_score + bce
 
         if valid_count > 0:
             loss_crv = loss_crv / float(valid_count)
