@@ -75,7 +75,12 @@ class Mask2FormerBCRNetDataset(Dataset):
 
         split_dir = os.path.join(dataset_dir, mode)
         if not os.path.exists(split_dir):
-            split_dir = dataset_dir
+            if os.path.exists(os.path.join(dataset_dir, mode.capitalize())):
+                split_dir = os.path.join(dataset_dir, mode.capitalize())
+            elif os.path.exists(os.path.join(dataset_dir, mode.lower())):
+                split_dir = os.path.join(dataset_dir, mode.lower())
+            else:
+                split_dir = dataset_dir
         self.split_dir = split_dir
 
         img_dir = os.path.join(split_dir, "images")
@@ -99,8 +104,10 @@ class Mask2FormerBCRNetDataset(Dataset):
         if use_depth:
             depth_globs = (
                 glob.glob(os.path.join(split_dir, "**", "depth_anything_v2", "*.png"), recursive=True) +
+                glob.glob(os.path.join(split_dir, "**", "depth_AdelaiDepth", "*.png"), recursive=True) +
                 glob.glob(os.path.join(split_dir, "**", "depth", "*.png"), recursive=True) +
-                glob.glob(os.path.join(dataset_dir, "**", "depth_anything_v2", "*.png"), recursive=True)
+                glob.glob(os.path.join(dataset_dir, "**", "depth_anything_v2", "*.png"), recursive=True) +
+                glob.glob(os.path.join(dataset_dir, "**", "depth_AdelaiDepth", "*.png"), recursive=True)
             )
             for df in depth_globs:
                 self.depth_index[os.path.splitext(os.path.basename(df))[0]] = df
