@@ -129,6 +129,38 @@ def _safe_load_bezier_gt(self, item_name):
 
 BezierDataset.load_bezier_gt = _safe_load_bezier_gt
 
+_depth_cache = {}
+def _safe_load_depth(self, item_name):
+    candidates = [
+        os.path.join(self.data_path, 'depth_AdelaiDepth', item_name + '.png'),
+        os.path.join(self.data_path, 'depth_AdelaiDepth', item_name + '.jpg'),
+        os.path.join(self.data_path, 'depth_anything_v2', item_name + '.png'),
+        os.path.join(self.data_path, 'depth', item_name + '.png'),
+        f"/kaggle/input/datasets/khoatrytopublish/l3d-train/Train/depth_AdelaiDepth/{item_name}.png",
+        f"/kaggle/input/datasets/khoatrytopublish/l3d-val/Val/depth_AdelaiDepth/{item_name}.png",
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            img = cv2.imread(c, 0)
+            if img is not None:
+                return torch.from_numpy(cv2.resize(img, self.image_size).astype('float32')).to(self.device)
+    if os.path.exists('/kaggle/input'):
+        if item_name in _depth_cache and os.path.exists(_depth_cache[item_name]):
+            img = cv2.imread(_depth_cache[item_name], 0)
+            if img is not None:
+                return torch.from_numpy(cv2.resize(img, self.image_size).astype('float32')).to(self.device)
+        for root, _, files in os.walk('/kaggle/input'):
+            for ext in ['.png', '.jpg']:
+                if f"{item_name}{ext}" in files and 'depth' in root.lower():
+                    p = os.path.join(root, f"{item_name}{ext}")
+                    _depth_cache[item_name] = p
+                    img = cv2.imread(p, 0)
+                    if img is not None:
+                        return torch.from_numpy(cv2.resize(img, self.image_size).astype('float32')).to(self.device)
+    return torch.zeros(self.image_size, dtype=torch.float32, device=self.device)
+
+BezierDataset.load_depth = _safe_load_depth
+
 
 def cal_loss(loss_dict, loss_weight):
     loss = 0
@@ -169,11 +201,18 @@ def metrix(results, targets):
 
 def main(args):
     device = args.device if torch.cuda.is_available() else "cpu"
+    eff_bs = args.bs * args.accum
+    print("=" * 80)
     print(f"🚀 Initializing BCRNet training on device: {device}")
-    print(f"   Config:    {args.config}")
-    print(f"   Data path: {args.data_path}")
-    print(f"   Save path: {args.save_path}")
-    print(f"   Epochs:    {args.epochs} | Batch size: {args.bs}")
+    print(f"   Config:        {args.config}")
+    print(f"   Data path:     {args.data_path}")
+    print(f"   Save path:     {args.save_path}")
+    print(f"   Epochs:        {args.epochs}")
+    print(f"   Batch Size:    {args.bs} (Micro) x {args.accum} (Accum) = {eff_bs} (Effective, matching Paper)")
+    print(f"   Aux Loss Wt:   lambda_s = {args.lambda_s} (Paper Section 3.1: 10.0; fixed bug)")
+    print(f"   Grad Clipping: {args.clip_norm} (Paper config: 0.1)")
+    print(f"   Val Mode:      model.{args.val_mode}() (Paper test.py: train)")
+    print("=" * 80)
 
     # Configure W&B
     use_wandb = False
@@ -228,27 +267,34 @@ def main(args):
 
     for epoch in range(start_epoch + 1, args.epochs + 1):
         lam = sigmoid_weight(epoch)
+        # Fixed auxiliary segmentation loss: lambda_s = 10.0 (paper Section 3.1 & Section 2.5)
         loss_weights = {
             'loss_ce_enc': 1.0 - lam,
             'loss_pos_enc': lam,
-            'segmentation_loss': lam,
+            'segmentation_loss': args.lambda_s * lam,
         }
 
         model.train()
         pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{args.epochs}")
         epoch_losses = []
 
-        for batch_data in pbar:
+        optimizer.zero_grad()
+        for batch_idx, batch_data in enumerate(pbar):
             results = model(batch_data, return_loss=True)
             loss = cal_loss(results, loss_weights)
 
-            optimizer.zero_grad()
+            loss_unscaled = loss.item()
+            loss = loss / args.accum
             loss.backward()
-            optimizer.step()
 
-            loss_val = loss.item()
-            epoch_losses.append(loss_val)
-            pbar.set_postfix({'epoch': epoch, 'loss': f"{loss_val:.4f}"})
+            if (batch_idx + 1) % args.accum == 0 or (batch_idx + 1) == len(train_loader):
+                if args.clip_norm > 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.clip_norm)
+                optimizer.step()
+                optimizer.zero_grad()
+
+            epoch_losses.append(loss_unscaled)
+            pbar.set_postfix({'epoch': epoch, 'loss': f"{loss_unscaled:.4f}"})
             del batch_data, results, loss
 
         mean_loss = float(np.mean(epoch_losses)) if epoch_losses else 0.0
@@ -261,8 +307,12 @@ def main(args):
             torch.save({'model': model.state_dict(), 'epoch': epoch}, ckpt_file)
             print(f"\n💾 Saved checkpoint: {ckpt_file}")
 
-            # Validation pass
-            model.eval()
+            # Validation pass matching official test.py line 26
+            if args.val_mode == 'train':
+                model.train()
+            else:
+                model.eval()
+
             with torch.no_grad():
                 ious = []
                 dices = []
@@ -311,6 +361,10 @@ if __name__ == '__main__':
     parser.add_argument('--data_path', default=default_data)
     parser.add_argument('--epochs', type=int, default=80)
     parser.add_argument('--bs', type=int, default=2)
+    parser.add_argument('--accum', type=int, default=2, help="Gradient accumulation steps (e.g. 2 x bs=2 equals paper batch size 4)")
+    parser.add_argument('--lambda_s', type=float, default=10.0, help="Auxiliary CNN segmentation loss weight (Paper Section 3.1: 10.0)")
+    parser.add_argument('--clip_norm', type=float, default=0.1, help="Max gradient norm clipping (Paper config: 0.1)")
+    parser.add_argument('--val_mode', type=str, default='train', choices=['train', 'eval'], help="Model mode during validation (official test.py uses train)")
     parser.add_argument('--lr', type=float, default=1e-5)
     parser.add_argument('--weight_decay', type=float, default=1e-4)
     parser.add_argument('--eval_period', type=int, default=10)

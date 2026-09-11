@@ -41,15 +41,18 @@ python experiments/EXP_12_bcrnet_replication/scripts/prepare_data.py \
 
 ---
 
-## 3. Training Execution (80 Epochs)
+## 3. Training Execution (Fixed Auxiliary Loss lambda_s = 10.0 & Effective BS = 4)
 
-Executes the official BCRNet training schedule:
+Executes the official BCRNet training schedule with full paper fidelity:
 - Architecture: `TransformerPureDetector` (ResNet-50 + AdelaiDepth + SAM ViT-B + ACPI + 3-Stage HCR)
-- Optimizer: Adam (`lr = 1e-5`, `weight_decay = 1e-4`, `batch_size = 2`)
+- Optimizer: Adam (`lr = 1e-5`, `weight_decay = 1e-4`, `bs = 2`, `accum = 2` -> **Effective Batch Size = 4**)
+- Auxiliary Segmentation Loss: $\lambda_s = 10.0$ (Paper Section 3.1 & Section 2.5)
+- Gradient Norm Clipping: `clip_norm = 0.1` (matching Paper config)
 - Loss Annealing: $\lambda(epoch) = 1 - \sigma((epoch - 10) / 2)$
 
 ```bash
 cd /kaggle/working/surgical_ai
+git pull origin main
 export PYTHONPATH="/kaggle/working/surgical_ai/repos/BCRNet:/kaggle/working/surgical_ai:$PYTHONPATH"
 
 python experiments/EXP_12_bcrnet_replication/scripts/train_bcrnet.py \
@@ -57,8 +60,11 @@ python experiments/EXP_12_bcrnet_replication/scripts/train_bcrnet.py \
     --data_path /kaggle/working/L3D \
     --epochs 80 \
     --bs 2 \
+    --accum 2 \
+    --lambda_s 10.0 \
+    --clip_norm 0.1 \
     --eval_period 10 \
-    --save_path /kaggle/working/checkpoints/EXP_12_bcrnet_replication \
+    --save_path /kaggle/working/checkpoints/EXP_12_bcrnet_fixed \
     --device cuda:0
 ```
 
