@@ -104,6 +104,7 @@ def _patched_bezier_sampler_init(self, num_sample_points, degree=5):
 BezierSampler.__init__ = _patched_bezier_sampler_init
 
 from adet.modeling.bezier_detection import TransformerPureDetector
+from utils.config_utils import load_config
 from utils.bezier_dataset import BezierDataset, collate_fun
 
 # Memory leak prevention: ensure .npz files are properly closed and masks kept on CPU as uint8
