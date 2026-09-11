@@ -198,38 +198,42 @@ def create_comparison_panel(raw_bgr, results, targets, item_name, dice_val, iou_
 
     # 1. Ground Truth Rasterization & Overlay
     gt_canvas = raw_bgr.copy()
-    gt_mask_3ch = np.zeros((H, W, 3), dtype=np.uint8)
+    gt_channels = []
     for c_idx, lm in enumerate(targets[0]):
         m = lm['landmark_mask']
         m_np = (m.cpu().numpy() if torch.is_tensor(m) else m).astype(np.uint8)
         if m_np.shape[:2] != (H, W):
             m_np = cv2.resize(m_np, (W, H), interpolation=cv2.INTER_NEAREST)
-        gt_mask_3ch[:, :, c_idx] = m_np
         color = CLASS_COLORS[c_idx]
-        gt_canvas[m_np > 0] = cv2.addWeighted(gt_canvas[m_np > 0], 0.3, np.full_like(gt_canvas[m_np > 0], color), 0.7, 0)
+        mask_bool = m_np > 0
+        if np.any(mask_bool):
+            gt_canvas[mask_bool] = (gt_canvas[mask_bool].astype(np.float32) * 0.3 + np.array(color, dtype=np.float32) * 0.7).astype(np.uint8)
+        gt_channels.append(m_np)
+    gt_mask_3ch = np.stack(gt_channels, axis=-1)
 
     # 2. Prediction Rasterization & Overlay
     pred_canvas = raw_bgr.copy()
-    pred_mask_3ch = np.zeros((H, W, 3), dtype=np.uint8)
+    pred_channels = []
     detected_counts = {c: 0 for c in range(3)}
 
     for c_idx, lm in enumerate(results[0]):
+        channel = np.zeros((H, W), dtype=np.uint8)
         color = CLASS_COLORS[c_idx]
         if 'ctrl_points' in lm and lm['ctrl_points'].numel() > 0:
             curves = lm['ctrl_points'].detach().cpu().numpy()
-            scores = lm.get('scores', torch.tensor([])).detach().cpu().numpy() if 'scores' in lm else None
             detected_counts[c_idx] = len(curves)
             for k, cp in enumerate(curves):
-                # Scale if normalized to 1024 or image_size
                 pts = np.clip(cp, [0, 0], [W - 1, H - 1]).astype(np.int32)
                 for i in range(1, len(pts)):
                     pt1 = (int(pts[i - 1][0]), int(pts[i - 1][1]))
                     pt2 = (int(pts[i][0]), int(pts[i][1]))
-                    cv2.line(pred_mask_3ch[:, :, c_idx], pt1, pt2, 1, 30)
+                    cv2.line(channel, pt1, pt2, 1, 30)
                     cv2.line(pred_canvas, pt1, pt2, color, 4)
                 # Draw control points markers
                 for p in pts:
                     cv2.circle(pred_canvas, (int(p[0]), int(p[1])), 4, (255, 255, 255), -1)
+        pred_channels.append(channel)
+    pred_mask_3ch = np.stack(pred_channels, axis=-1)
 
     # 3. Pixel Confusion Overlay
     # Green = True Positive (overlap), Red = False Positive, Yellow = False Negative
