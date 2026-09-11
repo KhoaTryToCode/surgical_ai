@@ -103,9 +103,30 @@ def _patched_bezier_sampler_init(self, num_sample_points, degree=5):
     _orig_bezier_sampler_init(self, num_sample_points, degree=degree)
 BezierSampler.__init__ = _patched_bezier_sampler_init
 
-from utils.bezier_dataset import BezierDataset, collate_fun
 from adet.modeling.bezier_detection import TransformerPureDetector
 from utils.config_utils import load_config
+from utils.bezier_dataset import BezierDataset, collate_fun
+
+# Memory leak prevention: ensure .npz files are properly closed
+def _safe_load_bezier_gt(self, item_name):
+    path = os.path.join(self.data_path, 's_bezier', item_name + '.npz')
+    with np.load(path, allow_pickle=True) as bezier_data:
+        landmark_list = ['silhouette', 'ligament', 'ridge']
+        source = []
+        for i, (label, data) in enumerate(zip(landmark_list, bezier_data['gt'])):
+            ctrl_points = torch.from_numpy(data['ctrl_points']).float().to(self.device)
+            curve_points = torch.from_numpy(data['curve_points']).float().to(self.device)
+            landmark_mask = torch.from_numpy(data['landmark_mask']).float().to(self.device)
+            source.append({
+                'label': label,
+                'ctrl_points': ctrl_points,
+                'class_id': torch.LongTensor([i]).to(self.device),
+                'curve_points': curve_points,
+                'landmark_mask': landmark_mask
+            })
+    return source
+
+BezierDataset.load_bezier_gt = _safe_load_bezier_gt
 
 
 def compute_assd(pred_mask: np.ndarray, gt_mask: np.ndarray) -> float:
@@ -216,6 +237,12 @@ def evaluate_split(model, dataset_dir, split_name, save_dir, device):
         cv2.imwrite(os.path.join(seg_save_dir, f"{item_name}-gt.png"), gt_bgr.astype(np.uint8))
 
         pbar.set_postfix({'DSC': f"{sample_dice*100:.2f}%", 'IoU': f"{sample_iou*100:.2f}%"})
+        del batch_data, results, pred, gt, img, depth, sam_feature, targets, info
+
+    import gc
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     # Aggregate metrics
     mean_dice = float(np.mean([s['dice'] for s in sample_metrics]))

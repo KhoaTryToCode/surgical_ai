@@ -104,9 +104,30 @@ def _patched_bezier_sampler_init(self, num_sample_points, degree=5):
     _orig_bezier_sampler_init(self, num_sample_points, degree=degree)
 BezierSampler.__init__ = _patched_bezier_sampler_init
 
-from utils.bezier_dataset import BezierDataset, collate_fun
 from adet.modeling.bezier_detection import TransformerPureDetector
 from utils.config_utils import load_config
+from utils.bezier_dataset import BezierDataset, collate_fun
+
+# Memory leak prevention: ensure .npz files are properly closed
+def _safe_load_bezier_gt(self, item_name):
+    path = os.path.join(self.data_path, 's_bezier', item_name + '.npz')
+    with np.load(path, allow_pickle=True) as bezier_data:
+        landmark_list = ['silhouette', 'ligament', 'ridge']
+        source = []
+        for i, (label, data) in enumerate(zip(landmark_list, bezier_data['gt'])):
+            ctrl_points = torch.from_numpy(data['ctrl_points']).float().to(self.device)
+            curve_points = torch.from_numpy(data['curve_points']).float().to(self.device)
+            landmark_mask = torch.from_numpy(data['landmark_mask']).float().to(self.device)
+            source.append({
+                'label': label,
+                'ctrl_points': ctrl_points,
+                'class_id': torch.LongTensor([i]).to(self.device),
+                'curve_points': curve_points,
+                'landmark_mask': landmark_mask
+            })
+    return source
+
+BezierDataset.load_bezier_gt = _safe_load_bezier_gt
 
 
 def cal_loss(loss_dict, loss_weight):
@@ -223,6 +244,7 @@ def main(args):
             loss_val = loss.item()
             epoch_losses.append(loss_val)
             pbar.set_postfix({'epoch': epoch, 'loss': f"{loss_val:.4f}"})
+            del batch_data, results, loss
 
         mean_loss = float(np.mean(epoch_losses)) if epoch_losses else 0.0
         if use_wandb:
@@ -247,6 +269,7 @@ def main(args):
                     ious.append(iou)
                     dices.append(dice)
                     val_pbar.set_postfix({'Val_epoch': epoch, 'Dice': f"{dice*100:.2f}%", 'IoU': f"{iou*100:.2f}%"})
+                    del batch_data, results, img, depth, sam_feature, targets, info
 
                 mean_val_dice = float(np.mean(dices)) if dices else 0.0
                 mean_val_iou = float(np.mean(ious)) if ious else 0.0
@@ -260,6 +283,12 @@ def main(args):
                     best_file = os.path.join(args.save_path, "best_model.pt")
                     torch.save({'model': model.state_dict(), 'epoch': epoch, 'val_dice': best_dice}, best_file)
                     print(f"⭐ New best model saved ({best_dice*100:.2f}% DSC) -> {best_file}")
+
+        # End of epoch garbage collection and CUDA cache release
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     print("\n" + "=" * 80)
     print(f"✅ Training completed! Best validation DSC: {best_dice*100:.2f}%")
