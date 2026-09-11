@@ -69,37 +69,35 @@ python experiments/EXP_12_bcrnet_replication/scripts/train_bcrnet.py \
 
 ## 4. Evaluation & Metric Verification (Val & Test)
 
-Evaluates the best checkpoint across both **Val** and **Test** splits, generating Dice (DSC), IoU, ASSD, and side-by-side rendered stroke visual overlays.
+Evaluates the best checkpoint (`best_model.pt`) on the **Test** split (exact benchmark: 109 frames) or **both** splits.
 
-### Evaluate Both Splits (Val + Test) with Paper Setting (threshold 0.3, model_mode train):
+### Recommended: Evaluate Test Split (Paper Benchmark: 69.57% DSC):
 ```bash
 cd /kaggle/working/surgical_ai
 git pull origin main
 export PYTHONPATH="/kaggle/working/surgical_ai/repos/BCRNet:/kaggle/working/surgical_ai:$PYTHONPATH"
 
 python experiments/EXP_12_bcrnet_replication/scripts/evaluate_bcrnet.py \
-    --config experiments/EXP_12_bcrnet_replication/configs/bcrnet_l3d.yaml \
-    --model_path /kaggle/working/checkpoints/EXP_12_bcrnet_replication/best_model.pt \
-    --data_path /kaggle/working/L3D \
-    --split both \
-    --threshold 0.3 \
-    --model_mode train \
-    --save_path /kaggle/working/results/EXP_12_bcrnet_replication \
-    --device cuda:0
-```
-
-### Evaluate Test Split Only (Exact Benchmark Setting):
-```bash
-python experiments/EXP_12_bcrnet_replication/scripts/evaluate_bcrnet.py \
-    --config experiments/EXP_12_bcrnet_replication/configs/bcrnet_l3d.yaml \
     --model_path /kaggle/working/checkpoints/EXP_12_bcrnet_replication/best_model.pt \
     --data_path /kaggle/working/L3D \
     --split Test \
-    --threshold 0.3 \
-    --model_mode train \
-    --save_path /kaggle/working/results/EXP_12_bcrnet_replication \
-    --device cuda:0
+    --threshold 0.3
 ```
+
+### Comprehensive: Evaluate Both Splits (Val + Test):
+```bash
+python experiments/EXP_12_bcrnet_replication/scripts/evaluate_bcrnet.py \
+    --model_path /kaggle/working/checkpoints/EXP_12_bcrnet_replication/best_model.pt \
+    --data_path /kaggle/working/L3D \
+    --split both \
+    --threshold 0.3
+```
+
+> **Memory Safety Note**: 
+> - Default `--model_mode` is `eval` (freezing BatchNorm running statistics to prevent activation explosion).
+> - Landmark masks are kept on CPU as `uint8`, reducing GPU churn by 25 MB/frame.
+> - Contiguous 2D C-buffers prevent OpenCV OpenCL UMat allocation errors.
+> - System memory is garbage collected and trimmed every 20 frames.
 
 ---
 

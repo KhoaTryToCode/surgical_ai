@@ -104,10 +104,9 @@ def _patched_bezier_sampler_init(self, num_sample_points, degree=5):
 BezierSampler.__init__ = _patched_bezier_sampler_init
 
 from adet.modeling.bezier_detection import TransformerPureDetector
-from utils.config_utils import load_config
 from utils.bezier_dataset import BezierDataset, collate_fun
 
-# Memory leak prevention: ensure .npz files are properly closed
+# Memory leak prevention: ensure .npz files are properly closed and masks kept on CPU as uint8
 def _safe_load_bezier_gt(self, item_name):
     path = os.path.join(self.data_path, 's_bezier', item_name + '.npz')
     with np.load(path, allow_pickle=True) as bezier_data:
@@ -116,7 +115,8 @@ def _safe_load_bezier_gt(self, item_name):
         for i, (label, data) in enumerate(zip(landmark_list, bezier_data['gt'])):
             ctrl_points = torch.from_numpy(data['ctrl_points']).float().to(self.device)
             curve_points = torch.from_numpy(data['curve_points']).float().to(self.device)
-            landmark_mask = torch.from_numpy(data['landmark_mask']).float().to(self.device)
+            # Store landmark mask as uint8 on CPU to prevent 25MB GPU allocation per frame
+            landmark_mask = torch.from_numpy(data['landmark_mask']).to(torch.uint8)
             source.append({
                 'label': label,
                 'ctrl_points': ctrl_points,
@@ -161,24 +161,40 @@ def render_prediction_and_gt(results, targets):
     Renders 30px thick landmark strokes in-place on C-contiguous 2D channel buffers.
     Ensures full OpenCV cv::Mat memory compatibility with zero extra allocations.
     """
-    gt = np.stack([lm['landmark_mask'].cpu().numpy().astype(np.uint8) for lm in targets[0]], -1)
+    gt_list = []
+    for lm in targets[0]:
+        m = lm['landmark_mask']
+        if torch.is_tensor(m):
+            gt_list.append(m.cpu().numpy().astype(np.uint8))
+        else:
+            gt_list.append(m.astype(np.uint8))
+    gt = np.stack(gt_list, -1)
     H, W = gt.shape[:2]
 
     pred_channels = []
     for m, lm in enumerate(results[0]):
         channel = np.zeros((H, W), dtype=np.uint8)
-        curves = lm['ctrl_points'].cpu().numpy()
-        for curve_points in curves:
-            for i in range(1, len(curve_points)):
-                pt1 = (int(curve_points[i - 1][0]), int(curve_points[i - 1][1]))
-                pt2 = (int(curve_points[i][0]), int(curve_points[i][1]))
-                cv2.line(channel, pt1, pt2, 1, 30)
+        if 'ctrl_points' in lm and lm['ctrl_points'].numel() > 0:
+            curves = lm['ctrl_points'].detach().cpu().numpy()
+            for curve_points in curves:
+                for i in range(1, len(curve_points)):
+                    pt1 = (int(curve_points[i - 1][0]), int(curve_points[i - 1][1]))
+                    pt2 = (int(curve_points[i][0]), int(curve_points[i][1]))
+                    cv2.line(channel, pt1, pt2, 1, 30)
         pred_channels.append(channel)
     pred = np.stack(pred_channels, axis=-1)
     return pred, gt
 
 
-def evaluate_split(model, dataset_dir, split_name, save_dir, device, save_images=False):
+def get_mem_mb():
+    try:
+        import psutil
+        return psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024)
+    except Exception:
+        return 0.0
+
+
+def evaluate_split(model, dataset_dir, split_name, save_dir, device, save_images=False, do_assd=True):
     split_cap = split_name.capitalize()
     data_split_dir = os.path.join(dataset_dir, split_cap)
     if not os.path.exists(data_split_dir):
@@ -196,6 +212,9 @@ def evaluate_split(model, dataset_dir, split_name, save_dir, device, save_images
 
     print(f"\n" + "=" * 70, flush=True)
     print(f"🔍 EVALUATING BCRNET ON: [{split_cap.upper()}] ({len(dataset)} frames)", flush=True)
+    print(f"   Initial Host RAM: {get_mem_mb():.1f} MB", flush=True)
+    if torch.cuda.is_available():
+        print(f"   Initial GPU VRAM: {torch.cuda.memory_allocated() / (1024 * 1024):.1f} MB", flush=True)
     print(f"=" * 70, flush=True)
 
     pbar = tqdm(loader, desc=f"Evaluating {split_cap}")
@@ -215,9 +234,12 @@ def evaluate_split(model, dataset_dir, split_name, save_dir, device, save_images
         sample_iou = float(sample_dice / (2.0 - sample_dice))
 
         # Overall ASSD
-        pred_flat = (np.sum(pred, axis=-1) > 0).astype(np.bool_)
-        gt_flat = (np.sum(gt, axis=-1) > 0).astype(np.bool_)
-        sample_assd = compute_assd(pred_flat, gt_flat)
+        if do_assd:
+            pred_flat = (np.sum(pred, axis=-1) > 0).astype(np.bool_)
+            gt_flat = (np.sum(gt, axis=-1) > 0).astype(np.bool_)
+            sample_assd = compute_assd(pred_flat, gt_flat)
+        else:
+            sample_assd = float('nan')
 
         # Per-class Dice
         class_dices = {}
@@ -285,12 +307,13 @@ def evaluate_split(model, dataset_dir, split_name, save_dir, device, save_images
         c_mean = float(np.mean([s[f"{c_name}_dice"] for s in sample_metrics]))
         summary[f"{c_name}_dice"] = c_mean * 100.0
 
-    print(f"\n📊 Summary for {split_cap}:")
-    print(f"   • Mean DSC:  {summary['mean_dice']:.2f}%  (Paper: 69.57%)")
-    print(f"   • Mean IoU:  {summary['mean_iou']:.2f}%  (Paper: 54.16%)")
-    print(f"   • Mean ASSD: {summary['mean_assd']:.2f} px (Paper: 43.55 px)")
+    print(f"\n📊 Summary for {split_cap}:", flush=True)
+    print(f"   • Mean DSC:  {summary['mean_dice']:.2f}%  (Paper: 69.57%)", flush=True)
+    print(f"   • Mean IoU:  {summary['mean_iou']:.2f}%  (Paper: 54.16%)", flush=True)
+    if not np.isnan(mean_assd):
+        print(f"   • Mean ASSD: {summary['mean_assd']:.2f} px (Paper: 43.55 px)", flush=True)
     for c_name in class_names:
-        print(f"     - {c_name.capitalize()}: {summary[f'{c_name}_dice']:.2f}% DSC")
+        print(f"     - {c_name.capitalize()}: {summary[f'{c_name}_dice']:.2f}% DSC", flush=True)
 
     with open(os.path.join(save_dir, f"metrics_{split_cap.lower()}.json"), "w") as f:
         json.dump({'summary': summary, 'samples': sample_metrics}, f, indent=2)
@@ -307,9 +330,11 @@ def main():
     parser.add_argument('--config', default=default_cfg)
     parser.add_argument('--model_path', required=True, help="Path to checkpoint (.pt)")
     parser.add_argument('--data_path', default=default_data)
-    parser.add_argument('--split', default='both', choices=['Val', 'Test', 'both'])
+    parser.add_argument('--split', default='Test', choices=['Val', 'Test', 'both'])
     parser.add_argument('--threshold', type=float, default=0.3, help="Proposal confidence threshold (Paper: 0.3, default config: 0.35)")
-    parser.add_argument('--model_mode', default='train', choices=['train', 'eval'], help="Model mode during inference (official test.py uses 'train' with torch.no_grad())")
+    parser.add_argument('--model_mode', default='eval', choices=['eval', 'train'], help="Model mode during inference (default 'eval' for stable stats; 'train' for test.py parity)")
+    parser.add_argument('--no_assd', action='store_true', default=False, help="Skip ASSD computation for fastest evaluation")
+    parser.add_argument('--save_images', action='store_true', default=False, help="Save PNG prediction overlays")
     parser.add_argument('--save_path', default=default_save)
     parser.add_argument('--device', default='cuda:0' if torch.cuda.is_available() else 'cpu')
 
@@ -317,14 +342,14 @@ def main():
     os.makedirs(args.save_path, exist_ok=True)
 
     device = args.device if torch.cuda.is_available() else 'cpu'
-    print(f"🚀 Loading BCRNet model from: {args.model_path}")
+    print(f"🚀 Loading BCRNet model from: {args.model_path}", flush=True)
     cfg = load_config(args.config)
     cfg.MODEL.DEVICE = device
     model = TransformerPureDetector(cfg).to(device)
 
     # Configure inference threshold (Paper: 0.3)
     model.test_score_threshold = args.threshold
-    print(f"   Inference threshold: {model.test_score_threshold} (Paper: 0.3)")
+    print(f"   Inference threshold: {model.test_score_threshold} (Paper: 0.3)", flush=True)
 
     checkpoint = torch.load(args.model_path, map_location=device)
     state_dict = checkpoint['model'] if 'model' in checkpoint else checkpoint
@@ -332,30 +357,39 @@ def main():
 
     if args.model_mode == 'train':
         model.train()
-        print("   Inference mode: model.train() (matching official repos/BCRNet/test.py line 26)")
+        print("   Inference mode: model.train() (matching official repos/BCRNet/test.py line 26)", flush=True)
     else:
         model.eval()
-        print("   Inference mode: model.eval()")
-    print("✅ Model loaded successfully.")
+        print("   Inference mode: model.eval() (standard stable evaluation)", flush=True)
+    print("✅ Model loaded successfully.", flush=True)
 
     splits_to_eval = ['Val', 'Test'] if args.split == 'both' else [args.split]
 
     all_summaries = {}
     for sp in splits_to_eval:
-        summary = evaluate_split(model, args.data_path, sp, args.save_path, device)
+        summary = evaluate_split(
+            model=model,
+            dataset_dir=args.data_path,
+            split_name=sp,
+            save_dir=args.save_path,
+            device=device,
+            save_images=args.save_images,
+            do_assd=not args.no_assd
+        )
         if summary:
             all_summaries[sp] = summary
 
     # Print comparative Markdown table
-    print("\n" + "=" * 80)
-    print("📋 REPLICATION BENCHMARK SUMMARY TABLE:")
-    print("=" * 80)
-    print("| Split | DSC (%) | IoU (%) | ASSD (px) | Silhouette (%) | Ligament (%) | Ridge (%) |")
-    print("|:---|:---:|:---:|:---:|:---:|:---:|:---:|")
-    print(f"| **Paper Target (Test)** | **69.57** | **54.16** | **43.55** | -- | -- | -- |")
+    print("\n" + "=" * 80, flush=True)
+    print("📋 REPLICATION BENCHMARK SUMMARY TABLE:", flush=True)
+    print("=" * 80, flush=True)
+    print("| Split | DSC (%) | IoU (%) | ASSD (px) | Silhouette (%) | Ligament (%) | Ridge (%) |", flush=True)
+    print("|:---|:---:|:---:|:---:|:---:|:---:|:---:|", flush=True)
+    print(f"| **Paper Target (Test)** | **69.57** | **54.16** | **43.55** | -- | -- | -- |", flush=True)
     for sp, s in all_summaries.items():
-        print(f"| {sp} | {s['mean_dice']:.2f} | {s['mean_iou']:.2f} | {s['mean_assd']:.2f} | {s['silhouette_dice']:.2f} | {s['ligament_dice']:.2f} | {s['ridge_dice']:.2f} |")
-    print("=" * 80 + "\n")
+        assd_str = f"{s['mean_assd']:.2f}" if not np.isnan(s['mean_assd']) else "N/A"
+        print(f"| {sp} | {s['mean_dice']:.2f} | {s['mean_iou']:.2f} | {assd_str} | {s['silhouette_dice']:.2f} | {s['ligament_dice']:.2f} | {s['ridge_dice']:.2f} |", flush=True)
+    print("=" * 80 + "\n", flush=True)
 
 
 if __name__ == '__main__':
