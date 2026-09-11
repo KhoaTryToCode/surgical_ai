@@ -63,6 +63,12 @@ def _ad_pts(self, cpm):
     return upcast(self.bernstein_matrix).matmul(upcast(cpm))
 BezierSampler.get_sample_points = _ad_pts
 
+try:
+    import fvcore
+except ImportError:
+    import subprocess
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "fvcore", "iopath"], check=True)
+
 from adet.modeling.bezier_detection import TransformerPureDetector
 from utils.config_utils import load_config
 from utils.bezier_dataset import BezierDataset, collate_fun
