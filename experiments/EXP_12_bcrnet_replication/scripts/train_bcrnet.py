@@ -149,15 +149,20 @@ def evaluation(pred, gt):
 
 
 def metrix(results, targets):
-    gt = np.stack([lm['landmark_mask'].cpu().numpy() for lm in targets[0]], -1).astype(np.uint8)
-    pred = np.zeros(gt.shape, dtype=np.uint8)
+    gt = np.stack([lm['landmark_mask'].cpu().numpy().astype(np.uint8) for lm in targets[0]], -1)
+    H, W = gt.shape[:2]
+
+    pred_channels = []
     for m, lm in enumerate(results[0]):
+        channel = np.zeros((H, W), dtype=np.uint8)
         curves = lm['ctrl_points'].cpu().numpy()
         for curve_points in curves:
             for i in range(1, len(curve_points)):
                 pt1 = (int(curve_points[i - 1][0]), int(curve_points[i - 1][1]))
                 pt2 = (int(curve_points[i][0]), int(curve_points[i][1]))
-                cv2.line(pred[:, :, m], pt1, pt2, 1, 30)
+                cv2.line(channel, pt1, pt2, 1, 30)
+        pred_channels.append(channel)
+    pred = np.stack(pred_channels, axis=-1)
     iou, dice = evaluation(pred, gt)
     return iou, dice
 
