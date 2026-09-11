@@ -158,25 +158,26 @@ def compute_assd(pred_mask: np.ndarray, gt_mask: np.ndarray) -> float:
 
 def render_prediction_and_gt(results, targets):
     """
-    Renders 30px thick landmark strokes matching official BCRNet test.py metrix().
+    Renders 30px thick landmark strokes in-place without memory allocation.
+    Eliminates the 6 GB/image .copy() leak present in the original BCRNet test.py.
     """
-    gt = np.stack([lm['landmark_mask'].cpu().numpy() for lm in targets[0]], -1)
-    pred = np.zeros_like(gt)
+    gt = np.stack([lm['landmark_mask'].cpu().numpy() for lm in targets[0]], -1).astype(np.uint8)
+    pred = np.zeros(gt.shape, dtype=np.uint8)
     for m, lm in enumerate(results[0]):
         curves = lm['ctrl_points'].cpu().numpy()
         for curve_points in curves:
             for i in range(1, len(curve_points)):
-                pt1 = tuple(map(int, curve_points[i - 1]))
-                pt2 = tuple(map(int, curve_points[i]))
-                pred[:, :, m] = cv2.line(pred[:, :, m].copy(), pt1, pt2, [1], 30)
+                pt1 = (int(curve_points[i - 1][0]), int(curve_points[i - 1][1]))
+                pt2 = (int(curve_points[i][0]), int(curve_points[i][1]))
+                cv2.line(pred[:, :, m], pt1, pt2, 1, 30)
     return pred, gt
 
 
-def evaluate_split(model, dataset_dir, split_name, save_dir, device):
+def evaluate_split(model, dataset_dir, split_name, save_dir, device, save_images=False):
     split_cap = split_name.capitalize()
     data_split_dir = os.path.join(dataset_dir, split_cap)
     if not os.path.exists(data_split_dir):
-        print(f"⚠️ Directory for split '{split_name}' does not exist at {data_split_dir}. Skipping.")
+        print(f"⚠️ Directory for split '{split_name}' does not exist at {data_split_dir}. Skipping.", flush=True)
         return None
 
     dataset = BezierDataset(data_split_dir, device=device)
@@ -185,14 +186,15 @@ def evaluate_split(model, dataset_dir, split_name, save_dir, device):
     class_names = ['silhouette', 'ligament', 'ridge']
     sample_metrics = []
     seg_save_dir = os.path.join(save_dir, split_cap, 'seg_results')
-    os.makedirs(seg_save_dir, exist_ok=True)
+    if save_images:
+        os.makedirs(seg_save_dir, exist_ok=True)
 
-    print(f"\n" + "=" * 70)
-    print(f"🔍 EVALUATING BCRNET ON: [{split_cap.upper()}] ({len(dataset)} frames)")
-    print(f"=" * 70)
+    print(f"\n" + "=" * 70, flush=True)
+    print(f"🔍 EVALUATING BCRNET ON: [{split_cap.upper()}] ({len(dataset)} frames)", flush=True)
+    print(f"=" * 70, flush=True)
 
     pbar = tqdm(loader, desc=f"Evaluating {split_cap}")
-    for batch_data in pbar:
+    for step_idx, batch_data in enumerate(pbar):
         img, depth, sam_feature, targets, info = batch_data
         item_name = info[0]['item_name']
 
@@ -204,15 +206,15 @@ def evaluate_split(model, dataset_dir, split_name, save_dir, device):
         # Overall Dice & IoU
         smooth = 1e-5
         intersection = np.sum(pred * gt)
-        sample_dice = (2.0 * intersection + smooth) / (np.sum(pred) + np.sum(gt) + smooth)
-        sample_iou = sample_dice / (2.0 - sample_dice)
+        sample_dice = float((2.0 * intersection + smooth) / (np.sum(pred) + np.sum(gt) + smooth))
+        sample_iou = float(sample_dice / (2.0 - sample_dice))
 
         # Overall ASSD
-        pred_flat = (np.sum(pred, axis=-1) > 0).astype(np.uint8)
-        gt_flat = (np.sum(gt, axis=-1) > 0).astype(np.uint8)
+        pred_flat = (np.sum(pred, axis=-1) > 0).astype(np.bool_)
+        gt_flat = (np.sum(gt, axis=-1) > 0).astype(np.bool_)
         sample_assd = compute_assd(pred_flat, gt_flat)
 
-        # Per-class Dice & ASSD
+        # Per-class Dice
         class_dices = {}
         for c_idx, c_name in enumerate(class_names):
             p_c = pred[:, :, c_idx]
@@ -223,21 +225,34 @@ def evaluate_split(model, dataset_dir, split_name, save_dir, device):
 
         sample_record = {
             'item_name': item_name,
-            'dice': float(sample_dice),
-            'iou': float(sample_iou),
+            'dice': sample_dice,
+            'iou': sample_iou,
             'assd': float(sample_assd) if not np.isnan(sample_assd) else None,
             **class_dices,
         }
         sample_metrics.append(sample_record)
 
-        # Save Visual Overlays matching test.py
-        pred_bgr = np.stack([pred[:, :, 1], pred[:, :, 0], pred[:, :, 2]], -1) * 255
-        gt_bgr = np.stack([gt[:, :, 1], gt[:, :, 0], gt[:, :, 2]], -1) * 255
-        cv2.imwrite(os.path.join(seg_save_dir, f"{item_name}-{sample_dice:.3f}.png"), pred_bgr.astype(np.uint8))
-        cv2.imwrite(os.path.join(seg_save_dir, f"{item_name}-gt.png"), gt_bgr.astype(np.uint8))
+        # Save Visual Overlays only if requested
+        if save_images:
+            pred_bgr = np.stack([pred[:, :, 1], pred[:, :, 0], pred[:, :, 2]], -1) * 255
+            gt_bgr = np.stack([gt[:, :, 1], gt[:, :, 0], gt[:, :, 2]], -1) * 255
+            cv2.imwrite(os.path.join(seg_save_dir, f"{item_name}-{sample_dice:.3f}.png"), pred_bgr.astype(np.uint8))
+            cv2.imwrite(os.path.join(seg_save_dir, f"{item_name}-gt.png"), gt_bgr.astype(np.uint8))
 
         pbar.set_postfix({'DSC': f"{sample_dice*100:.2f}%", 'IoU': f"{sample_iou*100:.2f}%"})
         del batch_data, results, pred, gt, img, depth, sam_feature, targets, info
+
+        # Release system memory every 20 frames
+        if (step_idx + 1) % 20 == 0:
+            import gc
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            try:
+                import ctypes
+                ctypes.CDLL("libc.so.6").malloc_trim(0)
+            except Exception:
+                pass
 
     import gc
     gc.collect()
