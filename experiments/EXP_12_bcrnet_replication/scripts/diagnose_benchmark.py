@@ -146,6 +146,27 @@ def _safe_load_image(self, item_name):
                 return torch.from_numpy(img).to(self.device), sz
     raise FileNotFoundError(f"Image for {item_name} not found")
 
+def _robust_bezier_init(self, data_path, image_size=(1024, 1024), device='cuda'):
+    self.data_path = data_path
+    self.image_size = image_size
+    self.device = device
+
+    # Look for items across images, s_bezier, labels, and masks_gt
+    item_set = set()
+    for sub in ['images', 's_bezier', 'labels', 'masks_gt']:
+        sub_dir = os.path.join(data_path, sub)
+        if os.path.exists(sub_dir):
+            for f in os.listdir(sub_dir):
+                if not f.startswith('.') and ('.' in f):
+                    item_set.add(os.path.splitext(f)[0])
+            if len(item_set) > 0:
+                break
+
+    self.item_names = sorted(list(item_set))
+    if len(self.item_names) == 0:
+        print(f"⚠️ [Warning] No items discovered in {data_path}")
+
+BezierDataset.__init__ = _robust_bezier_init
 BezierDataset.load_bezier_gt = _safe_load_bezier_gt
 BezierDataset.load_depth = _safe_load_depth
 BezierDataset.load_sam_feature = _safe_load_sam_feature
@@ -196,6 +217,11 @@ def main():
     model.train()  # Matching official test.py
 
     split_dir = os.path.join(args.data_path, args.split.capitalize())
+    if not os.path.exists(split_dir):
+        split_dir = os.path.join(args.data_path, args.split.lower())
+    if not os.path.exists(split_dir) and os.path.basename(args.data_path).lower() == args.split.lower():
+        split_dir = args.data_path
+
     dataset = BezierDataset(split_dir, device=device)
     loader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=collate_fun)
 
