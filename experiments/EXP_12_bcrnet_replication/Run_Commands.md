@@ -108,4 +108,41 @@ Compare your evaluation output against the published results from the BCRNet pap
 |:---|:---:|:---:|:---:|:---:|:---:|:---:|
 | **Paper Benchmark (Test - 109 frames)** | **69.57** | **54.16** | **43.55** | -- | -- | -- |
 | **EXP_12 Measured (Val - 122 frames)** | **35.49** | **23.07** | -- | 41.37 | 20.53 | 33.83 |
-| **EXP_12 Measured (Test - 109 frames)** | *(Run Option 1 or 2)* | *(Run Option 1 or 2)* | *(Optional)* | -- | -- | -- |
+| **EXP_12 Measured (Test - 109 frames)** | **34.84** | **22.65** | -- | 39.48 | 20.53 | 32.30 |
+
+---
+
+## 6. Visualizing Predictions & Diagnostic Overlays
+
+To inspect what BCRNet is predicting vs. Ground Truth on surgical frames, generate 4-panel diagnostic comparison figures:
+- **Panel 1:** Original Laparoscopic Video Frame (RGB)
+- **Panel 2:** Ground Truth Landmark Annotations (Silhouette = Green, Ligament = Cyan, Ridge = Red)
+- **Panel 3:** BCRNet Predicted Bézier Curves with detected curve counts
+- **Panel 4:** Pixel Overlap Confusion Map (Green = True Positive, Red = False Positive, Yellow = False Negative)
+
+### Cell A: Generate Diagnostic Panels
+```bash
+cd /kaggle/working/surgical_ai
+git pull origin main
+export PYTHONPATH="/kaggle/working/surgical_ai/repos/BCRNet:/kaggle/working/surgical_ai:$PYTHONPATH"
+
+python experiments/EXP_12_bcrnet_replication/scripts/visualize_predictions.py \
+    --model_path /kaggle/working/checkpoints/EXP_12_bcrnet_replication/best_model.pt \
+    --data_path /kaggle/working/L3D \
+    --split Test \
+    --num_samples 10 \
+    --select diverse \
+    --threshold 0.3 \
+    --save_dir /kaggle/working/visualizations/EXP_12
+```
+
+### Cell B: Display Visualizations Inline in Kaggle Notebook
+```python
+import glob
+from IPython.display import Image, display
+
+viz_images = sorted(glob.glob("/kaggle/working/visualizations/EXP_12/*.png"))
+print(f"Displaying {len(viz_images)} diagnostic panels:")
+for img_path in viz_images:
+    display(Image(img_path, width=950))
+```

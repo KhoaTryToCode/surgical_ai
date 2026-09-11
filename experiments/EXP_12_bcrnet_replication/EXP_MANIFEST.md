@@ -72,7 +72,8 @@ experiments/EXP_12_bcrnet_replication/
 │   ├── prepare_data.py                  # Symlinks AdelaiDepth, labels, images, generates s_bezier & sam
 │   ├── train_bcrnet.py                  # Training runner with BCRNet schedule and W&B logging
 │   ├── eval_simple.py                   # Lightweight, bulletproof evaluation directly mirroring train validation loop
-│   └── evaluate_bcrnet.py               # Comprehensive multi-split evaluation with live telemetry & ASSD
+│   ├── evaluate_bcrnet.py               # Comprehensive multi-split evaluation with live telemetry & ASSD
+│   └── visualize_predictions.py         # 4-panel visual comparison tool (RGB, GT, Pred, TP/FP/FN error map)
 └── results/                             # Evaluation metrics JSONs and visual prediction overlays
 ```
 
@@ -88,7 +89,21 @@ Evaluated across all 122 frames in 39 seconds with zero memory leaks (Host RAM s
 - **Ligament:** 20.53% DSC
 - **Ridge:** 33.83% DSC
 
-### B. Test Set Evaluation & Missing Depth Resolution
-- When evaluating the Test set (109 frames), the unpatched BCRNet `load_depth` raised `cv2.error: (-215:Assertion failed) !ssize.empty() in function 'resize'` due to missing/empty depth directories.
-- **Resolution:** Implemented `_safe_load_depth` and `_safe_load_sam_feature` monkey patches in `evaluate_bcrnet.py` and `eval_simple.py`, and added automated blank depth fallback generation in `prepare_data.py`. The evaluation now handles missing depth maps without crashing.
+### B. Test Set Empirical Results (109 Frames, Best Model)
+Evaluated across all 109 frames in 34 seconds:
+- **Mean DSC:** 34.84% (Paper Target: 69.57%)
+- **Mean IoU:** 22.65% (Paper Target: 54.16%)
+- **Silhouette:** 39.48% DSC
+- **Ligament:** 20.53% DSC
+- **Ridge:** 32.30% DSC
+
+### C. Forensic Analysis: Why Pixel-wise DSC is ~35% vs Paper 69.57%
+1. **Rasterized Stroke Alignment Sensitivity:**
+   - BCRNet outputs continuous 5th-order Bézier curves. Evaluation rasterizes them to 30px thick line strokes (`cv2.line(channel, pt1, pt2, 1, 30)`).
+   - In thin landmark detection (unlike volumetric organ segmentation), a spatial shift of just 10-15 pixels between predicted and ground truth curves reduces the intersection area by >50%, plummeting the Dice score to ~30-35% even if the curve is topologically aligned with the surgical structure.
+2. **Missing Depth / Multimodal Inputs on Test Split:**
+   - Authentic AdelaiDepth maps were missing on the Kaggle Test split, falling back to zero tensors. Since BCRNet's `first_conv` concatenates RGB + Depth (4 channels), missing depth weakens geometric feature refinement.
+3. **Threshold Cutoffs & Sparse Landmark Frames:**
+   - Several early test frames (1-20) logged 0.00% DSC because predicted curves fell below the 0.3 threshold or the annotated landmarks were absent in those frames.
+   - Using `visualize_predictions.py` enables direct visual inspection of false negatives vs. spatial offset errors.
 
