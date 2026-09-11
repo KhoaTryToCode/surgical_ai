@@ -157,10 +157,24 @@ def compute_assd(pred_mask: np.ndarray, gt_mask: np.ndarray) -> float:
         return float(assd_val)
 
 
+def log_debug(msg):
+    ram = get_mem_mb()
+    gpu = torch.cuda.memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0
+    import time
+    text = f"[{time.strftime('%X')}] [RAM: {ram:.1f}MB | VRAM: {gpu:.1f}MB] {msg}"
+    print(text, flush=True)
+    try:
+        with open("/kaggle/working/eval_debug.log", "a") as f:
+            f.write(text + "\n")
+            f.flush()
+    except Exception:
+        pass
+
+
 def render_prediction_and_gt(results, targets):
     """
     Renders 30px thick landmark strokes in-place on C-contiguous 2D channel buffers.
-    Ensures full OpenCV cv::Mat memory compatibility with zero extra allocations.
+    Clips coordinates to image bounds ensuring OpenCV safety.
     """
     gt_list = []
     for lm in targets[0]:
@@ -178,9 +192,10 @@ def render_prediction_and_gt(results, targets):
         if 'ctrl_points' in lm and lm['ctrl_points'].numel() > 0:
             curves = lm['ctrl_points'].detach().cpu().numpy()
             for curve_points in curves:
-                for i in range(1, len(curve_points)):
-                    pt1 = (int(curve_points[i - 1][0]), int(curve_points[i - 1][1]))
-                    pt2 = (int(curve_points[i][0]), int(curve_points[i][1]))
+                cp = np.clip(curve_points, [0, 0], [W - 1, H - 1]).astype(np.int32)
+                for i in range(1, len(cp)):
+                    pt1 = (int(cp[i - 1][0]), int(cp[i - 1][1]))
+                    pt2 = (int(cp[i][0]), int(cp[i][1]))
                     cv2.line(channel, pt1, pt2, 1, 30)
         pred_channels.append(channel)
     pred = np.stack(pred_channels, axis=-1)
@@ -195,11 +210,11 @@ def get_mem_mb():
         return 0.0
 
 
-def evaluate_split(model, dataset_dir, split_name, save_dir, device, save_images=False, do_assd=True):
+def evaluate_split(model, dataset_dir, split_name, save_dir, device, save_images=False, do_assd=False):
     split_cap = split_name.capitalize()
     data_split_dir = os.path.join(dataset_dir, split_cap)
     if not os.path.exists(data_split_dir):
-        print(f"⚠️ Directory for split '{split_name}' does not exist at {data_split_dir}. Skipping.", flush=True)
+        log_debug(f"⚠️ Directory for split '{split_name}' does not exist at {data_split_dir}. Skipping.")
         return None
 
     dataset = BezierDataset(data_split_dir, device=device)
@@ -211,67 +226,67 @@ def evaluate_split(model, dataset_dir, split_name, save_dir, device, save_images
     if save_images:
         os.makedirs(seg_save_dir, exist_ok=True)
 
-    print(f"\n" + "=" * 70, flush=True)
-    print(f"🔍 EVALUATING BCRNET ON: [{split_cap.upper()}] ({len(dataset)} frames)", flush=True)
-    print(f"   Initial Host RAM: {get_mem_mb():.1f} MB", flush=True)
-    if torch.cuda.is_available():
-        print(f"   Initial GPU VRAM: {torch.cuda.memory_allocated() / (1024 * 1024):.1f} MB", flush=True)
-    print(f"=" * 70, flush=True)
+    log_debug(f"🔍 EVALUATING BCRNET ON: [{split_cap.upper()}] ({len(dataset)} frames)")
 
     pbar = tqdm(loader, desc=f"Evaluating {split_cap}")
     for step_idx, batch_data in enumerate(pbar):
         img, depth, sam_feature, targets, info = batch_data
         item_name = info[0]['item_name']
 
-        with torch.no_grad():
-            results = model(batch_data)
+        try:
+            with torch.inference_mode():
+                results = model(batch_data)
 
-        pred, gt = render_prediction_and_gt(results, targets)
+            pred, gt = render_prediction_and_gt(results, targets)
 
-        # Overall Dice & IoU
-        smooth = 1e-5
-        intersection = np.sum(pred * gt)
-        sample_dice = float((2.0 * intersection + smooth) / (np.sum(pred) + np.sum(gt) + smooth))
-        sample_iou = float(sample_dice / (2.0 - sample_dice))
+            # Overall Dice & IoU
+            smooth = 1e-5
+            intersection = np.sum(pred * gt)
+            sample_dice = float((2.0 * intersection + smooth) / (np.sum(pred) + np.sum(gt) + smooth))
+            sample_iou = float(sample_dice / (2.0 - sample_dice))
 
-        # Overall ASSD
-        if do_assd:
-            pred_flat = (np.sum(pred, axis=-1) > 0).astype(np.bool_)
-            gt_flat = (np.sum(gt, axis=-1) > 0).astype(np.bool_)
-            sample_assd = compute_assd(pred_flat, gt_flat)
-        else:
+            # Optional ASSD
             sample_assd = float('nan')
+            if do_assd:
+                pred_flat = (np.sum(pred, axis=-1) > 0).astype(np.bool_)
+                gt_flat = (np.sum(gt, axis=-1) > 0).astype(np.bool_)
+                sample_assd = compute_assd(pred_flat, gt_flat)
 
-        # Per-class Dice
-        class_dices = {}
-        for c_idx, c_name in enumerate(class_names):
-            p_c = pred[:, :, c_idx]
-            g_c = gt[:, :, c_idx]
-            inter_c = np.sum(p_c * g_c)
-            d_c = (2.0 * inter_c + smooth) / (np.sum(p_c) + np.sum(g_c) + smooth)
-            class_dices[f"{c_name}_dice"] = float(d_c)
+            # Per-class Dice
+            class_dices = {}
+            for c_idx, c_name in enumerate(class_names):
+                p_c = pred[:, :, c_idx]
+                g_c = gt[:, :, c_idx]
+                inter_c = np.sum(p_c * g_c)
+                d_c = (2.0 * inter_c + smooth) / (np.sum(p_c) + np.sum(g_c) + smooth)
+                class_dices[f"{c_name}_dice"] = float(d_c)
 
-        sample_record = {
-            'item_name': item_name,
-            'dice': sample_dice,
-            'iou': sample_iou,
-            'assd': float(sample_assd) if not np.isnan(sample_assd) else None,
-            **class_dices,
-        }
-        sample_metrics.append(sample_record)
+            sample_record = {
+                'item_name': item_name,
+                'dice': sample_dice,
+                'iou': sample_iou,
+                'assd': float(sample_assd) if not np.isnan(sample_assd) else None,
+                **class_dices,
+            }
+            sample_metrics.append(sample_record)
 
-        # Save Visual Overlays only if requested
-        if save_images:
-            pred_bgr = np.stack([pred[:, :, 1], pred[:, :, 0], pred[:, :, 2]], -1) * 255
-            gt_bgr = np.stack([gt[:, :, 1], gt[:, :, 0], gt[:, :, 2]], -1) * 255
-            cv2.imwrite(os.path.join(seg_save_dir, f"{item_name}-{sample_dice:.3f}.png"), pred_bgr.astype(np.uint8))
-            cv2.imwrite(os.path.join(seg_save_dir, f"{item_name}-gt.png"), gt_bgr.astype(np.uint8))
+            # Save Visual Overlays only if requested
+            if save_images:
+                pred_bgr = np.stack([pred[:, :, 1], pred[:, :, 0], pred[:, :, 2]], -1) * 255
+                gt_bgr = np.stack([gt[:, :, 1], gt[:, :, 0], gt[:, :, 2]], -1) * 255
+                cv2.imwrite(os.path.join(seg_save_dir, f"{item_name}-{sample_dice:.3f}.png"), pred_bgr.astype(np.uint8))
+                cv2.imwrite(os.path.join(seg_save_dir, f"{item_name}-gt.png"), gt_bgr.astype(np.uint8))
 
-        pbar.set_postfix({'DSC': f"{sample_dice*100:.2f}%", 'IoU': f"{sample_iou*100:.2f}%"})
-        del batch_data, results, pred, gt, img, depth, sam_feature, targets, info
+            pbar.set_postfix({'DSC': f"{sample_dice*100:.2f}%", 'IoU': f"{sample_iou*100:.2f}%"})
 
-        # Release system memory every 20 frames
-        if (step_idx + 1) % 20 == 0:
+        except Exception as e:
+            log_debug(f"⚠️ Error on frame {item_name}: {e}")
+
+        finally:
+            del batch_data, results, pred, gt, img, depth, sam_feature, targets, info
+
+        # Release memory every 10 frames
+        if (step_idx + 1) % 10 == 0:
             import gc
             gc.collect()
             if torch.cuda.is_available():
@@ -281,6 +296,8 @@ def evaluate_split(model, dataset_dir, split_name, save_dir, device, save_images
                 ctypes.CDLL("libc.so.6").malloc_trim(0)
             except Exception:
                 pass
+            log_debug(f"Progress: [{step_idx + 1}/{len(dataset)}] DSC: {sample_dice*100:.2f}%")
+
 
     import gc
     gc.collect()
@@ -333,8 +350,8 @@ def main():
     parser.add_argument('--data_path', default=default_data)
     parser.add_argument('--split', default='Test', choices=['Val', 'Test', 'both'])
     parser.add_argument('--threshold', type=float, default=0.3, help="Proposal confidence threshold (Paper: 0.3, default config: 0.35)")
-    parser.add_argument('--model_mode', default='eval', choices=['eval', 'train'], help="Model mode during inference (default 'eval' for stable stats; 'train' for test.py parity)")
-    parser.add_argument('--no_assd', action='store_true', default=False, help="Skip ASSD computation for fastest evaluation")
+    parser.add_argument('--model_mode', default='eval', choices=['eval', 'train'], help="Model mode during inference (default 'eval'; 'train' for test.py parity)")
+    parser.add_argument('--compute_assd', action='store_true', default=False, help="Compute ASSD in pixels (default False for maximum speed and stability)")
     parser.add_argument('--save_images', action='store_true', default=False, help="Save PNG prediction overlays")
     parser.add_argument('--save_path', default=default_save)
     parser.add_argument('--device', default='cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -343,26 +360,29 @@ def main():
     os.makedirs(args.save_path, exist_ok=True)
 
     device = args.device if torch.cuda.is_available() else 'cpu'
-    print(f"🚀 Loading BCRNet model from: {args.model_path}", flush=True)
+    log_debug(f"🚀 Loading BCRNet model from: {args.model_path}")
     cfg = load_config(args.config)
     cfg.MODEL.DEVICE = device
     model = TransformerPureDetector(cfg).to(device)
 
     # Configure inference threshold (Paper: 0.3)
     model.test_score_threshold = args.threshold
-    print(f"   Inference threshold: {model.test_score_threshold} (Paper: 0.3)", flush=True)
+    log_debug(f"   Inference threshold: {model.test_score_threshold} (Paper: 0.3)")
 
     checkpoint = torch.load(args.model_path, map_location=device)
     state_dict = checkpoint['model'] if 'model' in checkpoint else checkpoint
     model.load_state_dict(state_dict)
+    del checkpoint, state_dict
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     if args.model_mode == 'train':
         model.train()
-        print("   Inference mode: model.train() (matching official repos/BCRNet/test.py line 26)", flush=True)
+        log_debug("   Inference mode: model.train() (matching official repos/BCRNet/test.py line 26)")
     else:
         model.eval()
-        print("   Inference mode: model.eval() (standard stable evaluation)", flush=True)
-    print("✅ Model loaded successfully.", flush=True)
+        log_debug("   Inference mode: model.eval() (standard stable evaluation)")
+    log_debug("✅ Model loaded successfully.")
 
     splits_to_eval = ['Val', 'Test'] if args.split == 'both' else [args.split]
 
@@ -375,7 +395,7 @@ def main():
             save_dir=args.save_path,
             device=device,
             save_images=args.save_images,
-            do_assd=not args.no_assd
+            do_assd=args.compute_assd
         )
         if summary:
             all_summaries[sp] = summary

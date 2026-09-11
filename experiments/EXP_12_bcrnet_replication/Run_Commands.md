@@ -69,35 +69,34 @@ python experiments/EXP_12_bcrnet_replication/scripts/train_bcrnet.py \
 
 ## 4. Evaluation & Metric Verification (Val & Test)
 
-Evaluates the best checkpoint (`best_model.pt`) on the **Test** split (exact benchmark: 109 frames) or **both** splits.
+Evaluates the best checkpoint (`best_model.pt`) on the **Test** split (exact paper benchmark: 109 frames) or **Val** split.
 
-### Recommended: Evaluate Test Split (Paper Benchmark: 69.57% DSC):
+### Option 1 (Recommended — Lightweight & Bulletproof):
+Uses `eval_simple.py`, directly mirroring the exact validation loop from `train_bcrnet.py` that ran 70 epochs on Kaggle without a single memory issue:
+
 ```bash
 cd /kaggle/working/surgical_ai
 git pull origin main
 export PYTHONPATH="/kaggle/working/surgical_ai/repos/BCRNet:/kaggle/working/surgical_ai:$PYTHONPATH"
 
-python experiments/EXP_12_bcrnet_replication/scripts/evaluate_bcrnet.py \
+python experiments/EXP_12_bcrnet_replication/scripts/eval_simple.py \
     --model_path /kaggle/working/checkpoints/EXP_12_bcrnet_replication/best_model.pt \
     --data_path /kaggle/working/L3D \
     --split Test \
     --threshold 0.3
 ```
 
-### Comprehensive: Evaluate Both Splits (Val + Test):
+### Option 2 (Comprehensive with Logging & ASSD):
+Uses `evaluate_bcrnet.py` with real-time RAM/VRAM telemetry written to `/kaggle/working/eval_debug.log`:
+
 ```bash
 python experiments/EXP_12_bcrnet_replication/scripts/evaluate_bcrnet.py \
     --model_path /kaggle/working/checkpoints/EXP_12_bcrnet_replication/best_model.pt \
     --data_path /kaggle/working/L3D \
-    --split both \
+    --split Test \
     --threshold 0.3
 ```
-
-> **Memory Safety Note**: 
-> - Default `--model_mode` is `eval` (freezing BatchNorm running statistics to prevent activation explosion).
-> - Landmark masks are kept on CPU as `uint8`, reducing GPU churn by 25 MB/frame.
-> - Contiguous 2D C-buffers prevent OpenCV OpenCL UMat allocation errors.
-> - System memory is garbage collected and trimmed every 20 frames.
+*(Add `--compute_assd` if you wish to compute surface distance in pixels).*
 
 ---
 
