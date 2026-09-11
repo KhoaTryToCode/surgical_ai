@@ -82,28 +82,58 @@ from utils.bezier_dataset import BezierDataset, collate_fun
 
 # Safe dataset monkey patches
 def _safe_load_bezier_gt(self, item_name):
-    path = os.path.join(self.data_path, 's_bezier', item_name + '.npz')
-    with np.load(path, allow_pickle=True) as bezier_data:
-        landmark_list = ['silhouette', 'ligament', 'ridge']
-        source = []
-        for i, (label, data) in enumerate(zip(landmark_list, bezier_data['gt'])):
-            ctrl_points = torch.from_numpy(data['ctrl_points']).float().to(self.device)
-            curve_points = torch.from_numpy(data['curve_points']).float().to(self.device)
-            landmark_mask = torch.from_numpy(data['landmark_mask']).to(torch.uint8)
-            source.append({
-                'label': label,
-                'ctrl_points': ctrl_points,
-                'class_id': torch.LongTensor([i]).to(self.device),
-                'curve_points': curve_points,
-                'landmark_mask': landmark_mask
-            })
-    return source
+    candidate_paths = [
+        os.path.join(self.data_path, 's_bezier', item_name + '.npz'),
+        f"/kaggle/working/L3D/Test/s_bezier/{item_name}.npz",
+        f"/kaggle/working/L3D/Val/s_bezier/{item_name}.npz",
+        f"/kaggle/input/datasets/khoatrytopublish/l3d-test/Test/s_bezier/{item_name}.npz",
+    ]
+    for p in candidate_paths:
+        if os.path.exists(p):
+            with np.load(p, allow_pickle=True) as bezier_data:
+                landmark_list = ['silhouette', 'ligament', 'ridge']
+                source = []
+                for i, (label, data) in enumerate(zip(landmark_list, bezier_data['gt'])):
+                    ctrl_points = torch.from_numpy(data['ctrl_points']).float().to(self.device)
+                    curve_points = torch.from_numpy(data['curve_points']).float().to(self.device)
+                    landmark_mask = torch.from_numpy(data['landmark_mask']).to(torch.uint8)
+                    source.append({
+                        'label': label,
+                        'ctrl_points': ctrl_points,
+                        'class_id': torch.LongTensor([i]).to(self.device),
+                        'curve_points': curve_points,
+                        'landmark_mask': landmark_mask
+                    })
+                return source
+
+    if os.path.exists('/kaggle/input'):
+        for root, _, files in os.walk('/kaggle/input'):
+            if f"{item_name}.npz" in files and 'bezier' in root.lower():
+                with np.load(os.path.join(root, f"{item_name}.npz"), allow_pickle=True) as bezier_data:
+                    landmark_list = ['silhouette', 'ligament', 'ridge']
+                    source = []
+                    for i, (label, data) in enumerate(zip(landmark_list, bezier_data['gt'])):
+                        ctrl_points = torch.from_numpy(data['ctrl_points']).float().to(self.device)
+                        curve_points = torch.from_numpy(data['curve_points']).float().to(self.device)
+                        landmark_mask = torch.from_numpy(data['landmark_mask']).to(torch.uint8)
+                        source.append({
+                            'label': label,
+                            'ctrl_points': ctrl_points,
+                            'class_id': torch.LongTensor([i]).to(self.device),
+                            'curve_points': curve_points,
+                            'landmark_mask': landmark_mask
+                        })
+                    return source
+
+    raise FileNotFoundError(f"s_bezier file for {item_name} not found")
 
 _depth_cache = {}
 def _safe_load_depth(self, item_name):
     candidates = [
         os.path.join(self.data_path, 'depth_AdelaiDepth', item_name + '.png'),
         os.path.join(self.data_path, 'depth_AdelaiDepth', item_name + '.jpg'),
+        f"/kaggle/working/L3D/Test/depth_AdelaiDepth/{item_name}.png",
+        f"/kaggle/input/datasets/khoatrytopublish/l3d-test/Test/depth_AdelaiDepth/{item_name}.png",
         os.path.join(self.data_path, 'depth_anything_v2', item_name + '.png'),
         os.path.join(self.data_path, 'depth', item_name + '.png'),
     ]
@@ -123,10 +153,15 @@ def _safe_load_depth(self, item_name):
 
 _sam_cache = {}
 def _safe_load_sam_feature(self, item_name):
-    path = os.path.join(self.data_path, 'sam', item_name + '.npy')
-    if os.path.exists(path):
-        try: return torch.from_numpy(np.load(path)).to(self.device)
-        except Exception: pass
+    candidate_paths = [
+        os.path.join(self.data_path, 'sam', item_name + '.npy'),
+        f"/kaggle/working/L3D/Test/sam/{item_name}.npy",
+        f"/kaggle/input/datasets/khoatrytopublish/l3d-test/Test/sam/{item_name}.npy",
+    ]
+    for p in candidate_paths:
+        if os.path.exists(p):
+            try: return torch.from_numpy(np.load(p)).to(self.device)
+            except Exception: pass
     if os.path.exists('/kaggle/input'):
         for root, _, files in os.walk('/kaggle/input'):
             if f"{item_name}.npy" in files:
@@ -135,15 +170,31 @@ def _safe_load_sam_feature(self, item_name):
     return torch.zeros((256, 64, 64), dtype=torch.float32, device=self.device)
 
 def _safe_load_image(self, item_name):
-    for ext in ['.jpg', '.png']:
-        path = os.path.join(self.data_path, 'images', item_name + ext)
-        if os.path.exists(path):
-            img = cv2.imread(path)
+    candidate_paths = [
+        os.path.join(self.data_path, 'images', item_name + '.jpg'),
+        os.path.join(self.data_path, 'images', item_name + '.png'),
+        f"/kaggle/input/datasets/khoatrytopublish/l3d-test/Test/images/{item_name}.jpg",
+        f"/kaggle/input/l3d-test/Test/images/{item_name}.jpg",
+        f"/kaggle/working/L3D/Test/images/{item_name}.jpg",
+    ]
+    for p in candidate_paths:
+        if os.path.exists(p):
+            img = cv2.imread(p)
             if img is not None:
                 sz = img.shape[:2]
                 img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 img = cv2.resize(img, self.image_size).astype('float32') / 255.
                 return torch.from_numpy(img).to(self.device), sz
+    if os.path.exists('/kaggle/input'):
+        for root, _, files in os.walk('/kaggle/input'):
+            for ext in ['.jpg', '.png']:
+                if f"{item_name}{ext}" in files:
+                    img = cv2.imread(os.path.join(root, f"{item_name}{ext}"))
+                    if img is not None:
+                        sz = img.shape[:2]
+                        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                        img = cv2.resize(img, self.image_size).astype('float32') / 255.
+                        return torch.from_numpy(img).to(self.device), sz
     raise FileNotFoundError(f"Image for {item_name} not found")
 
 def _robust_bezier_init(self, data_path, image_size=(1024, 1024), device='cuda'):
@@ -151,14 +202,28 @@ def _robust_bezier_init(self, data_path, image_size=(1024, 1024), device='cuda')
     self.image_size = image_size
     self.device = device
 
-    # Look for items across images, s_bezier, labels, and masks_gt
+    # Look for items across images, s_bezier, labels, and masks_gt in multiple search directories
+    candidate_dirs = [
+        data_path,
+        os.path.join(data_path, 'Test'),
+        os.path.join(data_path, 'test'),
+        '/kaggle/input/datasets/khoatrytopublish/l3d-test/Test',
+        '/kaggle/input/datasets/khoatrytopublish/l3d-test',
+        '/kaggle/working/L3D/Test',
+        '/kaggle/input/l3d-test/Test',
+    ]
+
     item_set = set()
-    for sub in ['images', 's_bezier', 'labels', 'masks_gt']:
-        sub_dir = os.path.join(data_path, sub)
-        if os.path.exists(sub_dir):
-            for f in os.listdir(sub_dir):
-                if not f.startswith('.') and ('.' in f):
-                    item_set.add(os.path.splitext(f)[0])
+    for c_dir in candidate_dirs:
+        if os.path.exists(c_dir):
+            for sub in ['images', 's_bezier', 'labels', 'masks_gt']:
+                sub_dir = os.path.join(c_dir, sub)
+                if os.path.exists(sub_dir):
+                    for f in os.listdir(sub_dir):
+                        if not f.startswith('.') and ('.' in f):
+                            item_set.add(os.path.splitext(f)[0])
+                    if len(item_set) > 0:
+                        break
             if len(item_set) > 0:
                 break
 
@@ -191,9 +256,13 @@ def rasterize_curves(ctrl_points_list, H, W, linewidth=30):
 
 def main():
     parser = argparse.ArgumentParser(description="EXP_12 Forensic Diagnostic Analyzer")
+    default_data = "/kaggle/working/L3D"
+    if not os.path.exists(default_data) and os.path.exists("/kaggle/input/datasets/khoatrytopublish/l3d-test"):
+        default_data = "/kaggle/input/datasets/khoatrytopublish/l3d-test"
+
     parser.add_argument('--config', default=os.path.join(os.path.dirname(__file__), "../configs/bcrnet_l3d.yaml"))
     parser.add_argument('--model_path', required=True)
-    parser.add_argument('--data_path', default="/kaggle/working/L3D" if os.path.exists("/kaggle") else os.path.join(ws_root, "data/L3D"))
+    parser.add_argument('--data_path', default=default_data)
     parser.add_argument('--split', default='Test')
     parser.add_argument('--device', default='cuda:0' if torch.cuda.is_available() else 'cpu')
     args = parser.parse_args()
@@ -216,11 +285,24 @@ def main():
     del checkpoint, state_dict
     model.train()  # Matching official test.py
 
-    split_dir = os.path.join(args.data_path, args.split.capitalize())
-    if not os.path.exists(split_dir):
-        split_dir = os.path.join(args.data_path, args.split.lower())
-    if not os.path.exists(split_dir) and os.path.basename(args.data_path).lower() == args.split.lower():
-        split_dir = args.data_path
+    # Multi-path split candidate resolution
+    candidates = [
+        args.data_path,
+        os.path.join(args.data_path, args.split.capitalize()),
+        os.path.join(args.data_path, args.split.lower()),
+        f"/kaggle/input/datasets/khoatrytopublish/l3d-test/{args.split.capitalize()}",
+        f"/kaggle/input/datasets/khoatrytopublish/l3d-test",
+        f"/kaggle/working/L3D/{args.split.capitalize()}",
+        f"/kaggle/input/l3d-test/{args.split.capitalize()}",
+    ]
+    split_dir = None
+    for cand in candidates:
+        if os.path.exists(cand):
+            if any(os.path.exists(os.path.join(cand, s)) for s in ['images', 'labels', 's_bezier', 'masks_gt']):
+                split_dir = cand
+                break
+    if split_dir is None:
+        split_dir = os.path.join(args.data_path, args.split.capitalize())
 
     dataset = BezierDataset(split_dir, device=device)
     loader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=collate_fun)
