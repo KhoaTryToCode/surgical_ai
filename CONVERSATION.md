@@ -483,4 +483,117 @@ L_crv = min( || B_pred(t) - B_gt(t) ||_1, || B_pred(t) - flip(B_gt(t)) ||_1 )
 L_contain = (1 / N) * sum_{i=1}^N [ 1.0 - Sigmoid( M_pred( B(t_i) ) ) ]
 (L_contain forces the continuous Bézier curve to reside strictly within the high-probability ridge of the Mask2Former pixel mask).
 
+---
+
+## 10. Deep Dive: Component Breakdown, Mathematical Blind Spots & Empirical Ablations
+
+### 10.1 TopoNet: Component Contribution & Fundamental Failure Modes
+
+#### Architectural Breakdown:
+1. ResNet-34 Feature Extractor + Depth-Anything-V2:
+   - Fuses monocular depth with RGB via Bilateral Enhancement Fusion (BeFusion):
+     F_fused = Conv( [ F_rgb, F_depth ] ) + ( F_rgb * Sigmoid( Conv( F_depth ) ) )
+   - Purpose: Depth features help resolve surface slope discontinuities along the liver boundary.
+   - Contribution to Dice: Provides +3.8% Dice compared to pure RGB ResNet-34.
+
+2. Dynamic Snake Convolution (DSCNet):
+   - Deforms convolution kernel offsets iteratively along estimated curve direction:
+     K(p + Delta_p) where Delta_p is constrained along an axis to trace elongated curvilinear structures.
+   - Contribution to Dice: Improves thin structure sensitivity (+2.1% Dice).
+
+3. Loss Formulation:
+   - Dice warmup (Epochs 1-5):
+     L_dice = 1.0 - ( 2 * sum( P * Y ) + eps ) / ( sum( P ) + sum( Y ) + eps )
+   - Soft Centerline Dice (clDice):
+     clDice = ( 2 * T_prec * T_sens ) / ( T_prec + T_sens + eps )
+     where T_prec = sum( S_pred * Y ) / sum( S_pred ), T_sens = sum( S_gt * P ) / sum( S_gt )
+     S_pred is computed via SoftSkeletonize with 40 min-pooling iterations:
+     soft_erode(I) = min( -MaxPool2d( -I, (3, 1) ), -MaxPool2d( -I, (1, 3) ) )
+   - Betti Persistent Homology Loss:
+     L_betti = sum_{k=0}^1 sum_i | pers_pred^{k, i} - pers_gt^{k, i} |^2
+
+#### Why TopoNet Fails (Empirical & Theoretical Blind Spots):
+1. Morphological Gradient Vanishing:
+   SoftSkeletonize requires 40 sequential non-linear pooling operations. In PyTorch autograd, unrolling 40 steps of min/max pooling results in severe gradient attenuation. Gradients only propagate to the single argmin pixel within each 3x1 neighborhood. Over 40 steps, >95% of pixels receive exactly zero gradient.
+2. Betti Number Mismatch for Open Contours:
+   1D Betti numbers measure closed cycles/loops. Surgical liver landmarks (Ridge, Silhouette, Ligament) are strictly open polylines, meaning true Betti-1 = 0. In laparoscopic imagery, specular reflections on moist liver capsules create small spurious loops in thresholded predictions, producing large, noisy gradient spikes in L_betti that destabilize convergence.
+3. Lack of Masked Attention / Pure CNN Raster Blur:
+   Without query-based attention or boundary masking, standard ConvBNAct decoders smooth predictions across thin edges, dilating 1-pixel contours into diffuse ribbons and capping validation performance at 60.5% - 62.0% Dice.
+
+---
+
+### 10.2 Mask2Former: Why It Outperforms TopoNet & Where It Fails
+
+#### Architectural Breakdown:
+1. Multi-Scale Pixel Decoder:
+   - Gradually upsamples feature maps from 1/32 to 1/4 resolution using deformable attention / FPN skip connections.
+   - Produces high-resolution per-pixel embeddings:
+     E_pixel in R^{C x (H/4) x (W/4)}
+   - Contribution to Dice: Recovers fine anatomical boundary gradients lost by standard pooling decoders (+4.2% Dice).
+
+2. Masked Cross-Attention Transformer Decoder:
+   - For decoder layer l with mask prediction M_{l-1}:
+     Attn_mask(x, y) = 0 if Sigmoid( M_{l-1}(x, y) ) >= 0.5 else -inf
+     Q_l = CrossAttention( Q_{l-1}, Key=F_pixel, Value=F_pixel, Mask=Attn_mask )
+   - Purpose: Constrains attention exclusively to localized foreground regions of the landmark.
+   - Contribution to Dice: Eliminates false positive glare bleeding from distant moist tissue (+5.8% Dice).
+
+3. Learnable Landmark Queries:
+   - A fixed set of N queries specialize in landmark identity and anatomical context.
+   - Reaches 67.2% - 68.0% Val Dice on L3D.
+
+#### Why Mask2Former Still Fails:
+1. Topological Invariance of Per-Pixel Objective:
+   Cross-entropy and per-pixel Dice treat each pixel independently:
+   L_dice = 1.0 - 2 * |P intersect Y| / (|P| + |Y|)
+   A 2-pixel gap in a 300-pixel contour changes Dice by less than 0.7%, yet it completely fractures the contour into two disconnected components, rendering it useless for AR catheter alignment.
+2. Lack of Continuous Geometry:
+   Mask2Former outputs a discrete 2D raster grid. Converting this grid into continuous 3D coordinate trajectories requires heuristic thinning and spline fitting, which introduces branch artifacts, self-intersections, and noise.
+
+---
+
+### 10.3 BCRNet: Why It Reaches SOTA (0.69 Val Dice) & Its Latent Bottlenecks
+
+#### Architectural Breakdown:
+1. Multi-Modal Feature Extraction (MFE):
+   - Frozen SAM ViT-B encoder (256x64x64) provides robust zero-shot foundation features.
+   - ResNet-50 4-channel encoder processes RGB + AdelaiDepth.
+   - Fusion: F_fused = Conv( [ F_resnet, Upsample( F_sam ) ] ).
+   - Paper ablation contribution: MFE adds +3.84% Dice (Table 3 in paper).
+
+2. Adaptive Curve Proposal Initialization (ACPI):
+   - Dense 5th-order Bézier proposal generation on top feature pyramid layer f_4:
+     b_i^j = ( Sigmoid( Delta b_{ix}^j + Logit( c_{ix} ) ), Sigmoid( Delta b_{iy}^j + Logit( c_{iy} ) ) )
+   - Bounded within [0, 1]^2 by sigmoid transformation.
+   - Paper ablation contribution: ACPI provides the single largest leap: +12.65% Dice (53.67% -> 66.32%).
+
+3. Hierarchical Curve Refinement (HCR):
+   - 3 coarse-to-fine deformable cross-attention stages: {f3, f4} -> {f2, f3} -> {f1, f2}.
+   - Samples N=26 reference points along B(t) = sum_{k=0}^5 C(5, k) * (1-t)^{5-k} * t^k * b_k.
+   - Structured 3-way self-attention: intra-curve (vertex dependencies), inter-curve (proposal competition), inter-category (class hierarchy).
+   - Paper ablation contribution: HCR adds +13.54% Dice (40.13% -> 53.67%).
+
+4. Proposal Induction Loss:
+   - L_ind = BCE( s_init, s* ) supervises early proposal heatmaps.
+   - Dynamic schedule: lambda_d = 1.0 - Sigmoid( (epoch - 10) / 2 ).
+   - Paper ablation contribution: Adds +3.25% Dice (66.32% -> 69.57%).
+
+#### BCRNet's Latent Bottlenecks:
+1. Weak 4-Layer CNN Decoder (66% ceiling):
+   The auxiliary deep supervision in BCRNet uses a basic 4-layer CNN decoder without multi-scale masked attention, limiting its pixel representation.
+2. Blind Grid ACPI Proposal Search:
+   Uniformly placing proposals across a 16x16 grid wastes compute and queries on empty background regions.
+3. Sigmoid-Logit Boundary Saturation:
+   Logit mapping Logit(c) = ln( c / (1 - c) ) saturates near borders (c -> 0 or c -> 1), causing gradient vanishing for landmarks that exit the surgical field of view.
+
+---
+
+### 10.4 Master Synthesis (EXP_13): Mathematical Complementarity
+
+The synthesis unifies the three paradigms so each directly cancels the other's blind spot:
+1. Mask2Former provides localized, glare-free feature queries (canceling BCRNet's blind grid ACPI).
+2. 5th-Order Bézier curves provide continuous, gap-free geometry (canceling Mask2Former's topological fragmentation).
+3. Analytical Continuous clDice (AC-clDice) provides differentiable topological supervision without slow 40-step morphological unrolling (canceling TopoNet's gradient vanishing).
+
+
 
