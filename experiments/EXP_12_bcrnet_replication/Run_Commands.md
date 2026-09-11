@@ -104,8 +104,8 @@ python experiments/EXP_12_bcrnet_replication/scripts/evaluate_bcrnet.py \
 
 Compare your evaluation output against the published results from the BCRNet paper (MICCAI 2025):
 
-| Metric | Published Paper Target (L3D Test) | Replication Result |
-|:---|:---:|:---:|
-| **DSC (%)** | **69.57** | *(Tracked by evaluate_bcrnet.py)* |
-| **IoU (%)** | **54.16** | *(Tracked by evaluate_bcrnet.py)* |
-| **ASSD (px)** | **43.55** | *(Tracked by evaluate_bcrnet.py)* |
+| Split / Benchmark | DSC (%) | IoU (%) | ASSD (px) | Silhouette (%) | Ligament (%) | Ridge (%) |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Paper Benchmark (Test - 109 frames)** | **69.57** | **54.16** | **43.55** | -- | -- | -- |
+| **EXP_12 Measured (Val - 122 frames)** | **35.49** | **23.07** | -- | 41.37 | 20.53 | 33.83 |
+| **EXP_12 Measured (Test - 109 frames)** | *(Run Option 1 or 2)* | *(Run Option 1 or 2)* | *(Optional)* | -- | -- | -- |

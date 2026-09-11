@@ -85,7 +85,120 @@ def _safe_load_bezier_gt(self, item_name):
                 'landmark_mask': landmark_mask
             })
     return source
+_depth_cache = {}
+_warned_missing_depth = False
+
+def _safe_load_depth(self, item_name):
+    global _warned_missing_depth
+    img = None
+
+    candidates = [
+        os.path.join(self.data_path, 'depth_AdelaiDepth', item_name + '.png'),
+        os.path.join(self.data_path, 'depth_AdelaiDepth', item_name + '.jpg'),
+        os.path.join(self.data_path, 'depth_anything_v2', item_name + '.png'),
+        os.path.join(self.data_path, 'depth_anything_v2', item_name + '.jpg'),
+        os.path.join(self.data_path, 'depth', item_name + '.png'),
+        os.path.join(self.data_path, 'depth', item_name + '.jpg'),
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            img = cv2.imread(c, 0)
+            if img is not None:
+                break
+
+    if img is None and os.path.exists('/kaggle/input'):
+        if item_name in _depth_cache:
+            img = cv2.imread(_depth_cache[item_name], 0)
+        else:
+            for root, _, files in os.walk('/kaggle/input'):
+                for ext in ['.png', '.jpg']:
+                    fname = f"{item_name}{ext}"
+                    if fname in files and 'depth' in root.lower():
+                        p = os.path.join(root, fname)
+                        img = cv2.imread(p, 0)
+                        if img is not None:
+                            _depth_cache[item_name] = p
+                            break
+                if img is not None:
+                    break
+
+    if img is None:
+        if not _warned_missing_depth:
+            print(f"⚠️ [Safe Depth] Missing depth map for '{item_name}'. Using zero-filled fallback tensor (image_size: {self.image_size}).", flush=True)
+            _warned_missing_depth = True
+        return torch.zeros(self.image_size, dtype=torch.float32, device=self.device)
+
+    img = cv2.resize(img, self.image_size).astype('float32')
+    return torch.from_numpy(img).to(self.device)
+
+_sam_cache = {}
+_warned_missing_sam = False
+
+def _safe_load_sam_feature(self, item_name):
+    global _warned_missing_sam
+    path = os.path.join(self.data_path, 'sam', item_name + '.npy')
+    if os.path.exists(path):
+        try:
+            feat = np.load(path)
+            return torch.from_numpy(feat).to(self.device)
+        except Exception:
+            pass
+
+    if os.path.exists('/kaggle/input'):
+        if item_name in _sam_cache:
+            try:
+                feat = np.load(_sam_cache[item_name])
+                return torch.from_numpy(feat).to(self.device)
+            except Exception:
+                pass
+        else:
+            for root, _, files in os.walk('/kaggle/input'):
+                if f"{item_name}.npy" in files:
+                    p = os.path.join(root, f"{item_name}.npy")
+                    try:
+                        feat = np.load(p)
+                        _sam_cache[item_name] = p
+                        return torch.from_numpy(feat).to(self.device)
+                    except Exception:
+                        pass
+
+    if not _warned_missing_sam:
+        print(f"⚠️ [Safe SAM] Missing SAM feature for '{item_name}'. Using zero-filled fallback tensor (256, 64, 64).", flush=True)
+        _warned_missing_sam = True
+    return torch.zeros((256, 64, 64), dtype=torch.float32, device=self.device)
+
+def _safe_load_image(self, item_name):
+    candidates = [
+        os.path.join(self.data_path, 'images', item_name + '.jpg'),
+        os.path.join(self.data_path, 'images', item_name + '.png'),
+        os.path.join(self.data_path, 'images', item_name + '.jpeg'),
+    ]
+    img = None
+    for c in candidates:
+        if os.path.exists(c):
+            img = cv2.imread(c)
+            if img is not None:
+                break
+    if img is None and os.path.exists('/kaggle/input'):
+        for root, _, files in os.walk('/kaggle/input'):
+            for ext in ['.jpg', '.png', '.jpeg']:
+                if f"{item_name}{ext}" in files:
+                    img = cv2.imread(os.path.join(root, f"{item_name}{ext}"))
+                    if img is not None:
+                        break
+            if img is not None:
+                break
+    if img is None:
+        raise FileNotFoundError(f"Image for '{item_name}' not found in {self.data_path} or /kaggle/input")
+    image_size = img.shape[:2]
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img = cv2.resize(img, self.image_size).astype('float32') / 255.
+    return torch.from_numpy(img).to(self.device), image_size
+
 BezierDataset.load_bezier_gt = _safe_load_bezier_gt
+BezierDataset.load_depth = _safe_load_depth
+BezierDataset.load_sam_feature = _safe_load_sam_feature
+BezierDataset.load_image = _safe_load_image
 
 
 def evaluation(pred, gt):
@@ -114,39 +227,15 @@ def metrix(results, targets):
     return iou, dice, pred, gt
 
 
-def main():
-    parser = argparse.ArgumentParser(description="EXP_12: Lightweight BCRNet Evaluation")
-    parser.add_argument('--config', default=os.path.join(os.path.dirname(__file__), "../configs/bcrnet_l3d.yaml"))
-    parser.add_argument('--model_path', required=True, help="Path to checkpoint (.pt)")
-    parser.add_argument('--data_path', default="/kaggle/working/L3D" if os.path.exists("/kaggle") else os.path.join(ws_root, "data/L3D"))
-    parser.add_argument('--split', default='Test', choices=['Val', 'Test'])
-    parser.add_argument('--threshold', type=float, default=0.3)
-    parser.add_argument('--device', default='cuda:0' if torch.cuda.is_available() else 'cpu')
-    args = parser.parse_args()
-
-    device = args.device if torch.cuda.is_available() else 'cpu'
-    print(f"🚀 Loading BCRNet model: {args.model_path} on {device}", flush=True)
-
-    cfg = load_config(args.config)
-    cfg.MODEL.DEVICE = device
-    model = TransformerPureDetector(cfg).to(device)
-    model.test_score_threshold = args.threshold
-
-    checkpoint = torch.load(args.model_path, map_location=device)
-    state_dict = checkpoint['model'] if 'model' in checkpoint else checkpoint
-    model.load_state_dict(state_dict)
-    del checkpoint, state_dict
-    model.eval()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-    split_dir = os.path.join(args.data_path, args.split.capitalize())
+def evaluate_single_split(model, split_name, data_path, device):
+    split_dir = os.path.join(data_path, split_name.capitalize())
     if not os.path.exists(split_dir):
-        raise FileNotFoundError(f"Split directory not found: {split_dir}")
+        print(f"⚠️ Split directory not found: {split_dir}. Skipping.")
+        return None
 
     dataset = BezierDataset(split_dir, device=device)
     loader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=collate_fun)
-    print(f"🔍 Evaluating split [{args.split.upper()}] ({len(dataset)} frames)...", flush=True)
+    print(f"\n🔍 Evaluating split [{split_name.upper()}] ({len(dataset)} frames)...", flush=True)
 
     class_names = ['silhouette', 'ligament', 'ridge']
     ious = []
@@ -154,7 +243,7 @@ def main():
     class_dices = {c: [] for c in class_names}
 
     with torch.inference_mode():
-        pbar = tqdm(loader, desc=f"Evaluating {args.split}")
+        pbar = tqdm(loader, desc=f"Evaluating {split_name.capitalize()}")
         for step_idx, batch_data in enumerate(pbar):
             img, depth, sam_feature, targets, info = batch_data
             results = model(batch_data)
@@ -184,13 +273,54 @@ def main():
     mean_iou = float(np.mean(ious)) * 100.0
 
     print("\n" + "=" * 70, flush=True)
-    print(f"📊 BENCHMARK RESULTS FOR [{args.split.upper()}]:", flush=True)
+    print(f"📊 BENCHMARK RESULTS FOR [{split_name.upper()}]:", flush=True)
     print(f"   • Mean DSC: {mean_dice:.2f}%  (Paper Target: 69.57%)", flush=True)
     print(f"   • Mean IoU: {mean_iou:.2f}%  (Paper Target: 54.16%)", flush=True)
     for c_name in class_names:
         c_mean = float(np.mean(class_dices[c_name])) * 100.0
         print(f"     - {c_name.capitalize()}: {c_mean:.2f}% DSC", flush=True)
     print("=" * 70 + "\n", flush=True)
+
+    return {'mean_dice': mean_dice, 'mean_iou': mean_iou, 'class_dices': class_dices}
+
+
+def main():
+    parser = argparse.ArgumentParser(description="EXP_12: Lightweight BCRNet Evaluation")
+    parser.add_argument('--config', default=os.path.join(os.path.dirname(__file__), "../configs/bcrnet_l3d.yaml"))
+    parser.add_argument('--model_path', required=True, help="Path to checkpoint (.pt)")
+    parser.add_argument('--data_path', default="/kaggle/working/L3D" if os.path.exists("/kaggle") else os.path.join(ws_root, "data/L3D"))
+    parser.add_argument('--split', default='Test', choices=['Val', 'Test', 'both'])
+    parser.add_argument('--model_mode', default='train', choices=['train', 'eval'], help="Model mode ('train' matches BCRNet test.py line 26; 'eval' for eval mode)")
+    parser.add_argument('--threshold', type=float, default=0.3)
+    parser.add_argument('--device', default='cuda:0' if torch.cuda.is_available() else 'cpu')
+    args = parser.parse_args()
+
+    device = args.device if torch.cuda.is_available() else 'cpu'
+    print(f"🚀 Loading BCRNet model: {args.model_path} on {device}", flush=True)
+
+    cfg = load_config(args.config)
+    cfg.MODEL.DEVICE = device
+    model = TransformerPureDetector(cfg).to(device)
+    model.test_score_threshold = args.threshold
+
+    checkpoint = torch.load(args.model_path, map_location=device)
+    state_dict = checkpoint['model'] if 'model' in checkpoint else checkpoint
+    model.load_state_dict(state_dict)
+    del checkpoint, state_dict
+
+    if args.model_mode == 'train':
+        model.train()
+        print("   Inference mode: model.train() (matching official repos/BCRNet/test.py line 26)")
+    else:
+        model.eval()
+        print("   Inference mode: model.eval() (standard evaluation)")
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    splits_to_eval = ['Val', 'Test'] if args.split == 'both' else [args.split]
+    for sp in splits_to_eval:
+        evaluate_single_split(model, sp, args.data_path, device)
 
 
 if __name__ == '__main__':

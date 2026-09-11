@@ -100,18 +100,30 @@ def find_source_dir(split: str, sub: str) -> str:
     split_cap = split.capitalize()
     split_low = split.lower()
 
-    candidates = [
-        # Kaggle input paths
-        f"/kaggle/input/datasets/khoatrytopublish/l3d-{split_low}/{split_cap}/{sub}",
-        f"/kaggle/input/datasets/khoatrytopublish/l3d-{split_low}/{split_low}/{sub}",
-        f"/kaggle/input/l3d-{split_low}/{split_cap}/{sub}",
-        f"/kaggle/input/l3d-{split_low}/{split_low}/{sub}",
-        f"/kaggle/input/laparoscopic-liver-landmarks/{split_low}/{sub}",
-        # Local workspace fallbacks
-        os.path.join(ws_root, f"data/laparoscopic_liver/{split_low}/{sub}"),
-        os.path.join(ws_root, f"data/laparoscopic_liver/{split_cap}/{sub}"),
-        os.path.join(ws_root, f"data/L3D/{split_cap}/{sub}"),
-    ]
+    sub_variations = [sub]
+    if "depth" in sub.lower():
+        sub_variations = ["depth_AdelaiDepth", "depth_adelaidepth", "depth_anything_v2", "depth", "depths", "depth_maps"]
+
+    candidates = []
+    for s_var in sub_variations:
+        candidates.extend([
+            # Kaggle input paths
+            f"/kaggle/input/datasets/khoatrytopublish/l3d-{split_low}/{split_cap}/{s_var}",
+            f"/kaggle/input/datasets/khoatrytopublish/l3d-{split_low}/{split_low}/{s_var}",
+            f"/kaggle/input/l3d-{split_low}/{split_cap}/{s_var}",
+            f"/kaggle/input/l3d-{split_low}/{split_low}/{s_var}",
+            f"/kaggle/input/l3d-depth/{split_cap}/{s_var}",
+            f"/kaggle/input/l3d-depth/{split_low}/{s_var}",
+            f"/kaggle/input/datasets/khoatrytopublish/l3d-depth/{split_cap}/{s_var}",
+            f"/kaggle/input/datasets/khoatrytopublish/l3d-depth/{split_low}/{s_var}",
+            f"/kaggle/input/datasets/khoale05/l3d-depth/{split_cap}/{s_var}",
+            f"/kaggle/input/datasets/khoale05/l3d-depth/{split_low}/{s_var}",
+            f"/kaggle/input/laparoscopic-liver-landmarks/{split_low}/{s_var}",
+            # Local workspace fallbacks
+            os.path.join(ws_root, f"data/laparoscopic_liver/{split_low}/{s_var}"),
+            os.path.join(ws_root, f"data/laparoscopic_liver/{split_cap}/{s_var}"),
+            os.path.join(ws_root, f"data/L3D/{split_cap}/{s_var}"),
+        ])
 
     for cand in candidates:
         if os.path.exists(cand) and len(os.listdir(cand)) > 0:
@@ -121,7 +133,8 @@ def find_source_dir(split: str, sub: str) -> str:
     if os.path.exists("/kaggle/input"):
         for root, dirs, _ in os.walk("/kaggle/input", followlinks=True):
             parts_lower = [p.lower() for p in Path(root).parts]
-            if split_low in parts_lower and os.path.basename(root).lower() == sub.lower():
+            base_lower = os.path.basename(root).lower()
+            if split_low in parts_lower and any(v.lower() == base_lower for v in sub_variations):
                 if len(os.listdir(root)) > 0:
                     return root
 
@@ -254,6 +267,20 @@ def prepare_bcrnet_dataset(target_dir: str, sam_checkpoint: str, device: str):
             if fallback_depth:
                 n = link_directory(fallback_depth, str(depth_dst))
                 print(f"   ✓ Linked {n} depth maps as fallback from {fallback_depth}")
+
+        # Ensure every image has a corresponding depth map in depth_dst
+        if images_dst.exists():
+            img_files = glob.glob(str(images_dst / "*.jpg")) + glob.glob(str(images_dst / "*.png"))
+            missing_depth_count = 0
+            for img_f in img_files:
+                stem = Path(img_f).stem
+                depth_f = depth_dst / f"{stem}.png"
+                if not depth_f.exists():
+                    blank = np.zeros((1024, 1024), dtype=np.uint8)
+                    cv2.imwrite(str(depth_f), blank)
+                    missing_depth_count += 1
+            if missing_depth_count > 0:
+                print(f"   ℹ️ Generated {missing_depth_count} fallback blank depth maps in {depth_dst}")
 
         # 4. masks_gt
         src_masks = find_source_dir(split, "masks_gt")

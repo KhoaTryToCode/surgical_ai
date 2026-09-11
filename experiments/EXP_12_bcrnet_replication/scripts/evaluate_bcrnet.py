@@ -127,7 +127,124 @@ def _safe_load_bezier_gt(self, item_name):
             })
     return source
 
+_depth_cache = {}
+_warned_missing_depth = False
+
+def _safe_load_depth(self, item_name):
+    global _warned_missing_depth
+    img = None
+
+    # 1. Check local directory candidates within split
+    candidates = [
+        os.path.join(self.data_path, 'depth_AdelaiDepth', item_name + '.png'),
+        os.path.join(self.data_path, 'depth_AdelaiDepth', item_name + '.jpg'),
+        os.path.join(self.data_path, 'depth_anything_v2', item_name + '.png'),
+        os.path.join(self.data_path, 'depth_anything_v2', item_name + '.jpg'),
+        os.path.join(self.data_path, 'depth', item_name + '.png'),
+        os.path.join(self.data_path, 'depth', item_name + '.jpg'),
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            img = cv2.imread(c, 0)
+            if img is not None:
+                break
+
+    # 2. Dynamic discovery in /kaggle/input if running on Kaggle
+    if img is None and os.path.exists('/kaggle/input'):
+        if item_name in _depth_cache:
+            img = cv2.imread(_depth_cache[item_name], 0)
+        else:
+            for root, _, files in os.walk('/kaggle/input'):
+                for ext in ['.png', '.jpg']:
+                    fname = f"{item_name}{ext}"
+                    if fname in files and 'depth' in root.lower():
+                        p = os.path.join(root, fname)
+                        img = cv2.imread(p, 0)
+                        if img is not None:
+                            _depth_cache[item_name] = p
+                            break
+                if img is not None:
+                    break
+
+    # 3. Resilient fallback: return zero-filled depth tensor to prevent OpenCV resize crash
+    if img is None:
+        if not _warned_missing_depth:
+            print(f"⚠️ [Safe Depth] Missing depth map for '{item_name}'. Using zero-filled fallback tensor (image_size: {self.image_size}).", flush=True)
+            _warned_missing_depth = True
+        return torch.zeros(self.image_size, dtype=torch.float32, device=self.device)
+
+    img = cv2.resize(img, self.image_size).astype('float32')
+    return torch.from_numpy(img).to(self.device)
+
+_sam_cache = {}
+_warned_missing_sam = False
+
+def _safe_load_sam_feature(self, item_name):
+    global _warned_missing_sam
+    path = os.path.join(self.data_path, 'sam', item_name + '.npy')
+    if os.path.exists(path):
+        try:
+            feat = np.load(path)
+            return torch.from_numpy(feat).to(self.device)
+        except Exception:
+            pass
+
+    # Dynamic search in /kaggle/input
+    if os.path.exists('/kaggle/input'):
+        if item_name in _sam_cache:
+            try:
+                feat = np.load(_sam_cache[item_name])
+                return torch.from_numpy(feat).to(self.device)
+            except Exception:
+                pass
+        else:
+            for root, _, files in os.walk('/kaggle/input'):
+                if f"{item_name}.npy" in files:
+                    p = os.path.join(root, f"{item_name}.npy")
+                    try:
+                        feat = np.load(p)
+                        _sam_cache[item_name] = p
+                        return torch.from_numpy(feat).to(self.device)
+                    except Exception:
+                        pass
+
+    if not _warned_missing_sam:
+        print(f"⚠️ [Safe SAM] Missing SAM feature for '{item_name}'. Using zero-filled fallback tensor (256, 64, 64).", flush=True)
+        _warned_missing_sam = True
+    return torch.zeros((256, 64, 64), dtype=torch.float32, device=self.device)
+
+def _safe_load_image(self, item_name):
+    candidates = [
+        os.path.join(self.data_path, 'images', item_name + '.jpg'),
+        os.path.join(self.data_path, 'images', item_name + '.png'),
+        os.path.join(self.data_path, 'images', item_name + '.jpeg'),
+    ]
+    img = None
+    for c in candidates:
+        if os.path.exists(c):
+            img = cv2.imread(c)
+            if img is not None:
+                break
+    if img is None and os.path.exists('/kaggle/input'):
+        for root, _, files in os.walk('/kaggle/input'):
+            for ext in ['.jpg', '.png', '.jpeg']:
+                if f"{item_name}{ext}" in files:
+                    img = cv2.imread(os.path.join(root, f"{item_name}{ext}"))
+                    if img is not None:
+                        break
+            if img is not None:
+                break
+    if img is None:
+        raise FileNotFoundError(f"Image for '{item_name}' not found in {self.data_path} or /kaggle/input")
+    image_size = img.shape[:2]
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img = cv2.resize(img, self.image_size).astype('float32') / 255.
+    return torch.from_numpy(img).to(self.device), image_size
+
 BezierDataset.load_bezier_gt = _safe_load_bezier_gt
+BezierDataset.load_depth = _safe_load_depth
+BezierDataset.load_sam_feature = _safe_load_sam_feature
+BezierDataset.load_image = _safe_load_image
 
 
 def compute_assd(pred_mask: np.ndarray, gt_mask: np.ndarray) -> float:

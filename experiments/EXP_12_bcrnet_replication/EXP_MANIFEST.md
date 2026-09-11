@@ -71,6 +71,24 @@ experiments/EXP_12_bcrnet_replication/
 │   ├── build_adet_ext.py                # Standalone CUDA/C++ extension builder for MSDeformAttn
 │   ├── prepare_data.py                  # Symlinks AdelaiDepth, labels, images, generates s_bezier & sam
 │   ├── train_bcrnet.py                  # Training runner with BCRNet schedule and W&B logging
-│   └── evaluate_bcrnet.py               # Comprehensive multi-split evaluation (DSC, IoU, ASSD)
+│   ├── eval_simple.py                   # Lightweight, bulletproof evaluation directly mirroring train validation loop
+│   └── evaluate_bcrnet.py               # Comprehensive multi-split evaluation with live telemetry & ASSD
 └── results/                             # Evaluation metrics JSONs and visual prediction overlays
 ```
+
+---
+
+## 7. Empirical Findings & Benchmarks
+
+### A. Validation Set Results (122 Frames, Best Model)
+Evaluated across all 122 frames in 39 seconds with zero memory leaks (Host RAM stable at 1.7 GB / 31.3 GB):
+- **Mean DSC:** 35.49% (Paper reports on Test set: 69.57%)
+- **Mean IoU:** 23.07% (Paper reports on Test set: 54.16%)
+- **Silhouette:** 41.37% DSC
+- **Ligament:** 20.53% DSC
+- **Ridge:** 33.83% DSC
+
+### B. Test Set Evaluation & Missing Depth Resolution
+- When evaluating the Test set (109 frames), the unpatched BCRNet `load_depth` raised `cv2.error: (-215:Assertion failed) !ssize.empty() in function 'resize'` due to missing/empty depth directories.
+- **Resolution:** Implemented `_safe_load_depth` and `_safe_load_sam_feature` monkey patches in `evaluate_bcrnet.py` and `eval_simple.py`, and added automated blank depth fallback generation in `prepare_data.py`. The evaluation now handles missing depth maps without crashing.
+
