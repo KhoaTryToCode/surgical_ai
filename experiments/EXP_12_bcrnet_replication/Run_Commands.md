@@ -71,9 +71,10 @@ python experiments/EXP_12_bcrnet_replication/scripts/train_bcrnet.py \
 
 Evaluates the best checkpoint across both **Val** and **Test** splits, generating Dice (DSC), IoU, ASSD, and side-by-side rendered stroke visual overlays.
 
-### Evaluate Both Splits (Val + Test):
+### Evaluate Both Splits (Val + Test) with Paper Setting (threshold 0.3, model_mode train):
 ```bash
 cd /kaggle/working/surgical_ai
+git pull origin main
 export PYTHONPATH="/kaggle/working/surgical_ai/repos/BCRNet:/kaggle/working/surgical_ai:$PYTHONPATH"
 
 python experiments/EXP_12_bcrnet_replication/scripts/evaluate_bcrnet.py \
@@ -81,17 +82,21 @@ python experiments/EXP_12_bcrnet_replication/scripts/evaluate_bcrnet.py \
     --model_path /kaggle/working/checkpoints/EXP_12_bcrnet_replication/best_model.pt \
     --data_path /kaggle/working/L3D \
     --split both \
+    --threshold 0.3 \
+    --model_mode train \
     --save_path /kaggle/working/results/EXP_12_bcrnet_replication \
     --device cuda:0
 ```
 
-### Evaluate Test Split Only:
+### Evaluate Test Split Only (Exact Benchmark Setting):
 ```bash
 python experiments/EXP_12_bcrnet_replication/scripts/evaluate_bcrnet.py \
     --config experiments/EXP_12_bcrnet_replication/configs/bcrnet_l3d.yaml \
     --model_path /kaggle/working/checkpoints/EXP_12_bcrnet_replication/best_model.pt \
     --data_path /kaggle/working/L3D \
     --split Test \
+    --threshold 0.3 \
+    --model_mode train \
     --save_path /kaggle/working/results/EXP_12_bcrnet_replication \
     --device cuda:0
 ```

@@ -32,8 +32,8 @@ The experiment processes 4 modalities per laparoscopic surgical frame:
 
 ## 4. Training Schedule & Loss Formulation
 - **Optimizer:** Adam, learning rate = 1e-5, weight decay = 1e-4
-- **Batch Size:** 2 per GPU
-- **Epochs:** 80
+- **Batch Size:** 2 per GPU (paper: 4 on RTX A6000 48GB)
+- **Epochs:** 80 (paper: 60 on L3D)
 - **Dynamic Loss Weighting:**
   lambda(epoch) = 1 - sigmoid((epoch - 10) / 2)
   - `loss_ce_enc`: 1 - lambda(epoch)
@@ -43,7 +43,23 @@ The experiment processes 4 modalities per laparoscopic surgical frame:
 
 ---
 
-## 5. Directory & File Structure
+## 5. Architectural & Forensic Grounding Analysis
+1. **Input Normalization Quirk in Official Repo (`repos/BCRNet`):**
+   - In `repos/BCRNet/utils/bezier_dataset.py`, RGB is divided by 255 (`[0, 1]`).
+   - `TransformerPureDetector.preprocess_image` subtracts Detectron2's `pixel_mean = [123.675, 116.28, 103.53]` and divides by `pixel_std = [58.395, 57.12, 57.375]`, squashing image dynamic range to ~0.017 around -2.11.
+   - `depth` is loaded raw in `[0, 234]` and concatenated in `CNNEncoder` (`first_conv` 4 channels).
+   - This behavior is 100% genuine from the authors' repository; our replication code did not introduce this.
+2. **Evaluation Protocol (`model.train()` vs `model.eval()`):**
+   - In the authors' official `repos/BCRNet/test.py` (line 26), evaluation explicitly runs with `model.train()` and `torch.no_grad()`.
+   - In official `repos/BCRNet/train.py` (line 62), `# model.eval()` is intentionally commented out.
+   - This preserves BatchNorm statistics on batch size 1 and preserves `side_output` in `Decoder` (`if self.training:`).
+3. **Evaluation Split & Threshold:**
+   - The paper's Table 1 metric (**69.57% DSC**) is reported exclusively on the **Test set (109 frames)** at threshold $\tau = 0.3$, whereas periodic training logs reflect the **Val set (122 frames)**.
+   - Per-class variance in L3D: Anterior Ridge achieves ~95.9% DSC, while thin/occluded landmarks (Silhouette ~15%, Ligament ~18%) pull down the unweighted average on the validation split.
+
+---
+
+## 6. Directory & File Structure
 ```
 experiments/EXP_12_bcrnet_replication/
 ├── EXP_MANIFEST.md                      # Experiment design, formulas, and target metrics

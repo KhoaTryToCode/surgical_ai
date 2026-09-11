@@ -261,6 +261,8 @@ def main():
     parser.add_argument('--model_path', required=True, help="Path to checkpoint (.pt)")
     parser.add_argument('--data_path', default=default_data)
     parser.add_argument('--split', default='both', choices=['Val', 'Test', 'both'])
+    parser.add_argument('--threshold', type=float, default=0.3, help="Proposal confidence threshold (Paper: 0.3, default config: 0.35)")
+    parser.add_argument('--model_mode', default='train', choices=['train', 'eval'], help="Model mode during inference (official test.py uses 'train' with torch.no_grad())")
     parser.add_argument('--save_path', default=default_save)
     parser.add_argument('--device', default='cuda:0' if torch.cuda.is_available() else 'cpu')
 
@@ -273,10 +275,20 @@ def main():
     cfg.MODEL.DEVICE = device
     model = TransformerPureDetector(cfg).to(device)
 
+    # Configure inference threshold (Paper: 0.3)
+    model.test_score_threshold = args.threshold
+    print(f"   Inference threshold: {model.test_score_threshold} (Paper: 0.3)")
+
     checkpoint = torch.load(args.model_path, map_location=device)
     state_dict = checkpoint['model'] if 'model' in checkpoint else checkpoint
     model.load_state_dict(state_dict)
-    model.eval()
+
+    if args.model_mode == 'train':
+        model.train()
+        print("   Inference mode: model.train() (matching official repos/BCRNet/test.py line 26)")
+    else:
+        model.eval()
+        print("   Inference mode: model.eval()")
     print("✅ Model loaded successfully.")
 
     splits_to_eval = ['Val', 'Test'] if args.split == 'both' else [args.split]
