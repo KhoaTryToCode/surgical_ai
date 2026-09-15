@@ -177,6 +177,17 @@ class TopoNetAblationModel(nn.Module):
         skipf4, out_f4 = self.be4(out_rgb, _safe_interpolate_area(depth_out, size=out_rgb.shape[2:]), out_f3)
 
         # Context Module & Decoder
+        # Prevent PyTorch BatchNorm2d crash on batch_size=1 where spatial size is 1x1 (AdaptiveAvgPool2d)
+        if hasattr(self.context_module, 'features') and len(self.context_module.features) > 0:
+            try:
+                ppm_1x1_bn = self.context_module.features[0][1][1]
+                if image.shape[0] == 1 and self.training:
+                    ppm_1x1_bn.eval()
+                elif self.training:
+                    ppm_1x1_bn.train()
+            except Exception:
+                pass
+
         context_out = self.context_module(out_f4)
         decoder_outs, _ = self.decoder(enc_outs=[context_out, skip3, skip2, skip1])
         logits = F.log_softmax(decoder_outs, dim=1)

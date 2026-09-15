@@ -239,7 +239,7 @@ def main():
     train_dataset = TopoNetDataset(args.train_dir, mode='train')
     val_dataset = TopoNetDataset(args.val_dir, mode='val')
 
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=2, pin_memory=(device.type == 'cuda'))
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=2, pin_memory=(device.type == 'cuda'), drop_last=True)
     val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=2, pin_memory=(device.type == 'cuda'))
 
     test_loader = None
