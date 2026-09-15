@@ -9,7 +9,6 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../re
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from depth_anything_v2.dpt import DepthAnythingV2
 from models.resnet import ResNet34
 from models.context_modules import get_context_module
 from models.model_utils import ConvBNAct, Swish
@@ -60,26 +59,11 @@ class TopoNetAblationModel(nn.Module):
       5. 'wo_lper_lcl': Snake DSCNet + BTF + Soft Dice only (no topo loss)
       6. 'wo_btf': Snake DSCNet + Simple Concat + Soft Dice + clDice + Betti
     """
-    def __init__(self, ablation_mode='full', depth_path=None, num_classes=4, height=1024, width=1024):
+    def __init__(self, ablation_mode='full', num_classes=4, height=1024, width=1024, **kwargs):
         super().__init__()
         self.ablation_mode = ablation_mode
-        self.depth_path = depth_path
 
-        # 1. Depth Anything V2 Foundation Model
-        depth_configs = {
-            'vitb': {'encoder': 'vitb', 'features': 128, 'out_channels': [96, 192, 384, 768]}
-        }
-        self.depth_encoder = DepthAnythingV2(**depth_configs['vitb'])
-        if depth_path and os.path.exists(depth_path):
-            state_dict = torch.load(depth_path, map_location='cpu')
-            self.depth_encoder.load_state_dict(state_dict)
-            print(f"✅ Loaded Depth Anything V2 weights from: {depth_path}")
-        else:
-            print(f"⚠️  Depth weights not found at '{depth_path}'. Initialized with random weights (OK for smoke tests).")
-        self.depth_encoder.eval()
-        self.depth_encoder.requires_grad_(False)
-
-        # 2. Depth Feature Extractor (Snake DSCNet vs Standard Conv)
+        # 1. Depth Feature Extractor (Snake DSCNet vs Standard Conv)
         self.use_snake = (ablation_mode != 'baseline')
         if self.use_snake:
             global DSCNet_Encoder
@@ -132,12 +116,14 @@ class TopoNetAblationModel(nn.Module):
             encoder_decoder_fusion='add', upsampling_mode='bilinear', num_classes=num_classes
         )
 
-    def forward(self, image):
-        # 1. On-the-fly depth estimation at (1022, 1022) [multiple of ViT patch size 14]
-        with torch.no_grad():
-            img_depth_in = _safe_interpolate_area(image, size=(1022, 1022))
-            raw_depth = self.depth_encoder.infer_image(img_depth_in)
-            depth_3ch = raw_depth.expand(-1, 3, -1, -1)
+    def forward(self, image, depth=None):
+        # 1. Use precomputed depth map (instant, no ViT overhead)
+        if depth is None:
+            depth_3ch = image
+        elif depth.shape[1] == 1:
+            depth_3ch = depth.repeat(1, 3, 1, 1)
+        else:
+            depth_3ch = depth
 
         # 2. Depth Feature Extraction
         if self.use_snake:
@@ -192,4 +178,4 @@ class TopoNetAblationModel(nn.Module):
         decoder_outs, _ = self.decoder(enc_outs=[context_out, skip3, skip2, skip1])
         logits = F.log_softmax(decoder_outs, dim=1)
 
-        return logits, raw_depth
+        return logits, depth_3ch

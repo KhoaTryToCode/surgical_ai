@@ -20,33 +20,34 @@ Expected output:
 
 ---
 
-## 2. Kaggle Notebook Execution (Recommended / Easiest Workflow)
+## 2. Dedicated Kaggle Notebook Execution (Parallel 6x-10x Faster Workflow)
 
-The entire pipeline has been packaged into a self-contained, single-click Jupyter notebook:
-**[`experiments/EXPERIMENT_1/TopoNet_Ablation_Kaggle.ipynb`](TopoNet_Ablation_Kaggle.ipynb)**
+The ablation suite is split into **6 dedicated, independent Jupyter notebooks** that run in parallel without timing out or hitting Kaggle's 12-hour limit:
+
+| Notebook | Run ID | Ablation Mode | Evaluation Splits | Output ZIP |
+| :--- | :--- | :--- | :---: | :--- |
+| [`TopoNet_Run_1_Full.ipynb`](TopoNet_Run_1_Full.ipynb) | `Run_1.0` | `full` (Full TopoNet) | Val (122) + Test (109) | `EXPERIMENT_1_RESULTS_FULL.zip` |
+| [`TopoNet_Run_2_Baseline.ipynb`](TopoNet_Run_2_Baseline.ipynb) | `Run_1.1` | `baseline` (Standard Conv) | Val (122) | `EXPERIMENT_1_RESULTS_BASELINE.zip` |
+| [`TopoNet_Run_3_wo_Lper.ipynb`](TopoNet_Run_3_wo_Lper.ipynb) | `Run_1.2` | `wo_lper` (No Betti Loss) | Val (122) | `EXPERIMENT_1_RESULTS_WO_LPER.zip` |
+| [`TopoNet_Run_4_wo_Lcl.ipynb`](TopoNet_Run_4_wo_Lcl.ipynb) | `Run_1.3` | `wo_lcl` (No clDice Loss) | Val (122) | `EXPERIMENT_1_RESULTS_WO_LCL.zip` |
+| [`TopoNet_Run_5_wo_Lper_Lcl.ipynb`](TopoNet_Run_5_wo_Lper_Lcl.ipynb) | `Run_1.4` | `wo_lper_lcl` (Soft Dice only) | Val (122) | `EXPERIMENT_1_RESULTS_WO_LPER_LCL.zip` |
+| [`TopoNet_Run_6_wo_BTF.ipynb`](TopoNet_Run_6_wo_BTF.ipynb) | `Run_1.5` | `wo_btf` (Simple Concat) | Val (122) | `EXPERIMENT_1_RESULTS_WO_BTF.zip` |
 
 ### Step-by-Step Kaggle Instructions:
-1. **Upload Notebook:**
+1. **Upload Desired Notebook:**
    - Go to [kaggle.com/code](https://www.kaggle.com/code) -> **New Notebook** -> **File** -> **Import Notebook**.
-   - Drag and drop or select `TopoNet_Ablation_Kaggle.ipynb`.
-2. **Configure Settings in Kaggle Right-Hand Sidebar:**
-   - **Accelerator:** Set to **GPU T4 x2** or **GPU P100**.
-   - **Internet:** Turn **ON** (required for `wget` of Depth Anything V2 weights and `pip` packages).
-   - **Input Datasets:** Ensure your 3 L3D datasets are attached (`l3d-train`, `l3d-val`, `l3d-test`).
-3. **Choose Execution Mode in Step 7:**
-   - Default: `RUN_ALL_ABLATIONS = False` -> Runs **Run 1.0 (Full TopoNet)** on both Validation (122 frames) and Test (109 frames).
-   - Full Suite: Set `RUN_ALL_ABLATIONS = True` -> Runs all 6 paper ablation configurations sequentially (`full`, `baseline`, `wo_lper`, `wo_lcl`, `wo_lper_lcl`, `wo_btf`).
+   - Drag and drop any of the `TopoNet_Run_*.ipynb` notebooks.
+2. **Attach Datasets in Kaggle Right-Hand Sidebar:**
+   - Attach the 3 image datasets: `l3d-train`, `l3d-val`, `l3d-test`.
+   - Attach the precomputed depth dataset: `l3d-depth` (`khoale05/l3d-depth`).
+3. **Configure GPU Accelerator:**
+   - **Accelerator:** Set to **GPU T4** or **GPU P100**.
+   - **Internet:** Turn **ON** (required for `pip` packages and Betti git clone).
 4. **Run Notebook:**
    - Click **Save Version** -> **Save & Run All (Commit)**, or run cells interactively.
+   - Precomputed depth map loading cuts per-epoch time to **~3 minutes**!
 5. **Download Results:**
-   - When finished, download the automatically generated archive:
-     `/kaggle/working/EXPERIMENT_1_RESULTS.zip`
-   - Contains:
-     - `results/run_*/summary_metrics.json`
-     - `results/run_*/validation_per_frame_results.csv`
-     - `results/run_*/test_per_frame_results.csv`
-     - `results/run_*/visualizations_patient40/*.png` (4-panel visual diagnostic plots)
-     - `results/run_*/best_model.pth`
+   - When finished, download the dedicated zip archive directly from the notebook output (e.g. `EXPERIMENT_1_RESULTS_FULL.zip`).
 
 ---
 

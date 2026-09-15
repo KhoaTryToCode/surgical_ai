@@ -119,6 +119,7 @@ def run_evaluation(model, dataloader, device, split_name='Val', save_patient40_d
         with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
             for batch_idx, (images, depths, masks, filenames) in enumerate(tqdm(dataloader, desc=f"Evaluating {split_name}")):
                 images = images.to(device)
+                depths = depths.to(device)
                 masks = masks.to(device)
 
                 # CUDA Synchronized latency timing
@@ -126,7 +127,7 @@ def run_evaluation(model, dataloader, device, split_name='Val', save_patient40_d
                     torch.cuda.synchronize()
                 start_t = time.perf_counter()
 
-                logits, _ = model(images)
+                logits, _ = model(images, depths)
 
                 if device.type == 'cuda':
                     torch.cuda.synchronize()
@@ -203,14 +204,18 @@ def main():
     parser.add_argument('--train_dir', type=str, default='data/L3D/Train', help="Path to Train directory")
     parser.add_argument('--val_dir', type=str, default='data/L3D/Val', help="Path to Val directory")
     parser.add_argument('--test_dir', type=str, default='data/L3D/Test', help="Path to Test directory")
+    parser.add_argument('--train_depth_dir', type=str, default=None, help="Path to Train depth directory")
+    parser.add_argument('--val_depth_dir', type=str, default=None, help="Path to Val depth directory")
+    parser.add_argument('--test_depth_dir', type=str, default=None, help="Path to Test depth directory")
+    parser.add_argument('--depth_dir', type=str, default=None, help="Fallback global depth directory")
     parser.add_argument('--depth_ckpt', '--depth_weights', dest='depth_ckpt', type=str, 
-                        default='checkpoints/depth_anything_v2_vitb.pth', help="Path to depth checkpoint")
+                        default=None, help="Legacy depth weights flag (unused with precomputed depth)")
     parser.add_argument('--ablation', type=str, default='full', 
                         choices=['full', 'baseline', 'wo_lper', 'wo_lcl', 'wo_lper_lcl', 'wo_btf'],
                         help="Ablation mode to execute")
     parser.add_argument('--epochs', type=int, default=100, help="Training epochs (paper: 100)")
-    parser.add_argument('--batch_size', type=int, default=1, help="Micro-batch size (default: 1 for 16GB VRAM safety)")
-    parser.add_argument('--accumulation_steps', type=int, default=4, help="Gradient accumulation steps (default: 4 -> eff batch = 4)")
+    parser.add_argument('--batch_size', type=int, default=2, help="Micro-batch size (default: 2)")
+    parser.add_argument('--accumulation_steps', type=int, default=2, help="Gradient accumulation steps (default: 2 -> eff batch = 4)")
     parser.add_argument('--lr', type=float, default=8e-5, help="Learning rate (paper: 8e-5)")
     parser.add_argument('--weight_decay', type=float, default=3e-5, help="Weight decay (paper: 3e-5)")
     parser.add_argument('--save_dir', type=str, default='results/toponet_full', help="Output results directory")
@@ -232,23 +237,29 @@ def main():
     print(f"   Mixed Precision (AMP):{'Enabled (FP16)' if device.type == 'cuda' else 'Disabled (Local non-CUDA)'}")
     print(f"   Train Directory:      {args.train_dir}")
     print(f"   Val Directory:        {args.val_dir}")
+    print(f"   Train Depth Dir:      {args.train_depth_dir or args.depth_dir}")
+    print(f"   Val Depth Dir:        {args.val_depth_dir or args.depth_dir}")
     print(f"   Save Directory:       {args.save_dir}")
     print("=" * 80)
 
     # 1. Build Datasets
-    train_dataset = TopoNetDataset(args.train_dir, mode='train')
-    val_dataset = TopoNetDataset(args.val_dir, mode='val')
+    train_depth = args.train_depth_dir or args.depth_dir
+    val_depth = args.val_depth_dir or args.depth_dir
+    test_depth = args.test_depth_dir or args.depth_dir
+
+    train_dataset = TopoNetDataset(args.train_dir, depth_dir=train_depth, mode='train')
+    val_dataset = TopoNetDataset(args.val_dir, depth_dir=val_depth, mode='val')
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=2, pin_memory=(device.type == 'cuda'), drop_last=True)
     val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=2, pin_memory=(device.type == 'cuda'))
 
     test_loader = None
     if args.test_dir and os.path.exists(args.test_dir):
-        test_dataset = TopoNetDataset(args.test_dir, mode='test')
+        test_dataset = TopoNetDataset(args.test_dir, depth_dir=test_depth, mode='test')
         test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=2)
 
-    # 2. Build Model
-    model = TopoNetAblationModel(ablation_mode=args.ablation, depth_path=args.depth_ckpt).to(device)
+    # 2. Build Model (Direct precomputed depth processing, zero ViT overhead)
+    model = TopoNetAblationModel(ablation_mode=args.ablation).to(device)
 
     # 3. Setup Loss Functions
     cl_dice_loss = soft_dice_cldice(exclude_background=True)
@@ -280,10 +291,10 @@ def main():
         print("\n🧪 Running Local Smoke Test (1 iteration)...")
         model.train()
         for images, depths, masks, names in train_loader:
-            images, masks = images.to(device), masks.to(device)
+            images, depths, masks = images.to(device), depths.to(device), masks.to(device)
             optimizer.zero_grad()
             with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
-                logits, _ = model(images)
+                logits, _ = model(images, depths)
                 loss = dice_loss_fn(logits.float(), masks)
             scaler.scale(loss).backward()
             scaler.step(optimizer)
@@ -307,10 +318,11 @@ def main():
         pbar = tqdm(enumerate(train_loader), total=len(train_loader), desc=f"Epoch [{epoch+1}/{args.epochs}]")
         for batch_idx, (images, depths, masks, names) in pbar:
             images = images.to(device)
+            depths = depths.to(device)
             masks = masks.to(device)
 
             with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
-                logits, _ = model(images)
+                logits, _ = model(images, depths)
                 logits = logits.float()
 
                 # Compute Loss based on Ablation Mode & Epoch

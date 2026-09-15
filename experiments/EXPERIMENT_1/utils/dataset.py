@@ -14,8 +14,9 @@ class TopoNetDataset(Dataset):
     Fixes the Patient 32 4K canvas truncation bug by reading imageHeight/imageWidth
     directly from the Label JSON.
     """
-    def __init__(self, data_dir, transform=None, mode='train'):
+    def __init__(self, data_dir, depth_dir=None, transform=None, mode='train'):
         self.data_dir = data_dir
+        self.depth_dir = depth_dir
         self.mode = mode
         
         # Resolve images directory flexibly (supports both nested 'images/' and flat folders)
@@ -34,7 +35,7 @@ class TopoNetDataset(Dataset):
     @staticmethod
     def _default_transform(image, mask, depth):
         to_tensor = T.ToTensor()
-        return to_tensor(image), to_tensor(mask), to_tensor(depth)
+        return to_tensor(image), to_tensor(mask), torch.from_numpy(depth).float()
 
     def __len__(self):
         return len(self.image_paths)
@@ -43,12 +44,67 @@ class TopoNetDataset(Dataset):
         img_path = self.image_paths[idx]
         image = self.load_image(img_path)
         mask = self.load_mask(img_path)
-        depth = np.zeros((1024, 1024), dtype=np.uint8)  # TopoNet infers depth dynamically via depth_encoder
+        
+        # Resolve precomputed depth map path
+        fname = os.path.basename(img_path)
+        fname_base = os.path.splitext(fname)[0]
+        depth_path = None
+
+        search_dirs = []
+        if self.depth_dir:
+            search_dirs.append(self.depth_dir)
+        search_dirs.extend([
+            os.path.join(self.data_dir, 'depth_anything_v2'),
+            os.path.join(self.data_dir, 'depth_AdelaiDepth')
+        ])
+
+        for d in search_dirs:
+            if d and os.path.exists(d):
+                p_png = os.path.join(d, fname_base + '.png')
+                if os.path.exists(p_png):
+                    depth_path = p_png
+                    break
+                p_jpg = os.path.join(d, fname_base + '.jpg')
+                if os.path.exists(p_jpg):
+                    depth_path = p_jpg
+                    break
+
+        if depth_path:
+            depth = self.load_depth(depth_path)
+        else:
+            depth = np.zeros((3, 1024, 1024), dtype=np.float32)
 
         # Transform expects mask in shape (H, W, C)
         image_t, mask_t, depth_t = self.transform(image, mask.transpose(1, 2, 0), depth)
 
-        return image_t, depth_t, mask_t, os.path.basename(img_path)
+        return image_t, depth_t, mask_t, fname
+
+    @staticmethod
+    def load_depth(path):
+        """Loads precomputed depth map and normalizes to (3, 1024, 1024) float32 in [0, 1]."""
+        depth = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        if depth is None:
+            return np.zeros((3, 1024, 1024), dtype=np.float32)
+
+        # Normalize based on integer depth bit-depth
+        if depth.dtype == np.uint16:
+            depth = depth.astype(np.float32) / 65535.0
+        elif depth.dtype == np.uint8:
+            depth = depth.astype(np.float32) / 255.0
+        else:
+            depth = depth.astype(np.float32)
+            if depth.max() > 1.0:
+                depth = depth / depth.max()
+
+        depth = cv2.resize(depth, (1024, 1024), interpolation=cv2.INTER_LINEAR)
+        if depth.ndim == 2:
+            depth = np.repeat(depth[:, :, None], 3, axis=-1)
+        elif depth.ndim == 3 and depth.shape[2] == 1:
+            depth = np.repeat(depth, 3, axis=-1)
+        elif depth.ndim == 3 and depth.shape[2] == 4:
+            depth = depth[:, :, :3]
+
+        return depth.transpose(2, 0, 1).astype(np.float32)
 
     @staticmethod
     def load_image(path):

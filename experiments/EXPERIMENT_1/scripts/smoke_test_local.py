@@ -56,12 +56,13 @@ def run_local_verification():
     print(f"   Using compute device: {device}")
 
     # Use smaller dummy size (256x256) for rapid CPU/MPS smoke test
-    model = TopoNetAblationModel(ablation_mode='baseline', depth_path=None, height=256, width=256).to(device)
+    model = TopoNetAblationModel(ablation_mode='baseline', height=256, width=256).to(device)
     dummy_img = torch.randn(2, 3, 256, 256).to(device)
+    dummy_depth = torch.randn(2, 3, 256, 256).to(device)
     dummy_gt = torch.zeros(2, 4, 256, 256).to(device)
     dummy_gt[:, 0, :, :] = 1.0  # Background
 
-    logits, _ = model(dummy_img)
+    logits, _ = model(dummy_img, dummy_depth)
     print(f"   Model output logits shape: {logits.shape}")
     assert logits.shape == (2, 4, 256, 256), "Output logits shape mismatch!"
 
