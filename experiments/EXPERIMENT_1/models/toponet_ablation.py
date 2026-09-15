@@ -82,6 +82,7 @@ class TopoNetAblationModel(nn.Module):
         # 2. Depth Feature Extractor (Snake DSCNet vs Standard Conv)
         self.use_snake = (ablation_mode != 'baseline')
         if self.use_snake:
+            global DSCNet_Encoder
             if DSCNet_Encoder is None:
                 from DSCNet.ds_encoder import DSCNet_Encoder
             self.dsc_encoder = DSCNet_Encoder()
