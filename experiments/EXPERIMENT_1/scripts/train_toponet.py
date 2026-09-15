@@ -199,7 +199,8 @@ def main():
     parser.add_argument('--train_dir', type=str, default='data/L3D/Train', help="Path to Train directory")
     parser.add_argument('--val_dir', type=str, default='data/L3D/Val', help="Path to Val directory")
     parser.add_argument('--test_dir', type=str, default='data/L3D/Test', help="Path to Test directory")
-    parser.add_argument('--depth_ckpt', type=str, default='checkpoints/depth_anything_v2_vitb.pth', help="Path to depth checkpoint")
+    parser.add_argument('--depth_ckpt', '--depth_weights', dest='depth_ckpt', type=str, 
+                        default='checkpoints/depth_anything_v2_vitb.pth', help="Path to depth checkpoint")
     parser.add_argument('--ablation', type=str, default='full', 
                         choices=['full', 'baseline', 'wo_lper', 'wo_lcl', 'wo_lper_lcl', 'wo_btf'],
                         help="Ablation mode to execute")
