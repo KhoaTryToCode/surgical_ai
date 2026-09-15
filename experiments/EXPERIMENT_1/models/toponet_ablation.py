@@ -15,7 +15,10 @@ from models.context_modules import get_context_module
 from models.model_utils import ConvBNAct, Swish
 from models.decoder import Decoder
 from models.befusion import BeFusion
-from DSCNet.ds_encoder import DSCNet_Encoder
+try:
+    from DSCNet.ds_encoder import DSCNet_Encoder
+except ImportError:
+    DSCNet_Encoder = None
 
 
 def _safe_interpolate_area(x, size):
@@ -79,6 +82,8 @@ class TopoNetAblationModel(nn.Module):
         # 2. Depth Feature Extractor (Snake DSCNet vs Standard Conv)
         self.use_snake = (ablation_mode != 'baseline')
         if self.use_snake:
+            if DSCNet_Encoder is None:
+                from DSCNet.ds_encoder import DSCNet_Encoder
             self.dsc_encoder = DSCNet_Encoder()
         else:
             # Baseline uses standard ResNet blocks for depth

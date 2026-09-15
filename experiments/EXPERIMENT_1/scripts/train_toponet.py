@@ -116,36 +116,40 @@ def run_evaluation(model, dataloader, device, split_name='Val', save_patient40_d
     warmup_count = 0
 
     with torch.no_grad():
-        for batch_idx, (images, depths, masks, filenames) in enumerate(tqdm(dataloader, desc=f"Evaluating {split_name}")):
-            images = images.to(device)
-            masks = masks.to(device)
+        with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
+            for batch_idx, (images, depths, masks, filenames) in enumerate(tqdm(dataloader, desc=f"Evaluating {split_name}")):
+                images = images.to(device)
+                masks = masks.to(device)
 
-            # CUDA Synchronized latency timing
-            if device.type == 'cuda':
-                torch.cuda.synchronize()
-            start_t = time.perf_counter()
+                # CUDA Synchronized latency timing
+                if device.type == 'cuda':
+                    torch.cuda.synchronize()
+                start_t = time.perf_counter()
 
-            logits, _ = model(images)
+                logits, _ = model(images)
 
-            if device.type == 'cuda':
-                torch.cuda.synchronize()
-            end_t = time.perf_counter()
+                if device.type == 'cuda':
+                    torch.cuda.synchronize()
+                end_t = time.perf_counter()
 
-            if warmup_count >= 5:
-                latencies.append((end_t - start_t) * 1000.0 / images.size(0))
-            else:
-                warmup_count += 1
+                if warmup_count >= 5:
+                    latencies.append((end_t - start_t) * 1000.0 / images.size(0))
+                else:
+                    warmup_count += 1
 
-            # Batch metrics
-            batch_m = evaluate_batch(logits, masks)
-            for i, m in enumerate(batch_m):
-                m['filename'] = filenames[i]
-                m['patient'] = filenames[i].split('_')[1] if 'Patient_' in filenames[i] else 'unknown'
-                all_metrics.append(m)
+                # Batch metrics
+                batch_m = evaluate_batch(logits.float(), masks)
+                for i, m in enumerate(batch_m):
+                    m['filename'] = filenames[i]
+                    m['patient'] = filenames[i].split('_')[1] if 'Patient_' in filenames[i] else 'unknown'
+                    all_metrics.append(m)
 
-                # Patient 40 diagnostic rendering
-                if save_patient40_dir and ('Patient_40_' in filenames[i] or '_40_' in filenames[i]):
-                    render_patient40_panels(images[i], masks[i], logits[i], filenames[i], save_patient40_dir)
+                    # Patient 40 diagnostic rendering
+                    if save_patient40_dir and ('Patient_40_' in filenames[i] or '_40_' in filenames[i]):
+                        render_patient40_panels(images[i], masks[i], logits[i].float(), filenames[i], save_patient40_dir)
+
+    if device.type == 'cuda':
+        torch.cuda.empty_cache()
 
     # Aggregate summaries
     df = pd.DataFrame(all_metrics)
@@ -205,8 +209,8 @@ def main():
                         choices=['full', 'baseline', 'wo_lper', 'wo_lcl', 'wo_lper_lcl', 'wo_btf'],
                         help="Ablation mode to execute")
     parser.add_argument('--epochs', type=int, default=100, help="Training epochs (paper: 100)")
-    parser.add_argument('--batch_size', type=int, default=2, help="Micro-batch size")
-    parser.add_argument('--accumulation_steps', type=int, default=2, help="Gradient accumulation steps (eff batch = batch * accum)")
+    parser.add_argument('--batch_size', type=int, default=1, help="Micro-batch size (default: 1 for 16GB VRAM safety)")
+    parser.add_argument('--accumulation_steps', type=int, default=4, help="Gradient accumulation steps (default: 4 -> eff batch = 4)")
     parser.add_argument('--lr', type=float, default=8e-5, help="Learning rate (paper: 8e-5)")
     parser.add_argument('--weight_decay', type=float, default=3e-5, help="Weight decay (paper: 3e-5)")
     parser.add_argument('--save_dir', type=str, default='results/toponet_full', help="Output results directory")
@@ -225,6 +229,7 @@ def main():
     print(f"   Micro Batch Size:     {args.batch_size} (Accumulation: {args.accumulation_steps} -> Effective Batch: {args.batch_size * args.accumulation_steps})")
     print(f"   Learning Rate:        {args.lr}")
     print(f"   Device:               {device} ({torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'Local'})")
+    print(f"   Mixed Precision (AMP):{'Enabled (FP16)' if device.type == 'cuda' else 'Disabled (Local non-CUDA)'}")
     print(f"   Train Directory:      {args.train_dir}")
     print(f"   Val Directory:        {args.val_dir}")
     print(f"   Save Directory:       {args.save_dir}")
@@ -265,6 +270,7 @@ def main():
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
+    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == 'cuda'))
 
     best_val_dice = -1.0
     best_checkpoint_path = os.path.join(args.save_dir, "best_model.pth")
@@ -276,10 +282,12 @@ def main():
         for images, depths, masks, names in train_loader:
             images, masks = images.to(device), masks.to(device)
             optimizer.zero_grad()
-            logits, _ = model(images)
-            loss = dice_loss_fn(logits, masks)
-            loss.backward()
-            optimizer.step()
+            with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
+                logits, _ = model(images)
+                loss = dice_loss_fn(logits.float(), masks)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             print(f"   [Smoke Test] Forward/Backward Loss: {loss.item():.4f}")
             break
 
@@ -301,44 +309,48 @@ def main():
             images = images.to(device)
             masks = masks.to(device)
 
-            logits, _ = model(images)
+            with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
+                logits, _ = model(images)
+                logits = logits.float()
 
-            # Compute Loss based on Ablation Mode & Epoch
-            if epoch >= 5 and args.ablation in ['full', 'wo_btf']:
-                # Full TopoNet Dynamic Betti Warmup
-                p = float(batch_idx + (epoch + 1) * total_iters) / (args.epochs * total_iters)
-                alpha = (2.0 / (1.0 + np.exp(-10.0 * p)) - 1.0) * 0.05
-                seg_loss = cl_dice_loss(masks, logits)
-                if betti_loss is not None:
-                    b_out = betti_loss(logits, masks)
-                    betti = b_out[0] if isinstance(b_out, (tuple, list)) else b_out
+                # Compute Loss based on Ablation Mode & Epoch
+                if epoch >= 5 and args.ablation in ['full', 'wo_btf']:
+                    # Full TopoNet Dynamic Betti Warmup
+                    p = float(batch_idx + (epoch + 1) * total_iters) / (args.epochs * total_iters)
+                    alpha = (2.0 / (1.0 + np.exp(-10.0 * p)) - 1.0) * 0.05
+                    seg_loss = cl_dice_loss(masks, logits)
+                    if betti_loss is not None:
+                        b_out = betti_loss(logits, masks)
+                        betti = b_out[0] if isinstance(b_out, (tuple, list)) else b_out
+                    else:
+                        betti = 0.0
+                    raw_loss = betti * alpha + seg_loss * (1.0 - alpha)
+                elif epoch >= 5 and args.ablation == 'wo_lper':
+                    raw_loss = cl_dice_loss(masks, logits)
+                elif epoch >= 5 and args.ablation == 'wo_lcl':
+                    p = float(batch_idx + (epoch + 1) * total_iters) / (args.epochs * total_iters)
+                    alpha = (2.0 / (1.0 + np.exp(-10.0 * p)) - 1.0) * 0.05
+                    d_loss = dice_loss_fn(logits, masks)
+                    if betti_loss is not None:
+                        b_out = betti_loss(logits, masks)
+                        betti = b_out[0] if isinstance(b_out, (tuple, list)) else b_out
+                    else:
+                        betti = 0.0
+                    raw_loss = betti * alpha + d_loss * (1.0 - alpha)
                 else:
-                    betti = 0.0
-                raw_loss = betti * alpha + seg_loss * (1.0 - alpha)
-            elif epoch >= 5 and args.ablation == 'wo_lper':
-                raw_loss = cl_dice_loss(masks, logits)
-            elif epoch >= 5 and args.ablation == 'wo_lcl':
-                p = float(batch_idx + (epoch + 1) * total_iters) / (args.epochs * total_iters)
-                alpha = (2.0 / (1.0 + np.exp(-10.0 * p)) - 1.0) * 0.05
-                d_loss = dice_loss_fn(logits, masks)
-                if betti_loss is not None:
-                    b_out = betti_loss(logits, masks)
-                    betti = b_out[0] if isinstance(b_out, (tuple, list)) else b_out
-                else:
-                    betti = 0.0
-                raw_loss = betti * alpha + d_loss * (1.0 - alpha)
-            else:
-                # Baseline, wo_lper_lcl, or Warmup epochs (0-4)
-                raw_loss = dice_loss_fn(logits, masks)
+                    # Baseline, wo_lper_lcl, or Warmup epochs (0-4)
+                    raw_loss = dice_loss_fn(logits, masks)
 
-            # Gradient Accumulation: scale loss
-            loss = raw_loss / args.accumulation_steps
-            loss.backward()
+                # Gradient Accumulation: scale loss
+                loss = raw_loss / args.accumulation_steps
+
+            scaler.scale(loss).backward()
 
             epoch_loss += raw_loss.item()
 
             if (batch_idx + 1) % args.accumulation_steps == 0 or (batch_idx + 1) == len(train_loader):
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
                 optimizer.zero_grad()
 
             pbar.set_postfix({'loss': f"{raw_loss.item():.4f}"})
@@ -354,6 +366,9 @@ def main():
                 best_val_dice = val_summary['macro_dice']
                 torch.save(model.state_dict(), best_checkpoint_path)
                 print(f"🌟 Best model saved to {best_checkpoint_path} (DSC: {best_val_dice*100:.2f}%)")
+
+        if device.type == 'cuda':
+            torch.cuda.empty_cache()
 
     # 5. Final Comprehensive Evaluation
     print("\n" + "=" * 80)

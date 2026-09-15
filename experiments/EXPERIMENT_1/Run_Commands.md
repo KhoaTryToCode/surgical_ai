@@ -64,8 +64,8 @@ python experiments/EXPERIMENT_1/scripts/train_toponet.py \
   --save_dir /kaggle/working/results/run_full \
   --ablation full \
   --epochs 100 \
-  --batch_size 2 \
-  --accumulation_steps 2 \
+  --batch_size 1 \
+  --accumulation_steps 4 \
   --lr 8e-5 \
   --weight_decay 3e-5 \
   --eval_splits both
@@ -80,8 +80,8 @@ python experiments/EXPERIMENT_1/scripts/train_toponet.py \
   --save_dir /kaggle/working/results/run_baseline \
   --ablation baseline \
   --epochs 100 \
-  --batch_size 2 \
-  --accumulation_steps 2 \
+  --batch_size 1 \
+  --accumulation_steps 4 \
   --eval_splits val
 ```
 
@@ -94,6 +94,8 @@ python experiments/EXPERIMENT_1/scripts/train_toponet.py \
   --save_dir /kaggle/working/results/run_wo_lper \
   --ablation wo_lper \
   --epochs 100 \
+  --batch_size 1 \
+  --accumulation_steps 4 \
   --eval_splits val
 ```
 
@@ -106,6 +108,8 @@ python experiments/EXPERIMENT_1/scripts/train_toponet.py \
   --save_dir /kaggle/working/results/run_wo_lcl \
   --ablation wo_lcl \
   --epochs 100 \
+  --batch_size 1 \
+  --accumulation_steps 4 \
   --eval_splits val
 ```
 
@@ -118,10 +122,12 @@ python experiments/EXPERIMENT_1/scripts/train_toponet.py \
   --save_dir /kaggle/working/results/run_wo_lper_lcl \
   --ablation wo_lper_lcl \
   --epochs 100 \
+  --batch_size 1 \
+  --accumulation_steps 4 \
   --eval_splits val
 ```
 
-### Without BTF (Simple Concat) (Run 1.5 on Val split):
+### Without BTF (Run 1.5 on Val split):
 ```bash
 python experiments/EXPERIMENT_1/scripts/train_toponet.py \
   --train_dir /kaggle/input/datasets/khoatrytopublish/l3d-train/Train \
@@ -130,6 +136,8 @@ python experiments/EXPERIMENT_1/scripts/train_toponet.py \
   --save_dir /kaggle/working/results/run_wo_btf \
   --ablation wo_btf \
   --epochs 100 \
+  --batch_size 1 \
+  --accumulation_steps 4 \
   --eval_splits val
 ```
 
