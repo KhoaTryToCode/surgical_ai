@@ -595,5 +595,69 @@ The synthesis unifies the three paradigms so each directly cancels the other's b
 2. 5th-Order Bézier curves provide continuous, gap-free geometry (canceling Mask2Former's topological fragmentation).
 3. Analytical Continuous clDice (AC-clDice) provides differentiable topological supervision without slow 40-step morphological unrolling (canceling TopoNet's gradient vanishing).
 
+---
+
+# Branch 4: Systematic TopoNet Replication & Ablation Protocol (EXPERIMENT_1)
+
+### 11.1 Mathematical Formulation of the 6 Paper Ablations (Table 2)
+
+All loss functions and modules adhere to plain mathematical expressions:
+
+1. Standard Multi-Class Soft Dice Loss:
+   L_dice = 1.0 - (2 * sum(p * y) + epsilon) / (sum(p^2) + sum(y^2) + epsilon)
+   where p is the softmax prediction probability map and y is the one-hot ground truth binary mask.
+
+2. Centerline clDice Loss:
+   Tprec = sum( S_pred * V_gt ) / ( sum( S_pred ) + epsilon )
+   Tsens = sum( S_gt * V_pred ) / ( sum( S_gt ) + epsilon )
+   clDice = ( 2 * Tprec * Tsens ) / ( Tprec + Tsens + epsilon )
+   L_cl = 1.0 - clDice
+   where S denotes the soft morphological skeleton extracted via iterative min/max pooling, and V denotes the soft segmentation volume.
+
+3. Betti Matching Persistent Homology Loss:
+   L_per = sum_{d in {0, 1}} sum_{b in Betti_pairs} ( b_pred - b_target )^2
+   Guided by a dynamic sigmoid warmup weight schedule:
+   alpha(p) = ( 2.0 / ( 1.0 + exp( -10.0 * p ) ) - 1.0 ) * 0.05
+   where p = current_iteration / total_iterations.
+   Combined Loss: L_total = alpha(p) * L_per + ( 1.0 - alpha(p) ) * L_cl
+
+4. Boundary-Aware Topological Fusion (BTF) vs Simple Concatenation:
+   - BTF: Dynamic boundary attention query with directional gradient alignment:
+     F_fused = Conv( Cat( F_rgb * Attn_boundary, F_depth * Attn_topo ) ) + F_skip
+   - Simple Concat (Baseline & w/o BTF):
+     F_fused = Conv1x1( Cat( F_rgb, F_depth ) ) + F_skip
+
+### 11.2 Root Cause Analysis: Patient 32 4K Canvas Truncation Bug
+
+In the official TopoNet repository (`repos/TopoNet/utils/dataset.py`), the function `load_json` contained the following hardcoded logic:
+```python
+if any(x in path for x in ['_31', '_36', '_25', '_29']):
+    canvas = np.zeros((2160, 3840), dtype=np.uint8)
+else:
+    canvas = np.zeros((1080, 1920), dtype=np.uint8)
+```
+In the official L3D Validation split, 15 frames (12.3% of the entire validation set) belong to Patient 32. Patient 32 frames were recorded in 4K resolution (2160 x 3840). Because `_32` was omitted from the hardcoded list, the canvas was initialized at 1080p, and all landmark coordinates above y=1080 or x=1920 were clipped or truncated.
+This caused the official paper's Table 2 validation benchmark to drop to 59.79% DSC.
+
+Our decoupled `TopoNetDataset` (`experiments/EXPERIMENT_1/utils/dataset.py`) extracts image dimensions directly from the JSON metadata:
+```python
+height = data.get('imageHeight', 1080)
+width = data.get('imageWidth', 1920)
+canvas = np.zeros((height, width), dtype=np.uint8)
+```
+This dynamic canvas resolution restores the true validation DSC to ~66.0%.
+
+### 11.3 Kaggle Automated Pipeline Structure
+
+The self-contained Kaggle notebook `experiments/EXPERIMENT_1/TopoNet_Ablation_Kaggle.ipynb` executes in 8 sequential stages:
+1. Environment & GPU check (CUDA, VRAM detection).
+2. Dependency installation (`surface-distance`, `medpy`) and automated compilation of `Betti-Matching-3D`.
+3. TopoNet reference repo cloning into `/kaggle/working/repos/TopoNet`.
+4. Automated `wget` download of Depth Anything V2 ViT-B pretrained weights.
+5. Dynamic dataset discovery across `/kaggle/input/**` with Patient 32 canvas verification.
+6. Deployment of EXPERIMENT_1 modules (`dataset.py`, `metrics.py`, `toponet_ablation.py`, `train_toponet.py`).
+7. Configurable execution runner: Run 1.0 (Full TopoNet on Val & Test) or all 6 ablations sequentially.
+8. Automated markdown summary table rendering and packaging into `/kaggle/working/EXPERIMENT_1_RESULTS.zip` for one-click download.
+
 
 

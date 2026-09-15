@@ -27,4 +27,6 @@ wandb/
 runs/
 .build_csrc/
 build/
+scratch/
+*.zip
 
