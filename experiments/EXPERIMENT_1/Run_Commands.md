@@ -151,3 +151,44 @@ When you download `EXPERIMENT_1_RESULTS.zip` from Kaggle to your Mac, extract it
 ```bash
 unzip -o ~/Downloads/EXPERIMENT_1_RESULTS.zip -d experiments/EXPERIMENT_1/
 ```
+
+---
+
+## 5. HPC Remote Cluster Execution (Slurm on `gpu-a240` / A100 40GB)
+
+For running the computationally intensive topological clDice ablations (`full`, `wo_lper`, `wo_btf`) on the remote server:
+
+### Pull Latest Optimized Code on Server:
+```bash
+cd /data/khoalq/surgical_ai
+git pull origin main
+```
+
+### Submit Slurm Suite (50 epochs, Batch 2, Accum 2):
+```bash
+sbatch /data/khoalq/surgical_ai/experiments/EXPERIMENT_1/scripts/run_toponet_suite.sbatch
+```
+
+### Submit Individual Ablation (Optional):
+```bash
+# Run only full TopoNet
+sbatch /data/khoalq/surgical_ai/experiments/EXPERIMENT_1/scripts/run_toponet_suite.sbatch full
+
+# Run only without L_per
+sbatch /data/khoalq/surgical_ai/experiments/EXPERIMENT_1/scripts/run_toponet_suite.sbatch wo_lper
+
+# Run only without BTF
+sbatch /data/khoalq/surgical_ai/experiments/EXPERIMENT_1/scripts/run_toponet_suite.sbatch wo_btf
+```
+
+### Monitor Live Progress:
+```bash
+# Check queue
+squeue -u khoalq
+
+# Watch live training output
+tail -f /data/khoalq/logs/toponet_full.log
+
+# Monitor GPU VRAM and power
+watch -n 2 nvidia-smi
+```

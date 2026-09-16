@@ -85,6 +85,10 @@ experiments/EXPERIMENT_1/
 6. **Direct Precomputed Depth Loading (6x-10x Speedup):**
    - Eliminated on-the-fly ViT-B depth inference entirely by loading precomputed Depth Anything V2 PNGs directly from disk (`l3d-depth`).
    - Removed ViT-B weights download and GPU memory residency, dropping per-iteration time from 1.67s down to ~0.2s and total epoch time from 25 min to ~3 min.
+7. **CPU In-Memory Ground-Truth Skeleton Cache (`_gt_skel_cache`):**
+   - Since ground-truth annotations are static and deterministic, unrolling the 40-step morphological erosion on ground truth across 50 epochs performs 46,000 redundant iterations.
+   - Added transparent in-memory CPU RAM caching in `MemoryEfficientSoftDiceClDice`. Ground truth masks are skeletonized once upon first encounter, cached in CPU RAM (using only ~700 MB for all 921 images), and streamed asynchronously to GPU via non-blocking copy.
+   - Verified bitwise equivalence on macOS: Loss difference = 0.0, Gradient difference = 0.0 (100.000% mathematical parity).
 
 ---
 
@@ -96,3 +100,15 @@ experiments/EXPERIMENT_1/
 | `Test 2` | TopoNetAblationModel Autograd | **PASSED** | Logits shape `[2, 4, 256, 256]`, backward pass loss `1.7129` clean. |
 | `Test 3` | Evaluation Metrics (DSC, IoU, ASSD) | **PASSED** | Macro metrics computed with OpenCV distance transform fallback. |
 | `Test 4` | Patient 40 Visual Diagnostic | **PASSED** | 4-panel diagnostic overlay generated at `scratch/test_patient40_diag/`. |
+| `Test 5` | clDice CPU Skeleton Cache | **PASSED** | Bitwise loss diff = 0.0, gradient diff = 0.0, 100% mathematical parity. |
+
+---
+
+## 6. Remote HPC Cluster Execution Ledger (`gpu-a240` / NVIDIA A100 40GB)
+- **Host:** `100.82.42.48` (`gpu-a240`), user: `khoalq`
+- **Conda Env:** `/data/khoalq/miniconda3/envs/surgical_ai/`
+- **C++ Extension:** `betti_matching.so` built with GCC 13.3 & installed to site-packages.
+- **Dataset:** `/data/khoalq/data/L3D/` (1,152 paired frames with precomputed depth).
+- **Slurm Script:** `experiments/EXPERIMENT_1/scripts/run_toponet_suite.sbatch`
+- **Active Ablations:** `full`, `wo_lper`, `wo_btf` (50 epochs, batch size 2, accumulation steps 2).
+- **Completed Baseline:** `experiments/EXPERIMENT_1/results/EXPERIMENT_1_RESULTS_BASELINE` (100 epochs, Val DSC: 60.54%).
