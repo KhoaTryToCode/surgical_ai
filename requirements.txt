@@ -1,0 +1,28 @@
+# Surgical AI - Core Environment Dependencies
+# Generated from surgical_ai environment & TopoNet/GeMap pipeline specifications
+
+# Computer Vision & Deep Learning
+torchvision
+timm>=1.0.0
+einops>=0.8.0
+opencv-python>=4.8.0
+pillow>=10.0.0
+
+# Scientific & Numerical Operations
+numpy>=1.24.0,<2.0.0
+scipy>=1.10.0
+pandas>=2.0.0
+
+# Medical Evaluation & Surface Distance Metrics
+medpy
+surface-distance @ git+https://github.com/google-deepmind/surface-distance.git
+
+# Training, Config & Visualization Utilities
+pyyaml
+tqdm
+safetensors
+huggingface_hub
+matplotlib
+
+# C++ Build & Binding Tools
+pybind11
