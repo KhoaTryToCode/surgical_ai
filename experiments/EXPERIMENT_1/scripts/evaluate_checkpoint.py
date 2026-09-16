@@ -42,13 +42,8 @@ def main():
     os.makedirs(args.save_dir, exist_ok=True)
     patient40_dir = os.path.join(args.save_dir, 'patient_40_diagnostics')
 
-    # Device selection: CUDA -> MPS -> CPU
-    if torch.cuda.is_available():
-        device = torch.device('cuda')
-    elif torch.backends.mps.is_available():
-        device = torch.device('mps')
-    else:
-        device = torch.device('cpu')
+    # Device selection: CUDA -> CPU (Apple Silicon MPS has an adaptive_avg_pool2d non-divisible size bug in PyTorch PPM)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     print("=" * 80)
     print(f"🔬 TOPONET BENCHMARK EVALUATOR")

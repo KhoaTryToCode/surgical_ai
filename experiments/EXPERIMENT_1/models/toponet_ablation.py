@@ -116,6 +116,21 @@ class TopoNetAblationModel(nn.Module):
             encoder_decoder_fusion='add', upsampling_mode='bilinear', num_classes=num_classes
         )
 
+    def to(self, *args, **kwargs):
+        res = super().to(*args, **kwargs)
+        device = None
+        for arg in args:
+            if isinstance(arg, (torch.device, str)):
+                device = torch.device(arg)
+                break
+        if 'device' in kwargs:
+            device = torch.device(kwargs['device'])
+        if device is not None:
+            for m in self.modules():
+                if hasattr(m, 'device'):
+                    m.device = device
+        return res
+
     def forward(self, image, depth=None):
         # 1. Use precomputed depth map (instant, no ViT overhead)
         if depth is None:
