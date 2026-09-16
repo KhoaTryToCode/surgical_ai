@@ -16,8 +16,9 @@
 # Storage Location: /data/khoalq/
 # ==============================================================================
 
-# Fail immediately on unhandled error
+# Fail immediately on unhandled error or piped error
 set -e
+set -o pipefail
 
 echo "=== INITIALIZING TOPONET EXECUTION ON $(hostname) ==="
 echo "Job ID: $SLURM_JOB_ID"
@@ -31,6 +32,7 @@ source "/data/khoalq/miniconda3/etc/profile.d/conda.sh"
 conda activate surgical_ai
 export PYTHONPATH=/data/khoalq/surgical_ai:/data/khoalq/surgical_ai/repos/TopoNet:$PYTHONPATH
 export PYTHONUNBUFFERED=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 DATA_ROOT="/data/khoalq/data/L3D"
 TRAIN_DIR="${DATA_ROOT}/Train"
@@ -107,8 +109,8 @@ run_ablation () {
     python -u /data/khoalq/surgical_ai/experiments/EXPERIMENT_1/scripts/train_toponet.py \
         --ablation "$mode" \
         --epochs 100 \
-        --batch_size 4 \
-        --accumulation_steps 1 \
+        --batch_size 1 \
+        --accumulation_steps 4 \
         --train_dir "$TRAIN_DIR" \
         --val_dir "$VAL_DIR" \
         --test_dir "$TEST_DIR" \
