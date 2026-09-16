@@ -8,6 +8,7 @@ import pandas as pd
 import cv2
 from tqdm import tqdm
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 # Add experiment and repo roots to PYTHONPATH
@@ -38,6 +39,30 @@ try:
 except Exception as e:
     # Notice for local Mac test or if C++ build is pending
     HAS_BETTI = False
+
+
+def get_autocast_context(device):
+    """Returns modern torch.amp.autocast or falls back gracefully to legacy cuda.amp/nullcontext."""
+    if device.type == 'cuda':
+        try:
+            return torch.amp.autocast('cuda')
+        except (AttributeError, TypeError):
+            return torch.cuda.amp.autocast()
+    import contextlib
+    return contextlib.nullcontext()
+
+
+def get_grad_scaler(device):
+    """Returns modern torch.amp.GradScaler or legacy torch.cuda.amp.GradScaler without deprecation warnings."""
+    if device.type == 'cuda':
+        try:
+            return torch.amp.GradScaler('cuda')
+        except (AttributeError, TypeError):
+            return torch.cuda.amp.GradScaler()
+    try:
+        return torch.amp.GradScaler('cpu', enabled=False)
+    except (AttributeError, TypeError):
+        return torch.cuda.amp.GradScaler(enabled=False)
 
 
 def dice_loss_fn(pred, target, smooth=1e-5):
@@ -119,7 +144,7 @@ def run_evaluation(model, dataloader, device, split_name='Val', save_patient40_d
     warmup_count = 0
 
     with torch.no_grad():
-        with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
+        with get_autocast_context(device):
             for batch_idx, (images, depths, masks, filenames) in enumerate(tqdm(dataloader, desc=f"Evaluating {split_name}")):
                 images = images.to(device)
                 depths = depths.to(device)
@@ -216,14 +241,16 @@ def main():
     parser.add_argument('--ablation', type=str, default='full', 
                         choices=['full', 'baseline', 'wo_lper', 'wo_lcl', 'wo_lper_lcl', 'wo_btf'],
                         help="Ablation mode to execute")
-    parser.add_argument('--epochs', type=int, default=100, help="Training epochs (paper: 100)")
-    parser.add_argument('--batch_size', type=int, default=1, help="Micro-batch size (default: 1 for 16GB VRAM safety)")
+    parser.add_argument('--epochs', type=int, default=50, help="Training epochs (paper Table 2 ablation standard: 50)")
+    parser.add_argument('--batch_size', type=int, default=1, help="Micro-batch size (default: 1 for 16GB VRAM safety, or 2)")
     parser.add_argument('--accumulation_steps', type=int, default=4, help="Gradient accumulation steps (default: 4 -> eff batch = 4)")
     parser.add_argument('--lr', type=float, default=8e-5, help="Learning rate (paper: 8e-5)")
     parser.add_argument('--weight_decay', type=float, default=3e-5, help="Weight decay (paper: 3e-5)")
     parser.add_argument('--save_dir', type=str, default='results/toponet_full', help="Output results directory")
     parser.add_argument('--eval_splits', type=str, default='both', choices=['val', 'both'], help="Splits to evaluate at end")
     parser.add_argument('--cl_size', type=int, default=512, help="Resolution for clDice skeletonization (default: 512 for fast 9GB/10GB/20GB execution, 0 for 1024)")
+    parser.add_argument('--betti_size', type=int, default=0, help="Resolution for Betti matching (default: 0 for native 1024, or 512 for fast CPU persistence)")
+    parser.add_argument('--num_workers', type=int, default=None, help="DataLoader worker processes (default: auto)")
     parser.add_argument('--smoke_test', action='store_true', help="Run 2-batch sanity check and exit")
     args = parser.parse_args()
 
@@ -254,14 +281,35 @@ def main():
     train_dataset = TopoNetDataset(args.train_dir, depth_dir=train_depth, mode='train')
     val_dataset = TopoNetDataset(args.val_dir, depth_dir=val_depth, mode='val')
 
-    workers = 6 if device.type == 'cuda' else 0
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=workers, pin_memory=(device.type == 'cuda'), drop_last=True)
-    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=workers, pin_memory=(device.type == 'cuda'))
+    workers = args.num_workers if args.num_workers is not None else (min(4, os.cpu_count() or 2) if device.type == 'cuda' else 0)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=workers,
+        pin_memory=(device.type == 'cuda'),
+        drop_last=True,
+        persistent_workers=(workers > 0)
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=workers,
+        pin_memory=(device.type == 'cuda'),
+        persistent_workers=(workers > 0)
+    )
 
     test_loader = None
     if args.test_dir and os.path.exists(args.test_dir):
         test_dataset = TopoNetDataset(args.test_dir, depth_dir=test_depth, mode='test')
-        test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=workers)
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=1,
+            shuffle=False,
+            num_workers=workers,
+            persistent_workers=(workers > 0)
+        )
 
     # 2. Build Model (Direct precomputed depth processing, zero ViT overhead)
     model = TopoNetAblationModel(ablation_mode=args.ablation).to(device)
@@ -271,12 +319,15 @@ def main():
     cl_dice_loss = soft_dice_cldice(exclude_background=True, cl_size=target_cl_size)
     if target_cl_size:
         print(f"⚡ clDice scale resolution: {target_cl_size[0]}x{target_cl_size[1]} (high-speed / low-VRAM mode)")
+    if args.betti_size > 0:
+        print(f"⚡ Betti scale resolution: {args.betti_size}x{args.betti_size} (high-speed CPU persistence mode)")
+
     betti_loss = None
     if args.ablation in ['full', 'wo_lcl', 'wo_btf']:
         if HAS_BETTI:
             betti_loss = FastBettiMatchingLoss(
                 filtration_type=FiltrationType.SUPERLEVEL,
-                num_processes=4,
+                num_processes=min(4, os.cpu_count() or 2),
                 convert_to_one_vs_rest=False,
                 ignore_background=True,
                 push_unmatched_to_1_0=True,
@@ -289,7 +340,7 @@ def main():
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
-    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == 'cuda'))
+    scaler = get_grad_scaler(device)
 
     best_val_dice = -1.0
     best_checkpoint_path = os.path.join(args.save_dir, "best_model.pth")
@@ -301,7 +352,7 @@ def main():
         for images, depths, masks, names in train_loader:
             images, depths, masks = images.to(device), depths.to(device), masks.to(device)
             optimizer.zero_grad()
-            with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
+            with get_autocast_context(device):
                 logits, _ = model(images, depths)
                 loss = dice_loss_fn(logits.float(), masks)
             scaler.scale(loss).backward()
@@ -329,7 +380,7 @@ def main():
             depths = depths.to(device)
             masks = masks.to(device)
 
-            with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
+            with get_autocast_context(device):
                 logits, _ = model(images, depths)
                 logits = logits.float()
 
@@ -340,7 +391,12 @@ def main():
                     alpha = (2.0 / (1.0 + np.exp(-10.0 * p)) - 1.0) * 0.05
                     seg_loss = cl_dice_loss(masks, logits, names=names)
                     if betti_loss is not None:
-                        b_out = betti_loss(logits, masks)
+                        if args.betti_size > 0 and logits.shape[2:] != (args.betti_size, args.betti_size):
+                            b_logits = F.interpolate(logits, size=(args.betti_size, args.betti_size), mode='bilinear', align_corners=False)
+                            b_masks = F.interpolate(masks.float(), size=(args.betti_size, args.betti_size), mode='nearest')
+                        else:
+                            b_logits, b_masks = logits, masks
+                        b_out = betti_loss(b_logits, b_masks)
                         betti = b_out[0] if isinstance(b_out, (tuple, list)) else b_out
                     else:
                         betti = 0.0
@@ -352,7 +408,12 @@ def main():
                     alpha = (2.0 / (1.0 + np.exp(-10.0 * p)) - 1.0) * 0.05
                     d_loss = dice_loss_fn(logits, masks)
                     if betti_loss is not None:
-                        b_out = betti_loss(logits, masks)
+                        if args.betti_size > 0 and logits.shape[2:] != (args.betti_size, args.betti_size):
+                            b_logits = F.interpolate(logits, size=(args.betti_size, args.betti_size), mode='bilinear', align_corners=False)
+                            b_masks = F.interpolate(masks.float(), size=(args.betti_size, args.betti_size), mode='nearest')
+                        else:
+                            b_logits, b_masks = logits, masks
+                        b_out = betti_loss(b_logits, b_masks)
                         betti = b_out[0] if isinstance(b_out, (tuple, list)) else b_out
                     else:
                         betti = 0.0
