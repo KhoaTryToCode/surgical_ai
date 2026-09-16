@@ -6,7 +6,7 @@
 #SBATCH --gres=gpu:a100_2g.10gb:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
-#SBATCH --time=12:00:00
+#SBATCH --time=48:00:00
 #SBATCH --output=/data/khoalq/logs/%x-%j.out
 #SBATCH --error=/data/khoalq/logs/%x-%j.err
 
