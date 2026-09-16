@@ -1,13 +1,14 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #SBATCH --job-name=toponet_suite
-#SBATCH --account=lab
 #SBATCH --partition=gpu
+#SBATCH --account=lab
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:a100:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
-#SBATCH --output=/data/khoalq/logs/toponet_suite_%j.out
-#SBATCH --error=/data/khoalq/logs/toponet_suite_%j.err
+#SBATCH --time=24:00:00
+#SBATCH --output=/data/khoalq/logs/%x-%j.out
+#SBATCH --error=/data/khoalq/logs/%x-%j.err
 
 # ==============================================================================
 # SLURM SUITE: TOPONET REPLICATION & SYSTEMATIC ABLATION STUDY (L3D DATASET)
@@ -23,12 +24,13 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Allocated GPU (CUDA_VISIBLE_DEVICES): $CUDA_VISIBLE_DEVICES"
 echo "Start Time: $(date)"
 
-# 1. Environment Activation & Path Resolution
-source /data/khoalq/miniconda3/bin/activate surgical_ai
+# 1. Directories & Environment Activation (Per Cluster Manual Standard)
+mkdir -p /data/khoalq/logs /data/khoalq/checkpoints
+
+source "/data/khoalq/miniconda3/etc/profile.d/conda.sh"
+conda activate surgical_ai
 export PYTHONPATH=/data/khoalq/surgical_ai:/data/khoalq/surgical_ai/repos/TopoNet:$PYTHONPATH
 export PYTHONUNBUFFERED=1
-
-mkdir -p /data/khoalq/logs /data/khoalq/checkpoints
 
 DATA_ROOT="/data/khoalq/data/L3D"
 TRAIN_DIR="${DATA_ROOT}/Train"
