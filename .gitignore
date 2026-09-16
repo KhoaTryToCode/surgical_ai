@@ -29,4 +29,6 @@ runs/
 build/
 scratch/
 *.zip
+results/
+**/results/
 
