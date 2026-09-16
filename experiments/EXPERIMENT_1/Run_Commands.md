@@ -164,7 +164,7 @@ cd /data/khoalq/surgical_ai
 git pull origin main
 ```
 
-### Submit Slurm Suite (50 epochs, Batch 2, Accum 2):
+### Submit Slurm Suite (50 epochs, Batch 1, Accum 4, 512x512 clDice — 10GB/20GB/40GB Safe):
 ```bash
 sbatch /data/khoalq/surgical_ai/experiments/EXPERIMENT_1/scripts/run_toponet_suite.sbatch
 ```

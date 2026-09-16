@@ -223,6 +223,7 @@ def main():
     parser.add_argument('--weight_decay', type=float, default=3e-5, help="Weight decay (paper: 3e-5)")
     parser.add_argument('--save_dir', type=str, default='results/toponet_full', help="Output results directory")
     parser.add_argument('--eval_splits', type=str, default='both', choices=['val', 'both'], help="Splits to evaluate at end")
+    parser.add_argument('--cl_size', type=int, default=512, help="Resolution for clDice skeletonization (default: 512 for fast 9GB/10GB/20GB execution, 0 for 1024)")
     parser.add_argument('--smoke_test', action='store_true', help="Run 2-batch sanity check and exit")
     args = parser.parse_args()
 
@@ -266,7 +267,10 @@ def main():
     model = TopoNetAblationModel(ablation_mode=args.ablation).to(device)
 
     # 3. Setup Loss Functions
-    cl_dice_loss = soft_dice_cldice(exclude_background=True)
+    target_cl_size = (args.cl_size, args.cl_size) if args.cl_size > 0 else None
+    cl_dice_loss = soft_dice_cldice(exclude_background=True, cl_size=target_cl_size)
+    if target_cl_size:
+        print(f"⚡ clDice scale resolution: {target_cl_size[0]}x{target_cl_size[1]} (high-speed / low-VRAM mode)")
     betti_loss = None
     if args.ablation in ['full', 'wo_lcl', 'wo_btf']:
         if HAS_BETTI:

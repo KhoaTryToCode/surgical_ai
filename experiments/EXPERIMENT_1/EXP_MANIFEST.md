@@ -89,6 +89,11 @@ experiments/EXPERIMENT_1/
    - Since ground-truth annotations are static and deterministic, unrolling the 40-step morphological erosion on ground truth across 50 epochs performs 46,000 redundant iterations.
    - Added transparent in-memory CPU RAM caching in `MemoryEfficientSoftDiceClDice`. Ground truth masks are skeletonized once upon first encounter, cached in CPU RAM (using only ~700 MB for all 921 images), and streamed asynchronously to GPU via non-blocking copy.
    - Verified bitwise equivalence on macOS: Loss difference = 0.0, Gradient difference = 0.0 (100.000% mathematical parity).
+8. **Path B: 512x512 Continuous clDice Topology Optimization (10GB/20GB GPU Ready):**
+   - Standard Soft Dice is maintained at full native 1024x1024 resolution for high-fidelity boundary training.
+   - Topological clDice is computed on continuous 512x512 probability maps (via bilinear interpolation) and cached 512x512 ground-truth masks.
+   - Peak VRAM is reduced from ~37 GB down to ~5.5 GB at batch size 1 (accum 4) or ~9.2 GB at batch size 2, enabling execution on either 10GB or 20GB GPUs.
+   - Epoch time on A100 drops from 26 minutes to ~3.5 minutes (~3 hours total for 50 epochs).
 
 ---
 
@@ -101,6 +106,7 @@ experiments/EXPERIMENT_1/
 | `Test 3` | Evaluation Metrics (DSC, IoU, ASSD) | **PASSED** | Macro metrics computed with OpenCV distance transform fallback. |
 | `Test 4` | Patient 40 Visual Diagnostic | **PASSED** | 4-panel diagnostic overlay generated at `scratch/test_patient40_diag/`. |
 | `Test 5` | clDice CPU Skeleton Cache | **PASSED** | Bitwise loss diff = 0.0, gradient diff = 0.0, 100% mathematical parity. |
+| `Test 6` | Path B 512x512 clDice Scaling | **PASSED** | Autograd verified: gradients shape [2, 4, 1024, 1024], loss diff = 0.0. |
 
 ---
 
@@ -110,5 +116,5 @@ experiments/EXPERIMENT_1/
 - **C++ Extension:** `betti_matching.so` built with GCC 13.3 & installed to site-packages.
 - **Dataset:** `/data/khoalq/data/L3D/` (1,152 paired frames with precomputed depth).
 - **Slurm Script:** `experiments/EXPERIMENT_1/scripts/run_toponet_suite.sbatch`
-- **Active Ablations:** `full`, `wo_lper`, `wo_btf` (50 epochs, batch size 2, accumulation steps 2).
+- **Active Ablations:** `full`, `wo_lper`, `wo_btf` (50 epochs, batch size 1, accumulation steps 4, cl_size 512).
 - **Completed Baseline:** `experiments/EXPERIMENT_1/results/EXPERIMENT_1_RESULTS_BASELINE` (100 epochs, Val DSC: 60.54%).

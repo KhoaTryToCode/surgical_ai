@@ -109,8 +109,9 @@ run_ablation () {
     python -u /data/khoalq/surgical_ai/experiments/EXPERIMENT_1/scripts/train_toponet.py \
         --ablation "$mode" \
         --epochs 50 \
-        --batch_size 2 \
-        --accumulation_steps 2 \
+        --batch_size 1 \
+        --accumulation_steps 4 \
+        --cl_size 512 \
         --train_dir "$TRAIN_DIR" \
         --val_dir "$VAL_DIR" \
         --test_dir "$TEST_DIR" \
