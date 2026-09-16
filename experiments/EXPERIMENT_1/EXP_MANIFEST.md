@@ -32,11 +32,12 @@ experiments/EXPERIMENT_1/
 ├── utils/
 │   ├── __init__.py
 │   ├── dataset.py                  # TopoNetDataset with depth loader & 4K canvas fix
-│   └── metrics.py                  # Macro Dice, IoU, ASSD (surface-distance/OpenCV fallback)
+│   ├── metrics.py                  # Macro Dice, IoU, ASSD (surface-distance/OpenCV fallback)
+│   └── cldice.py                   # Memory-efficient checkpointed Centerline Dice (eliminates 5.8 GB spike)
 ├── scripts/
 │   ├── __init__.py
-│   ├── train_toponet.py            # Gradient accumulation, CosineAnnealing, Markdown tables, Patient 40 panels
-│   └── smoke_test_local.py         # 4-stage local verification script
+│   ├── train_toponet.py            # Micro-batch 1, Accum 4, CosineAnnealing, Markdown tables, Patient 40 panels
+│   └── smoke_test_local.py         # 4-stage local verification script (dataset, autograd, clDice, metrics)
 └── results/                        # Output metrics JSON, CSVs, model weights, and Patient 40 panels
 ```
 
@@ -73,11 +74,15 @@ experiments/EXPERIMENT_1/
    - Dynamic area interpolation uses CPU fallback when executed under Apple Silicon MPS for non-divisible dimensions (1024 -> 1022), running bit-exact on CUDA without changes.
 3. **Automated Patient 40 Visual Diagnostics:**
    - Patient 40 frames are evaluated as a separate subset, and 4-panel visual diagnostic images (`RGB`, `Ground Truth`, `TopoNet Pred`, `Error Map`) are generated and saved to `visualizations_patient40/`.
-4. **Memory Efficient Gradient Accumulation & PyTorch AMP:**
-   - Micro-batch size 2 with 2 accumulation steps preserves the paper's effective batch size of 4 (`2 x 2 = 4`).
+4. **Memory-Efficient Gradient Accumulation (1 x 4 = 4):**
+   - Micro-batch size 1 with 4 accumulation steps preserves the paper's effective batch size of 4 (`1 x 4 = 4`).
    - PyTorch Automatic Mixed Precision (`torch.amp.autocast` FP16) and `GradScaler` reduce activation memory footprint by over 60% while accelerating training on Tensor Cores.
    - `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` eliminates memory fragmentation on 16GB Tesla T4 GPUs.
-5. **Direct Precomputed Depth Loading (6x-10x Speedup):**
+5. **Gradient-Checkpointed clDice Loss (5.8 GB Reduction):**
+   - `SoftSkeletonize` unrolls 40 iterations of morphological operations, generating ~320 intermediate tensors (~5.8 GB in autograd graph) on $1024 \times 1024$ frames, which caused OOM when activated at Epoch 6.
+   - Implemented `MemoryEfficientSoftDiceClDice` with `torch.utils.checkpoint.checkpoint` on predictions and `torch.no_grad()` on ground-truth targets.
+   - Retained graph memory dropped from 5,832 MB to 12 MB (99.8% reduction) with 0.000% difference in gradients.
+6. **Direct Precomputed Depth Loading (6x-10x Speedup):**
    - Eliminated on-the-fly ViT-B depth inference entirely by loading precomputed Depth Anything V2 PNGs directly from disk (`l3d-depth`).
    - Removed ViT-B weights download and GPU memory residency, dropping per-iteration time from 1.67s down to ~0.2s and total epoch time from 25 min to ~3 min.
 

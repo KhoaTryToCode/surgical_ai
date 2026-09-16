@@ -66,9 +66,12 @@ def run_local_verification():
     print(f"   Model output logits shape: {logits.shape}")
     assert logits.shape == (2, 4, 256, 256), "Output logits shape mismatch!"
 
-    loss = ((logits - dummy_gt) ** 2).mean() / 2.0  # Accumulation step simulation
-    loss.backward()
-    print(f"   Backward pass loss: {loss.item():.4f}")
+    # Test Memory-Efficient Checkpointed clDice Loss
+    from experiments.EXPERIMENT_1.utils.cldice import soft_dice_cldice
+    cldice_fn = soft_dice_cldice(exclude_background=True, num_skel_iter=10)
+    cldice_val = cldice_fn(dummy_gt, logits) / 2.0  # Accumulation simulation
+    cldice_val.backward()
+    print(f"   clDice backward pass loss: {cldice_val.item():.4f}")
     print("   ✅ [Test 2 PASSED]: Forward and backward autograd graphs execute cleanly!")
 
     # -------------------------------------------------------------

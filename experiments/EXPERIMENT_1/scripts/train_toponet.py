@@ -24,8 +24,11 @@ from experiments.EXPERIMENT_1.utils.dataset import TopoNetDataset
 from experiments.EXPERIMENT_1.utils.metrics import evaluate_batch
 from experiments.EXPERIMENT_1.models.toponet_ablation import TopoNetAblationModel
 
-# TopoNet Loss Suite
-from cldice.cldice import soft_dice_cldice
+# TopoNet Loss Suite (Memory-Efficient Checkpointed clDice)
+try:
+    from experiments.EXPERIMENT_1.utils.cldice import soft_dice_cldice
+except ImportError:
+    from utils.cldice import soft_dice_cldice
 
 # Check Betti Matching availability gracefully
 HAS_BETTI = False
@@ -214,8 +217,8 @@ def main():
                         choices=['full', 'baseline', 'wo_lper', 'wo_lcl', 'wo_lper_lcl', 'wo_btf'],
                         help="Ablation mode to execute")
     parser.add_argument('--epochs', type=int, default=100, help="Training epochs (paper: 100)")
-    parser.add_argument('--batch_size', type=int, default=2, help="Micro-batch size (default: 2)")
-    parser.add_argument('--accumulation_steps', type=int, default=2, help="Gradient accumulation steps (default: 2 -> eff batch = 4)")
+    parser.add_argument('--batch_size', type=int, default=1, help="Micro-batch size (default: 1 for 16GB VRAM safety)")
+    parser.add_argument('--accumulation_steps', type=int, default=4, help="Gradient accumulation steps (default: 4 -> eff batch = 4)")
     parser.add_argument('--lr', type=float, default=8e-5, help="Learning rate (paper: 8e-5)")
     parser.add_argument('--weight_decay', type=float, default=3e-5, help="Weight decay (paper: 3e-5)")
     parser.add_argument('--save_dir', type=str, default='results/toponet_full', help="Output results directory")
@@ -226,7 +229,7 @@ def main():
     os.makedirs(args.save_dir, exist_ok=True)
     patient40_dir = os.path.join(args.save_dir, 'patient_40_diagnostics')
 
-    device = torch.device('cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu'))
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print("=" * 80)
     print(f"🚀 TOPONET ABLATION RUNNER — EXPERIMENT_1")
     print(f"   Ablation Mode:        {args.ablation}")
@@ -250,13 +253,14 @@ def main():
     train_dataset = TopoNetDataset(args.train_dir, depth_dir=train_depth, mode='train')
     val_dataset = TopoNetDataset(args.val_dir, depth_dir=val_depth, mode='val')
 
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=2, pin_memory=(device.type == 'cuda'), drop_last=True)
-    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=2, pin_memory=(device.type == 'cuda'))
+    workers = 2 if device.type == 'cuda' else 0
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=workers, pin_memory=(device.type == 'cuda'), drop_last=True)
+    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=workers, pin_memory=(device.type == 'cuda'))
 
     test_loader = None
     if args.test_dir and os.path.exists(args.test_dir):
         test_dataset = TopoNetDataset(args.test_dir, depth_dir=test_depth, mode='test')
-        test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=2)
+        test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=workers)
 
     # 2. Build Model (Direct precomputed depth processing, zero ViT overhead)
     model = TopoNetAblationModel(ablation_mode=args.ablation).to(device)
