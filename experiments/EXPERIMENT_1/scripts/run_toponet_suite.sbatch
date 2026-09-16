@@ -95,7 +95,7 @@ TARGET_MODE="${1:-all_server}"
 
 run_ablation () {
     local mode=$1
-    local out_dir="/data/khoalq/checkpoints/toponet_${mode}_100ep"
+    local out_dir="/data/khoalq/checkpoints/toponet_${mode}_50ep"
     local log_file="/data/khoalq/logs/toponet_${mode}.log"
 
     echo ""
@@ -108,9 +108,9 @@ run_ablation () {
 
     python -u /data/khoalq/surgical_ai/experiments/EXPERIMENT_1/scripts/train_toponet.py \
         --ablation "$mode" \
-        --epochs 100 \
-        --batch_size 1 \
-        --accumulation_steps 4 \
+        --epochs 50 \
+        --batch_size 2 \
+        --accumulation_steps 2 \
         --train_dir "$TRAIN_DIR" \
         --val_dir "$VAL_DIR" \
         --test_dir "$TEST_DIR" \
