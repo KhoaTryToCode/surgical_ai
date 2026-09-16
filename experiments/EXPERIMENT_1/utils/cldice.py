@@ -75,8 +75,9 @@ class MemoryEfficientSoftDiceClDice(nn.Module):
         self.alpha = alpha
         self.soft_skeletonize = MemoryEfficientSoftSkeletonize(num_iter=num_skel_iter)
         self.exclude_background = exclude_background
+        self._gt_skel_cache = {}
 
-    def forward(self, y_true, y_pred):
+    def forward(self, y_true, y_pred, names=None):
         y_pred = F.softmax(y_pred, dim=1)
         if self.exclude_background:
             y_true = y_true[:, 1:, :, :]
@@ -87,9 +88,24 @@ class MemoryEfficientSoftDiceClDice(nn.Module):
         # 1. Checkpointed prediction skeletonization
         skel_pred = self.soft_skeletonize(y_pred)
 
-        # 2. Ground-truth skeletonization requires zero gradients
-        with torch.no_grad():
-            skel_true = self.soft_skeletonize.soft_skel(y_true)
+        # 2. Ground-truth skeletonization (with in-memory cache if names provided)
+        if names is not None and len(names) == y_true.shape[0]:
+            skel_list = []
+            device = y_true.device
+            for idx, name in enumerate(names):
+                if name in self._gt_skel_cache:
+                    skel_list.append(self._gt_skel_cache[name].to(device, dtype=y_true.dtype, non_blocking=True))
+                else:
+                    with torch.no_grad():
+                        single_gt = y_true[idx:idx+1]
+                        computed = self.soft_skeletonize.soft_skel(single_gt)
+                    # Cache in CPU RAM to conserve GPU VRAM while eliminating 46,000 redundant skeletonizations
+                    self._gt_skel_cache[name] = computed.detach().to('cpu')
+                    skel_list.append(computed)
+            skel_true = torch.cat(skel_list, dim=0)
+        else:
+            with torch.no_grad():
+                skel_true = self.soft_skeletonize.soft_skel(y_true)
 
         cl_dice = 0.0
         num_channels = y_pred.shape[1]

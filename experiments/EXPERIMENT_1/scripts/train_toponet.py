@@ -253,7 +253,7 @@ def main():
     train_dataset = TopoNetDataset(args.train_dir, depth_dir=train_depth, mode='train')
     val_dataset = TopoNetDataset(args.val_dir, depth_dir=val_depth, mode='val')
 
-    workers = 2 if device.type == 'cuda' else 0
+    workers = 6 if device.type == 'cuda' else 0
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=workers, pin_memory=(device.type == 'cuda'), drop_last=True)
     val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=workers, pin_memory=(device.type == 'cuda'))
 
@@ -334,7 +334,7 @@ def main():
                     # Full TopoNet Dynamic Betti Warmup
                     p = float(batch_idx + (epoch + 1) * total_iters) / (args.epochs * total_iters)
                     alpha = (2.0 / (1.0 + np.exp(-10.0 * p)) - 1.0) * 0.05
-                    seg_loss = cl_dice_loss(masks, logits)
+                    seg_loss = cl_dice_loss(masks, logits, names=names)
                     if betti_loss is not None:
                         b_out = betti_loss(logits, masks)
                         betti = b_out[0] if isinstance(b_out, (tuple, list)) else b_out
@@ -342,7 +342,7 @@ def main():
                         betti = 0.0
                     raw_loss = betti * alpha + seg_loss * (1.0 - alpha)
                 elif epoch >= 5 and args.ablation == 'wo_lper':
-                    raw_loss = cl_dice_loss(masks, logits)
+                    raw_loss = cl_dice_loss(masks, logits, names=names)
                 elif epoch >= 5 and args.ablation == 'wo_lcl':
                     p = float(batch_idx + (epoch + 1) * total_iters) / (args.epochs * total_iters)
                     alpha = (2.0 / (1.0 + np.exp(-10.0 * p)) - 1.0) * 0.05
