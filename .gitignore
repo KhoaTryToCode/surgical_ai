@@ -29,6 +29,8 @@ runs/
 build/
 scratch/
 *.zip
-results/
-**/results/
+results/*
+**/results/*
+!**/results/*.md
+!**/results/*.json
 
