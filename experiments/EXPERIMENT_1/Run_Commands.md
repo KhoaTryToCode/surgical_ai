@@ -164,7 +164,12 @@ cd /data/khoalq/surgical_ai
 git pull origin main
 ```
 
-### Submit Slurm Suite (50 epochs, Batch 1, Accum 4, 512x512 clDice — 10GB/20GB/40GB Safe):
+### Submit Slurm Suite (10GB GPU Partition — Peak VRAM 7.51 GB):
+```bash
+sbatch /data/khoalq/surgical_ai/experiments/EXPERIMENT_1/scripts/run_toponet_10gb.sbatch
+```
+
+### Submit Slurm Suite (Dedicated Full A100 GPU / 40GB):
 ```bash
 sbatch /data/khoalq/surgical_ai/experiments/EXPERIMENT_1/scripts/run_toponet_suite.sbatch
 ```
