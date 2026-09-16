@@ -5,8 +5,8 @@
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:a100:1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
-#SBATCH --time=24:00:00
+#SBATCH --mem=24G
+#SBATCH --time=12:00:00
 #SBATCH --output=/data/khoalq/logs/%x-%j.out
 #SBATCH --error=/data/khoalq/logs/%x-%j.err
 
@@ -109,8 +109,8 @@ run_ablation () {
     python -u /data/khoalq/surgical_ai/experiments/EXPERIMENT_1/scripts/train_toponet.py \
         --ablation "$mode" \
         --epochs 50 \
-        --batch_size 1 \
-        --accumulation_steps 4 \
+        --batch_size 2 \
+        --accumulation_steps 2 \
         --cl_size 512 \
         --train_dir "$TRAIN_DIR" \
         --val_dir "$VAL_DIR" \

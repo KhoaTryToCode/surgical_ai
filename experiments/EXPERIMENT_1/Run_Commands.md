@@ -164,14 +164,14 @@ cd /data/khoalq/surgical_ai
 git pull origin main
 ```
 
-### Submit Slurm Suite (10GB GPU Partition — Peak VRAM 7.51 GB):
-```bash
-sbatch /data/khoalq/surgical_ai/experiments/EXPERIMENT_1/scripts/run_toponet_10gb.sbatch
-```
-
-### Submit Slurm Suite (Dedicated Full A100 GPU / 40GB):
+### Submit 20GB Fast Suite (~3.0 min/epoch — Peak VRAM 14.68 GB):
 ```bash
 sbatch /data/khoalq/surgical_ai/experiments/EXPERIMENT_1/scripts/run_toponet_suite.sbatch
+```
+
+### Submit 10GB Conservative Suite (~9.2 min/epoch — Peak VRAM 7.51 GB):
+```bash
+sbatch /data/khoalq/surgical_ai/experiments/EXPERIMENT_1/scripts/run_toponet_10gb.sbatch
 ```
 
 ### Submit Individual Ablation (Optional):
