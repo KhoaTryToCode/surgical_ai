@@ -12,11 +12,11 @@ This document tracks and compares the quantitative and qualitative benchmark res
 | Run ID | Ablation Mode | Depth Fusion | Depth Encoder | Topological Loss | Paper Val DSC | Our Val DSC | Val Mean IoU | Val ASSD (px) | Pat. 40 DSC | Status |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **Run 1.1** | **`baseline`** | Concat | Standard CNN | L_dice only | 56.36% | **60.54%** | **46.79%** | **37.33 px** | **62.84%** | ✅ **COMPLETED (100 Ep)** |
-| **Run 1.4** | `wo_lper_lcl`| BTF | DSCNet Snake | L_dice only | 57.48% | *25.16%* (25 Ep) | *16.97%* | *62.01 px* | *28.06%* | ⏱️ Interrupted / Re-run Ready |
-| **Run 1.3** | `wo_lcl` | BTF | DSCNet Snake | L_dice + L_per (Betti) | 58.74% | *13.97%* (25 Ep) | *9.59%* | *70.37 px* | *14.53%* | ⏱️ Interrupted / Re-run Ready |
-| **Run 1.2** | `wo_lper` | BTF | DSCNet Snake | L_dice + L_cl (clDice) | 58.82% | *Pending* | -- | -- | -- | ⏳ Queued (Server) |
-| **Run 1.5** | `wo_btf` | Concat | DSCNet Snake | L_dice + L_cl + L_per | 58.75% | *Pending* | -- | -- | -- | ⏳ Queued (Server) |
-| **Run 1.0** | `full` | BTF | DSCNet Snake | L_dice + L_cl + L_per | 59.79% | *Pending* | -- | -- | -- | 🏃 **RUNNING (Server)** |
+| **Run 1.5** | **`wo_btf`** | Concat | DSCNet Snake | L_dice + L_cl + L_per | 58.75% | **57.44%** | **43.83%** | **36.19 px** | **60.73%** | ✅ **COMPLETED (Kaggle)** |
+| **Run 1.3** | **`wo_lcl`** | BTF | DSCNet Snake | L_dice + L_per (Betti) | 58.74% | **55.41%** | **41.95%** | **30.84 px** | **59.44%** | ✅ **COMPLETED (Kaggle)** |
+| **Run 1.2** | **`wo_lper`** | BTF | DSCNet Snake | L_dice + L_cl (clDice) | 58.82% | **52.38%** | **39.63%** | **37.86 px** | **57.80%** | ✅ **COMPLETED (Kaggle)** |
+| **Run 1.4** | **`wo_lper_lcl`**| BTF | DSCNet Snake | L_dice only | 57.48% | **51.55%** | **38.14%** | **39.95 px** | **55.15%** | ✅ **COMPLETED (Kaggle)** |
+| **Run 1.0** | `full` | BTF | DSCNet Snake | L_dice + L_cl + L_per | 59.79% | *Pending* | -- | -- | -- | 🏃 **RUNNING (Server Ep 28/50)** |
 
 ---
 
@@ -27,6 +27,10 @@ This document tracks and compares the quantitative and qualitative benchmark res
 | Run ID | Setting | Test Macro DSC | Test Mean IoU | Test ASSD (px) | Falciform DSC | Ridge DSC | Silhouette DSC | Status |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **Paper** | Official TopoNet | 65.19% | 50.84% | 45.98 px | 52.28% | 68.21% | 75.08% | Reference |
+| **Run 1.5** | **`wo_btf`** | **55.50%** | **42.05%** | **38.68 px** | **47.84%** | **56.63%** | **62.02%** | ✅ **COMPLETED** |
+| **Run 1.3** | **`wo_lcl`** | **52.91%** | **39.79%** | **34.11 px** | **46.08%** | **51.68%** | **60.98%** | ✅ **COMPLETED** |
+| **Run 1.2** | **`wo_lper`** | **50.85%** | **38.23%** | **37.53 px** | **44.29%** | **49.31%** | **58.96%** | ✅ **COMPLETED** |
+| **Run 1.4** | **`wo_lper_lcl`** | **49.62%** | **36.47%** | **45.54 px** | **44.12%** | **46.29%** | **58.46%** | ✅ **COMPLETED** |
 | **Run 1.0** | Full TopoNet (Fixed Canvas) | *Pending* | *Pending* | *Pending* | *Pending* | *Pending* | *Pending* | 🏃 In Progress |
 
 ---
@@ -90,98 +94,115 @@ This document tracks and compares the quantitative and qualitative benchmark res
 
 ---
 
-### [PENDING] Run 1.2: TopoNet w/o L_per (No Betti Matching)
+### [COMPLETED] Run 1.2: TopoNet w/o L_per (No Betti Matching)
 
 - **Ablation Mode:** `wo_lper` (BTF, DSCNet Snake, L_dice + L_cl)
-- **Execution Platform:** Remote HPC Cluster (`gpu-a240`)
-- **Status:** Queued to run sequentially after `full`.
-- **Metrics Summary (To be filled upon completion):**
-  - Macro Mean Dice: `[Pending]`
-  - Mean IoU: `[Pending]`
-  - Mean ASSD: `[Pending]`
+- **Execution Platform:** Kaggle GPU (Tesla T4)
+- **Weights Evaluated:** `wo_lper.pth`
+- **Results Folder:** `experiments/EXPERIMENT_1/results/EXPERIMENT_1_RESULTS_WO_LPER/run_wo_lper/`
+
+#### Quantitative Validation Performance (122 frames):
+
+| Evaluation Metric | Measured Value | Paper Reported | Delta vs. Paper |
+| :--- | :---: | :---: | :---: |
+| **Macro Mean Dice** | **52.38%** | 58.82% | -6.44% |
+| **Mean IoU** | **39.63%** | -- | Strong overlap |
+| **Average Surface Distance (ASSD)**| **37.86 px** | -- | Benchmark distance |
+| **Foreground Dice (fg_dice)** | **56.24%** | -- | Non-background overlap |
+| **Foreground IoU (fg_iou)** | **41.22%** | -- | Non-background Jaccard |
+| **Foreground ASSD** | **28.81 px** | -- | Distance error on landmarks |
+| **Inferior Ridge DSC** | **50.06%** | -- | Class 1 |
+| **Silhouette DSC** | **60.69%** | -- | Class 2 |
+| **Falciform Ligament DSC** | **46.40%** | -- | Class 3 |
+| **Patient 40 Subset DSC** | **57.80%** | -- | 101 validation frames |
+
+#### Test Split Evaluation (109 frames):
+- **Test Macro DSC:** **50.85%** | **Test Mean IoU:** **38.23%** | **Test ASSD:** **37.53 px**
+- Ridge DSC: **49.31%** | Silhouette DSC: **58.96%** | Falciform DSC: **44.29%** | FG DSC: **55.35%**
 
 ---
 
-### [INTERRUPTED / SNAPSHOT] Run 1.3: TopoNet w/o L_cl (No clDice)
+### [COMPLETED] Run 1.3: TopoNet w/o L_cl (No clDice)
 
 - **Ablation Mode:** `wo_lcl` (BTF, DSCNet Snake, L_dice + L_per)
-- **Execution Platform:** Kaggle (`experiments/EXPERIMENT_1/notebooks/TopoNet_Run_4_wo_Lcl.ipynb`)
-- **Status:** Evaluated from intermediate snapshot (`w_o_lcl.pth`, ~25 Epochs before Kaggle 12h timeout). Full 50-epoch re-run ready with optimized clDice/caching.
-- **Results Folder:** `experiments/EXPERIMENT_1/results/EXPERIMENT_1_RESULTS_WO_LCL/`
+- **Execution Platform:** Kaggle GPU (Tesla T4)
+- **Weights Evaluated:** `w_o_lcl.pth`
+- **Results Folder:** `experiments/EXPERIMENT_1/results/EXPERIMENT_1_RESULTS_WO_LCL/run_wo_lcl/`
 
-#### Validation Split (122 frames) Performance:
+#### Quantitative Validation Performance (122 frames):
 
-| Metric | Measured Value | Target Paper Value (50 Ep) | Note / Analysis |
-| :--- | :---: | :---: | :--- |
-| **Macro Mean Dice** | **13.97%** | 58.74% | Snapshot at ~25 ep; DSCNet offsets still undergoing convergence |
-| **Mean IoU** | **9.59%** | -- | Intermediate snapshot |
-| **Average Surface Distance (ASSD)**| **70.37 px** | -- | Intermediate snapshot |
-| **Foreground Dice (fg_dice)** | **18.86%** | -- | Non-background overlap |
-| **Foreground IoU (fg_iou)** | **10.93%** | -- | Non-background Jaccard |
-| **Foreground ASSD** | **72.25 px** | -- | Distance error on landmarks |
+| Evaluation Metric | Measured Value | Paper Reported | Delta vs. Paper |
+| :--- | :---: | :---: | :---: |
+| **Macro Mean Dice** | **55.41%** | 58.74% | -3.33% |
+| **Mean IoU** | **41.95%** | -- | Strong overlap |
+| **Average Surface Distance (ASSD)**| **30.84 px** | -- | Outstanding boundary alignment (Lowest ASSD) |
+| **Foreground Dice (fg_dice)** | **58.29%** | -- | Non-background overlap |
+| **Foreground IoU (fg_iou)** | **42.46%** | -- | Non-background Jaccard |
+| **Foreground ASSD** | **21.95 px** | -- | Sub-22px landmark boundary precision |
+| **Inferior Ridge DSC** | **51.97%** | -- | Class 1 |
+| **Silhouette DSC** | **61.98%** | -- | Class 2 |
+| **Falciform Ligament DSC** | **52.29%** | -- | Class 3 |
+| **Patient 40 Subset DSC** | **59.44%** | -- | 101 validation frames |
 
-#### Landmark Class-Wise Breakdown (Val):
-
-| Landmark Class | Validation Dice (DSC) | Interpretation |
-| :--- | :---: | :--- |
-| **Inferior Ridge (Class 2)** | **18.60%** | Leading landmark in early snake conv alignment |
-| **Falciform Ligament (Class 1)** | **20.39%** | Moderate localization progress |
-| **Silhouette (Class 3)** | **2.93%** | Lagging behind; thin boundary sensitive to early deformation |
-
-#### Subgroup & Test Split Analysis:
-- **Patient 40 Validation Subset (101 frames):**
-  - Patient 40 Dice: **14.53%** (FG Dice: 18.44%, ASSD: 70.17 px)
-- **Test Split (109 frames):**
-  - Macro DSC: **12.99%** | Mean IoU: **8.67%** | ASSD: **70.19 px** | FG DSC: **18.82%**
-  - Ridge: **19.85%** | Silhouette: **2.01%** | Falciform: **17.10%**
+#### Test Split Evaluation (109 frames):
+- **Test Macro DSC:** **52.91%** | **Test Mean IoU:** **39.79%** | **Test ASSD:** **34.11 px**
+- Ridge DSC: **51.68%** | Silhouette DSC: **60.98%** | Falciform DSC: **46.08%** | FG DSC: **57.62%**
 
 ---
 
-### [INTERRUPTED / SNAPSHOT] Run 1.4: TopoNet w/o L_per & w/o L_cl (Soft Dice Only + BTF)
+### [COMPLETED] Run 1.4: TopoNet w/o L_per & w/o L_cl (Soft Dice Only + BTF)
 
 - **Ablation Mode:** `wo_lper_lcl` (BTF, DSCNet Snake, L_dice only)
-- **Execution Platform:** Kaggle (`experiments/EXPERIMENT_1/notebooks/TopoNet_Run_5_wo_Lper_Lcl.ipynb`)
-- **Status:** Evaluated from intermediate snapshot (`wo_lcl_lp.pth`, ~25 Epochs before Kaggle 12h timeout). Full 50-epoch re-run ready with batch size 2 (~1.8h total).
-- **Results Folder:** `experiments/EXPERIMENT_1/results/EXPERIMENT_1_RESULTS_WO_LPER_LCL/`
+- **Execution Platform:** Kaggle GPU (Tesla T4)
+- **Weights Evaluated:** `wo_lcl_lp.pth`
+- **Results Folder:** `experiments/EXPERIMENT_1/results/EXPERIMENT_1_RESULTS_WO_LPER_LCL/run_wo_lper_lcl/`
 
-#### Validation Split (122 frames) Performance:
+#### Quantitative Validation Performance (122 frames):
 
-| Metric | Measured Value | Target Paper Value (50 Ep) | Note / Analysis |
-| :--- | :---: | :---: | :--- |
-| **Macro Mean Dice** | **25.16%** | 57.48% | Snapshot at ~25 ep; converges faster than `wo_lcl` without Betti competition |
-| **Mean IoU** | **16.97%** | -- | Intermediate snapshot |
-| **Average Surface Distance (ASSD)**| **62.01 px** | -- | Intermediate snapshot |
-| **Foreground Dice (fg_dice)** | **30.60%** | -- | Non-background overlap |
-| **Foreground IoU (fg_iou)** | **18.75%** | -- | Non-background Jaccard |
-| **Foreground ASSD** | **58.46 px** | -- | Distance error on landmarks |
+| Evaluation Metric | Measured Value | Paper Reported | Delta vs. Paper |
+| :--- | :---: | :---: | :---: |
+| **Macro Mean Dice** | **51.55%** | 57.48% | -5.93% |
+| **Mean IoU** | **38.14%** | -- | Solid baseline fusion |
+| **Average Surface Distance (ASSD)**| **39.95 px** | -- | Moderate surface boundary distance |
+| **Foreground Dice (fg_dice)** | **55.50%** | -- | Non-background overlap |
+| **Foreground IoU (fg_iou)** | **39.96%** | -- | Non-background Jaccard |
+| **Foreground ASSD** | **31.03 px** | -- | Distance error on landmarks |
+| **Inferior Ridge DSC** | **47.52%** | -- | Class 1 |
+| **Silhouette DSC** | **61.95%** | -- | Class 2 |
+| **Falciform Ligament DSC** | **45.18%** | -- | Class 3 |
+| **Patient 40 Subset DSC** | **55.15%** | -- | 101 validation frames |
 
-#### Landmark Class-Wise Breakdown (Val):
-
-| Landmark Class | Validation Dice (DSC) | Interpretation |
-| :--- | :---: | :--- |
-| **Inferior Ridge (Class 2)** | **35.03%** | Substantial feature extraction; ridge landmark clearly visible |
-| **Falciform Ligament (Class 1)** | **29.79%** | Good early topological continuity |
-| **Silhouette (Class 3)** | **10.66%** | Beginning to form boundary segmentation |
-
-#### Subgroup & Test Split Analysis:
-- **Patient 40 Validation Subset (101 frames):**
-  - Patient 40 Dice: **28.06%** (FG Dice: 33.19%, ASSD: 60.42 px)
-  - Key frame e.g. `Patient_40_03810`: Ridge reached 47.17% DSC, Falciform reached 35.20% DSC.
-- **Test Split (109 frames):**
-  - Macro DSC: **23.17%** | Mean IoU: **15.23%** | ASSD: **62.47 px** | FG DSC: **28.85%**
-  - Ridge: **34.25%** | Silhouette: **9.56%** | Falciform: **25.70%**
+#### Test Split Evaluation (109 frames):
+- **Test Macro DSC:** **49.62%** | **Test Mean IoU:** **36.47%** | **Test ASSD:** **45.54 px**
+- Ridge DSC: **46.29%** | Silhouette DSC: **58.46%** | Falciform DSC: **44.12%** | FG DSC: **54.05%**
 
 ---
 
-### [PENDING] Run 1.5: TopoNet w/o BTF (Simple Concat + All Topological Losses)
+### [COMPLETED] Run 1.5: TopoNet w/o BTF (Simple Concat + All Topological Losses)
 
 - **Ablation Mode:** `wo_btf` (Concat, DSCNet Snake, L_dice + L_cl + L_per)
-- **Execution Platform:** Remote HPC Cluster (`gpu-a240`)
-- **Status:** Queued to run sequentially after `wo_lper`.
-- **Metrics Summary (To be filled upon completion):**
-  - Macro Mean Dice: `[Pending]`
-  - Mean IoU: `[Pending]`
-  - Mean ASSD: `[Pending]`
+- **Execution Platform:** Kaggle GPU (Tesla T4)
+- **Weights Evaluated:** `wo_btf.pth`
+- **Results Folder:** `experiments/EXPERIMENT_1/results/EXPERIMENT_1_RESULTS_WO_BTF/run_wo_btf/`
+
+#### Quantitative Validation Performance (122 frames):
+
+| Evaluation Metric | Measured Value | Paper Reported | Delta vs. Paper |
+| :--- | :---: | :---: | :---: |
+| **Macro Mean Dice** | **57.44%** | 58.75% | **-1.31%** (Matches paper closely) |
+| **Mean IoU** | **43.83%** | -- | Excellent multi-landmark Jaccard |
+| **Average Surface Distance (ASSD)**| **36.19 px** | -- | Tight surface boundary localization |
+| **Foreground Dice (fg_dice)** | **60.62%** | -- | Non-background overlap |
+| **Foreground IoU (fg_iou)** | **44.81%** | -- | Non-background Jaccard |
+| **Foreground ASSD** | **29.43 px** | -- | Distance error on landmarks |
+| **Inferior Ridge DSC** | **57.34%** | -- | Class 1 |
+| **Silhouette DSC** | **63.56%** | -- | Class 2 |
+| **Falciform Ligament DSC** | **51.41%** | -- | Class 3 |
+| **Patient 40 Subset DSC** | **60.73%** | -- | 101 validation frames |
+
+#### Test Split Evaluation (109 frames):
+- **Test Macro DSC:** **55.50%** | **Test Mean IoU:** **42.05%** | **Test ASSD:** **38.68 px**
+- Ridge DSC: **56.63%** | Silhouette DSC: **62.02%** | Falciform DSC: **47.84%** | FG DSC: **60.05%**
 
 ---
 
