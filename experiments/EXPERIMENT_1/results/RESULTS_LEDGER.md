@@ -11,9 +11,9 @@ This document tracks and compares the quantitative and qualitative benchmark res
 
 | Run ID | Ablation Mode | Depth Fusion | Depth Encoder | Topological Loss | Paper Val DSC | Our Val DSC | Val Mean IoU | Val ASSD (px) | Pat. 40 DSC | Status |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Run 1.1** | **`baseline`** | Concat | Standard CNN | L_dice only | 56.36% | **60.54%** | **46.79%** | **37.33 px** | **62.84%** | ✅ **COMPLETED** |
-| **Run 1.3** | `wo_lcl` | BTF | DSCNet Snake | L_dice + L_per (Betti) | 58.74% | *Pending* | -- | -- | -- | ⏳ Ready (Kaggle) |
-| **Run 1.4** | `wo_lper_lcl`| BTF | DSCNet Snake | L_dice only | 57.48% | *Pending* | -- | -- | -- | ⏳ Ready (Kaggle) |
+| **Run 1.1** | **`baseline`** | Concat | Standard CNN | L_dice only | 56.36% | **60.54%** | **46.79%** | **37.33 px** | **62.84%** | ✅ **COMPLETED (100 Ep)** |
+| **Run 1.4** | `wo_lper_lcl`| BTF | DSCNet Snake | L_dice only | 57.48% | *25.16%* (25 Ep) | *16.97%* | *62.01 px* | *28.06%* | ⏱️ Interrupted / Re-run Ready |
+| **Run 1.3** | `wo_lcl` | BTF | DSCNet Snake | L_dice + L_per (Betti) | 58.74% | *13.97%* (25 Ep) | *9.59%* | *70.37 px* | *14.53%* | ⏱️ Interrupted / Re-run Ready |
 | **Run 1.2** | `wo_lper` | BTF | DSCNet Snake | L_dice + L_cl (clDice) | 58.82% | *Pending* | -- | -- | -- | ⏳ Queued (Server) |
 | **Run 1.5** | `wo_btf` | Concat | DSCNet Snake | L_dice + L_cl + L_per | 58.75% | *Pending* | -- | -- | -- | ⏳ Queued (Server) |
 | **Run 1.0** | `full` | BTF | DSCNet Snake | L_dice + L_cl + L_per | 59.79% | *Pending* | -- | -- | -- | 🏃 **RUNNING (Server)** |
@@ -102,27 +102,74 @@ This document tracks and compares the quantitative and qualitative benchmark res
 
 ---
 
-### [PENDING] Run 1.3: TopoNet w/o L_cl (No clDice)
+### [INTERRUPTED / SNAPSHOT] Run 1.3: TopoNet w/o L_cl (No clDice)
 
 - **Ablation Mode:** `wo_lcl` (BTF, DSCNet Snake, L_dice + L_per)
 - **Execution Platform:** Kaggle (`experiments/EXPERIMENT_1/notebooks/TopoNet_Run_4_wo_Lcl.ipynb`)
-- **Status:** Notebook prepared and verified; ready to launch on Kaggle.
-- **Metrics Summary (To be filled upon completion):**
-  - Macro Mean Dice: `[Pending]`
-  - Mean IoU: `[Pending]`
-  - Mean ASSD: `[Pending]`
+- **Status:** Evaluated from intermediate snapshot (`w_o_lcl.pth`, ~25 Epochs before Kaggle 12h timeout). Full 50-epoch re-run ready with optimized clDice/caching.
+- **Results Folder:** `experiments/EXPERIMENT_1/results/EXPERIMENT_1_RESULTS_WO_LCL/`
+
+#### Validation Split (122 frames) Performance:
+
+| Metric | Measured Value | Target Paper Value (50 Ep) | Note / Analysis |
+| :--- | :---: | :---: | :--- |
+| **Macro Mean Dice** | **13.97%** | 58.74% | Snapshot at ~25 ep; DSCNet offsets still undergoing convergence |
+| **Mean IoU** | **9.59%** | -- | Intermediate snapshot |
+| **Average Surface Distance (ASSD)**| **70.37 px** | -- | Intermediate snapshot |
+| **Foreground Dice (fg_dice)** | **18.86%** | -- | Non-background overlap |
+| **Foreground IoU (fg_iou)** | **10.93%** | -- | Non-background Jaccard |
+| **Foreground ASSD** | **72.25 px** | -- | Distance error on landmarks |
+
+#### Landmark Class-Wise Breakdown (Val):
+
+| Landmark Class | Validation Dice (DSC) | Interpretation |
+| :--- | :---: | :--- |
+| **Inferior Ridge (Class 2)** | **18.60%** | Leading landmark in early snake conv alignment |
+| **Falciform Ligament (Class 1)** | **20.39%** | Moderate localization progress |
+| **Silhouette (Class 3)** | **2.93%** | Lagging behind; thin boundary sensitive to early deformation |
+
+#### Subgroup & Test Split Analysis:
+- **Patient 40 Validation Subset (101 frames):**
+  - Patient 40 Dice: **14.53%** (FG Dice: 18.44%, ASSD: 70.17 px)
+- **Test Split (109 frames):**
+  - Macro DSC: **12.99%** | Mean IoU: **8.67%** | ASSD: **70.19 px** | FG DSC: **18.82%**
+  - Ridge: **19.85%** | Silhouette: **2.01%** | Falciform: **17.10%**
 
 ---
 
-### [PENDING] Run 1.4: TopoNet w/o L_per & w/o L_cl (Soft Dice Only + BTF)
+### [INTERRUPTED / SNAPSHOT] Run 1.4: TopoNet w/o L_per & w/o L_cl (Soft Dice Only + BTF)
 
 - **Ablation Mode:** `wo_lper_lcl` (BTF, DSCNet Snake, L_dice only)
 - **Execution Platform:** Kaggle (`experiments/EXPERIMENT_1/notebooks/TopoNet_Run_5_wo_Lper_Lcl.ipynb`)
-- **Status:** Notebook prepared and verified; ready to launch on Kaggle.
-- **Metrics Summary (To be filled upon completion):**
-  - Macro Mean Dice: `[Pending]`
-  - Mean IoU: `[Pending]`
-  - Mean ASSD: `[Pending]`
+- **Status:** Evaluated from intermediate snapshot (`wo_lcl_lp.pth`, ~25 Epochs before Kaggle 12h timeout). Full 50-epoch re-run ready with batch size 2 (~1.8h total).
+- **Results Folder:** `experiments/EXPERIMENT_1/results/EXPERIMENT_1_RESULTS_WO_LPER_LCL/`
+
+#### Validation Split (122 frames) Performance:
+
+| Metric | Measured Value | Target Paper Value (50 Ep) | Note / Analysis |
+| :--- | :---: | :---: | :--- |
+| **Macro Mean Dice** | **25.16%** | 57.48% | Snapshot at ~25 ep; converges faster than `wo_lcl` without Betti competition |
+| **Mean IoU** | **16.97%** | -- | Intermediate snapshot |
+| **Average Surface Distance (ASSD)**| **62.01 px** | -- | Intermediate snapshot |
+| **Foreground Dice (fg_dice)** | **30.60%** | -- | Non-background overlap |
+| **Foreground IoU (fg_iou)** | **18.75%** | -- | Non-background Jaccard |
+| **Foreground ASSD** | **58.46 px** | -- | Distance error on landmarks |
+
+#### Landmark Class-Wise Breakdown (Val):
+
+| Landmark Class | Validation Dice (DSC) | Interpretation |
+| :--- | :---: | :--- |
+| **Inferior Ridge (Class 2)** | **35.03%** | Substantial feature extraction; ridge landmark clearly visible |
+| **Falciform Ligament (Class 1)** | **29.79%** | Good early topological continuity |
+| **Silhouette (Class 3)** | **10.66%** | Beginning to form boundary segmentation |
+
+#### Subgroup & Test Split Analysis:
+- **Patient 40 Validation Subset (101 frames):**
+  - Patient 40 Dice: **28.06%** (FG Dice: 33.19%, ASSD: 60.42 px)
+  - Key frame e.g. `Patient_40_03810`: Ridge reached 47.17% DSC, Falciform reached 35.20% DSC.
+- **Test Split (109 frames):**
+  - Macro DSC: **23.17%** | Mean IoU: **15.23%** | ASSD: **62.47 px** | FG DSC: **28.85%**
+  - Ridge: **34.25%** | Silhouette: **9.56%** | Falciform: **25.70%**
 
 ---
 
