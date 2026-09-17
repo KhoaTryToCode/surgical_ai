@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Patient 40 Multi-Model Benchmark Visualizer | Surgical AI</title>
+<style>
+  :root {
+    --bg-primary: #0a0f1d;
+    --bg-secondary: #111827;
+    --bg-card: #1f2937;
+    --bg-card-hover: #263344;
+    --text-primary: #f9fafb;
+    --text-secondary: #9ca3af;
+    --text-muted: #6b7280;
+    --accent-blue: #3b82f6;
+    --accent-indigo: #6366f1;
+    --accent-emerald: #10b981;
+    --accent-pink: #ec4899;
+    --accent-amber: #f59e0b;
+    --border-subtle: #374151;
+    --border-active: #60a5fa;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    line-height: 1.5;
+    padding-bottom: 80px;
+  }
+  header {
+    background: linear-gradient(180deg, #131d35 0%, var(--bg-secondary) 100%);
+    border-bottom: 1px solid var(--border-subtle);
+    padding: 24px 32px 16px 32px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    backdrop-filter: blur(12px);
+  }
+  .header-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  .title-group h1 {
+    font-size: 1.45rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .title-group p {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-top: 4px;
+  }
+  .legend-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    font-size: 0.8rem;
+    background: rgba(0,0,0,0.3);
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border-subtle);
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+  .controls-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 16px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+  }
+  .scrubber-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .btn {
+    background: var(--bg-card);
+    color: var(--text-primary);
+    border: 1px solid var(--border-subtle);
+    padding: 7px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 500;
+    transition: all 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .btn:hover {
+    background: var(--bg-card-hover);
+    border-color: var(--border-active);
+  }
+  .btn.active {
+    background: var(--accent-blue);
+    border-color: var(--accent-blue);
+    color: #fff;
+    box-shadow: 0 0 12px rgba(59, 130, 246, 0.4);
+  }
+  .frame-indicator {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.92rem;
+    font-weight: 600;
+    background: #000;
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border-subtle);
+    color: #60a5fa;
+  }
+  .filter-group, .view-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(0,0,0,0.2);
+    padding: 4px;
+    border-radius: 8px;
+    border: 1px solid var(--border-subtle);
+  }
+  .filter-btn, .view-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .filter-btn:hover, .view-btn:hover {
+    color: var(--text-primary);
+  }
+  .filter-btn.active, .view-btn.active {
+    background: var(--bg-card);
+    color: var(--text-primary);
+    font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+  }
+  .filmstrip {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding: 12px 32px;
+    background: #0c1222;
+    border-bottom: 1px solid var(--border-subtle);
+    scrollbar-width: thin;
+  }
+  .filmstrip::-webkit-scrollbar {
+    height: 6px;
+  }
+  .filmstrip::-webkit-scrollbar-thumb {
+    background: var(--border-subtle);
+    border-radius: 3px;
+  }
+  .thumb-pill {
+    flex: 0 0 auto;
+    padding: 6px 12px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    cursor: pointer;
+    color: var(--text-secondary);
+    transition: all 0.15s ease;
+  }
+  .thumb-pill:hover {
+    border-color: var(--border-active);
+    color: var(--text-primary);
+  }
+  .thumb-pill.active {
+    background: #1e3a8a;
+    border-color: #3b82f6;
+    color: #93c5fd;
+    font-weight: 700;
+  }
+  main {
+    padding: 24px 32px;
+    max-width: 1920px;
+    margin: 0 auto;
+  }
+  .section-summary {
+    margin-bottom: 24px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    padding: 16px 20px;
+  }
+  .summary-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    user-select: none;
+  }
+  .summary-header h2 {
+    font-size: 1rem;
+    font-weight: 600;
+  }
+  .summary-content {
+    margin-top: 14px;
+    display: block;
+    overflow-x: auto;
+  }
+  .summary-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+    text-align: left;
+  }
+  .summary-table th, .summary-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .summary-table th {
+    color: var(--text-secondary);
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 0.72rem;
+    letter-spacing: 0.04em;
+    background: rgba(0,0,0,0.2);
+  }
+  .summary-table tr:hover td {
+    background: rgba(255,255,255,0.03);
+  }
+  .badge {
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    display: inline-block;
+  }
+  .badge-m2f { background: #1e3a8a; color: #93c5fd; }
+  .badge-toponet { background: #064e3b; color: #6ee7b7; }
+  
+  .current-frame-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .stat-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .stat-card-title {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    display: flex;
+    justify-content: space-between;
+  }
+  .stat-card-value {
+    font-size: 1.3rem;
+    font-weight: 700;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  
+  .cards-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+  .model-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 12px;
+    overflow: hidden;
+    transition: border-color 0.2s ease;
+  }
+  .model-card:hover {
+    border-color: #4b5563;
+  }
+  .card-header {
+    padding: 14px 20px;
+    background: rgba(255,255,255,0.02);
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .card-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .card-title {
+    font-size: 1rem;
+    font-weight: 600;
+  }
+  .card-desc {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    margin-top: 2px;
+  }
+  .metrics-strip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .metric-badge {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.78rem;
+    padding: 4px 9px;
+    border-radius: 5px;
+    background: #000;
+    border: 1px solid var(--border-subtle);
+  }
+  .metric-val-high { color: #4ade80; }
+  .metric-val-med { color: #fbbf24; }
+  .metric-val-low { color: #f87171; }
+  
+  .image-stage {
+    padding: 16px 20px;
+    background: #000;
+    position: relative;
+  }
+  .panel-labels {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    padding: 8px 12px;
+    background: #0a0f1d;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    font-weight: 600;
+    border-bottom: 1px solid var(--border-subtle);
+    text-align: center;
+  }
+  .image-wrapper {
+    position: relative;
+    width: 100%;
+    background: #000;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .full-montage-img {
+    width: 100%;
+    height: auto;
+    display: block;
+    cursor: zoom-in;
+    transition: opacity 0.2s ease;
+  }
+  
+  /* Cropped Focus Views */
+  .crop-container {
+    position: relative;
+    width: 100%;
+    max-width: 700px;
+    margin: 0 auto;
+    aspect-ratio: 1/1;
+    overflow: hidden;
+    border-radius: 6px;
+    border: 1px solid var(--border-subtle);
+  }
+  .crop-container img {
+    position: absolute;
+    width: 400%;
+    height: 100%;
+    top: 0;
+    cursor: zoom-in;
+  }
+  .crop-pred img {
+    left: -200%;
+  }
+  .crop-error img {
+    left: -300%;
+  }
+  .crop-gt img {
+    left: -100%;
+  }
+  
+  /* Side by Side Mode */
+  .side-by-side-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 16px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  .side-box {
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    overflow: hidden;
+    background: #0a0f1d;
+  }
+  .side-box-title {
+    padding: 6px 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-align: center;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .side-box .crop-container {
+    max-width: 100%;
+    border: none;
+  }
+  
+  /* Modal Lightbox */
+  .lightbox {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0,0,0,0.92);
+    z-index: 1000;
+    justify-content: center;
+    align-items: center;
+    padding: 20px;
+  }
+  .lightbox.active {
+    display: flex;
+  }
+  .lightbox img {
+    max-width: 96vw;
+    max-height: 92vh;
+    border-radius: 6px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.8);
+  }
+  .lightbox-close {
+    position: absolute;
+    top: 20px;
+    right: 30px;
+    color: #fff;
+    font-size: 32px;
+    font-weight: bold;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-top">
+    <div class="title-group">
+      <h1>🩺 Surgical AI: Patient 40 Multi-Model Benchmark Visualizer</h1>
+      <p>Continuous Anatomical Sequence: Frame <code>08460</code> to <code>09390</code> (18 Validation Keyframes) across Mask2Former (EXP_2) and TopoNet (EXP_1)</p>
+    </div>
+    <div class="legend-bar">
+      <span style="font-weight:600; color:var(--text-secondary);">Landmarks:</span>
+      <div class="legend-item"><span class="legend-dot" style="background:#22c55e;"></span> Ridge (Class 1)</div>
+      <div class="legend-item"><span class="legend-dot" style="background:#ef4444;"></span> Silhouette (Class 2)</div>
+      <div class="legend-item"><span class="legend-dot" style="background:#3b82f6;"></span> Falciform (Class 3)</div>
+      <span style="border-left:1px solid var(--border-subtle); height:14px; margin:0 4px;"></span>
+      <span style="font-weight:600; color:var(--text-secondary);">Error Map:</span>
+      <div class="legend-item"><span class="legend-dot" style="background:#22c55e;"></span> True Positive (TP)</div>
+      <div class="legend-item"><span class="legend-dot" style="background:#ef4444;"></span> False Positive (FP)</div>
+      <div class="legend-item"><span class="legend-dot" style="background:#3b82f6;"></span> False Negative (FN)</div>
+    </div>
+  </div>
+
+  <div class="controls-bar">
+    <div class="scrubber-group">
+      <button class="btn" id="btn-prev" title="Previous Frame (Left Arrow)">◀ Prev</button>
+      <button class="btn" id="btn-play" title="Auto-play sequence (Spacebar)">▶ Play</button>
+      <button class="btn" id="btn-next" title="Next Frame (Right Arrow)">Next ▶</button>
+      <div class="frame-indicator" id="frame-indicator">Patient_40_08460.jpg (1/18)</div>
+    </div>
+
+    <div class="filter-group">
+      <span style="font-size:0.75rem; color:var(--text-muted); padding-left:8px;">Filter:</span>
+      <button class="filter-btn active" data-filter="all">All Models (9)</button>
+      <button class="filter-btn" data-filter="exp2">Mask2Former Suite (4)</button>
+      <button class="filter-btn" data-filter="exp1">TopoNet Suite (5)</button>
+      <button class="filter-btn" data-filter="head2head">Baseline Head-to-Head (2)</button>
+    </div>
+
+    <div class="view-group">
+      <span style="font-size:0.75rem; color:var(--text-muted); padding-left:8px;">View:</span>
+      <button class="view-btn active" data-view="full">Full Montage (4-Panel)</button>
+      <button class="view-btn" data-view="pred">Prediction Only</button>
+      <button class="view-btn" data-view="gt_pred">GT vs Pred</button>
+      <button class="view-btn" data-view="error">Error Map Only</button>
+    </div>
+  </div>
+</header>
+
+<div class="filmstrip" id="filmstrip">
+  <!-- Filled dynamically by JavaScript -->
+</div>
+
+<main>
+  <!-- Sequence Summary Accordion -->
+  <div class="section-summary">
+    <div class="summary-header" id="summary-toggle">
+      <h2>📊 18-Frame Segment Quantitative Benchmark Summary (08460 → 09390)</h2>
+      <span id="summary-icon" style="color:var(--text-secondary); font-size:0.85rem;">▼ Click to expand / collapse</span>
+    </div>
+    <div class="summary-content" id="summary-content">
+      <table class="summary-table">
+        <thead>
+          <tr>
+            <th>Model Architecture</th>
+            <th>Suite</th>
+            <th>Macro Dice</th>
+            <th>FG Union Dice</th>
+            <th>ASSD (px)</th>
+            <th>Ridge DSC</th>
+            <th>Silhouette DSC</th>
+            <th>Falciform DSC</th>
+          </tr>
+        </thead>
+        <tbody>
+
+          <tr>
+            <td style="font-weight:600; color:#3b82f6;">M2F: Baseline Control</td>
+            <td><span class='badge badge-m2f'>EXP_2</span></td>
+            <td style="font-weight:700;">50.66%</td>
+            <td>54.42%</td>
+            <td>67.13 px</td>
+            <td>62.39%</td>
+            <td>51.98%</td>
+            <td>37.61%</td>
+          </tr>
+    
+          <tr>
+            <td style="font-weight:600; color:#6366f1;">M2F: w/o Masked Attn</td>
+            <td><span class='badge badge-m2f'>EXP_2</span></td>
+            <td style="font-weight:700;">50.59%</td>
+            <td>53.83%</td>
+            <td>45.85 px</td>
+            <td>60.36%</td>
+            <td>50.58%</td>
+            <td>40.81%</td>
+          </tr>
+    
+          <tr>
+            <td style="font-weight:600; color:#8b5cf6;">M2F: w/o Query Self-Attn</td>
+            <td><span class='badge badge-m2f'>EXP_2</span></td>
+            <td style="font-weight:700;">48.22%</td>
+            <td>54.50%</td>
+            <td>53.76 px</td>
+            <td>56.48%</td>
+            <td>51.81%</td>
+            <td>36.38%</td>
+          </tr>
+    
+          <tr>
+            <td style="font-weight:600; color:#10b981;">TopoNet: Baseline (Dice Only)</td>
+            <td><span class='badge badge-toponet'>EXP_1</span></td>
+            <td style="font-weight:700;">47.87%</td>
+            <td>48.45%</td>
+            <td>110.36 px</td>
+            <td>50.61%</td>
+            <td>45.88%</td>
+            <td>47.13%</td>
+          </tr>
+    
+          <tr>
+            <td style="font-weight:600; color:#ec4899;">M2F: w/o Multi-Scale</td>
+            <td><span class='badge badge-m2f'>EXP_2</span></td>
+            <td style="font-weight:700;">45.74%</td>
+            <td>53.35%</td>
+            <td>96.80 px</td>
+            <td>54.08%</td>
+            <td>50.22%</td>
+            <td>32.92%</td>
+          </tr>
+    
+          <tr>
+            <td style="font-weight:600; color:#14b8a6;">TopoNet: w/o BTF</td>
+            <td><span class='badge badge-toponet'>EXP_1</span></td>
+            <td style="font-weight:700;">43.00%</td>
+            <td>45.13%</td>
+            <td>112.25 px</td>
+            <td>51.23%</td>
+            <td>42.13%</td>
+            <td>35.63%</td>
+          </tr>
+    
+          <tr>
+            <td style="font-weight:600; color:#06b6d4;">TopoNet: w/o L_cl</td>
+            <td><span class='badge badge-toponet'>EXP_1</span></td>
+            <td style="font-weight:700;">40.57%</td>
+            <td>45.23%</td>
+            <td>84.70 px</td>
+            <td>41.01%</td>
+            <td>43.96%</td>
+            <td>36.76%</td>
+          </tr>
+    
+          <tr>
+            <td style="font-weight:600; color:#f59e0b;">TopoNet: w/o L_per</td>
+            <td><span class='badge badge-toponet'>EXP_1</span></td>
+            <td style="font-weight:700;">38.46%</td>
+            <td>39.51%</td>
+            <td>107.77 px</td>
+            <td>35.24%</td>
+            <td>40.88%</td>
+            <td>39.25%</td>
+          </tr>
+    
+          <tr>
+            <td style="font-weight:600; color:#f97316;">TopoNet: w/o L_per & L_cl</td>
+            <td><span class='badge badge-toponet'>EXP_1</span></td>
+            <td style="font-weight:700;">37.93%</td>
+            <td>39.81%</td>
+            <td>96.62 px</td>
+            <td>33.07%</td>
+            <td>42.41%</td>
+            <td>38.31%</td>
+          </tr>
+    
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Cards Grid -->
+  <div class="cards-grid" id="cards-grid">
+    <!-- Populated dynamically by JS for current frame -->
+  </div>
+</main>
+
+<div class="lightbox" id="lightbox">
+  <span class="lightbox-close" id="lightbox-close">&times;</span>
+  <img id="lightbox-img" src="" alt="Zoomed view">
+</div>
+
+<script>
+const FRAMES = ["Patient_40_08460", "Patient_40_08490", "Patient_40_08550", "Patient_40_08610", "Patient_40_08670", "Patient_40_08730", "Patient_40_08790", "Patient_40_08820", "Patient_40_08880", "Patient_40_08940", "Patient_40_09000", "Patient_40_09060", "Patient_40_09120", "Patient_40_09150", "Patient_40_09210", "Patient_40_09270", "Patient_40_09330", "Patient_40_09390"];
+const MODELS = [{"id": "m2f_baseline", "name": "M2F: Baseline Control", "suite": "EXP_2 (Mask2Former)", "suite_short": "EXP_2", "badge_class": "badge-m2f", "color": "#3b82f6", "csv": "experiments/EXPERIMENT_2/results/EXPERIMENT_2_RESULTS_BASELINE/val_per_frame_results.csv", "img_dir_rel": "EXPERIMENT_2/results/EXPERIMENT_2_RESULTS_BASELINE/patient_40_diagnostics", "desc": "Full Mask2Former: Masked Cross-Attn + MSDeformAttn MultiScale + Query Self-Attn"}, {"id": "m2f_wo_masked_attn", "name": "M2F: w/o Masked Attn", "suite": "EXP_2 (Mask2Former)", "suite_short": "EXP_2", "badge_class": "badge-m2f", "color": "#6366f1", "csv": "experiments/EXPERIMENT_2/results/EXPERIMENT_2_RESULTS_WO_MASKED_ATTN/val_per_frame_results.csv", "img_dir_rel": "EXPERIMENT_2/results/EXPERIMENT_2_RESULTS_WO_MASKED_ATTN/patient_40_diagnostics", "desc": "Spatial Gating Ablation: Full Global Cross-Attention (attn_mask = None)"}, {"id": "m2f_wo_multiscale", "name": "M2F: w/o Multi-Scale", "suite": "EXP_2 (Mask2Former)", "suite_short": "EXP_2", "badge_class": "badge-m2f", "color": "#ec4899", "csv": "experiments/EXPERIMENT_2/results/EXPERIMENT_2_RESULTS_WO_MULTISCALE/val_per_frame_results.csv", "img_dir_rel": "EXPERIMENT_2/results/EXPERIMENT_2_RESULTS_WO_MULTISCALE/patient_40_diagnostics", "desc": "Scale Engine Ablation: Single-Scale Stride-16 Pixel Decoding"}, {"id": "m2f_wo_self_attn", "name": "M2F: w/o Query Self-Attn", "suite": "EXP_2 (Mask2Former)", "suite_short": "EXP_2", "badge_class": "badge-m2f", "color": "#8b5cf6", "csv": "experiments/EXPERIMENT_2/results/EXPERIMENT_2_RESULTS_WO_SELF_ATTN/val_per_frame_results.csv", "img_dir_rel": "EXPERIMENT_2/results/EXPERIMENT_2_RESULTS_WO_SELF_ATTN/patient_40_diagnostics", "desc": "Query Interaction Ablation: Parallel Independent Decoding (No Q*Q^T)"}, {"id": "toponet_baseline", "name": "TopoNet: Baseline (Dice Only)", "suite": "EXP_1 (TopoNet)", "suite_short": "EXP_1", "badge_class": "badge-toponet", "color": "#10b981", "csv": "experiments/EXPERIMENT_1/results/EXPERIMENT_1_RESULTS_BASELINE/working/results/run_baseline/validation_per_frame_results.csv", "img_dir_rel": "EXPERIMENT_1/results/EXPERIMENT_1_RESULTS_BASELINE/working/results/run_baseline/patient_40_diagnostics", "desc": "Standard CNN + Concat RGB-D Depth Fusion + Soft Dice loss only"}, {"id": "toponet_wo_btf", "name": "TopoNet: w/o BTF", "suite": "EXP_1 (TopoNet)", "suite_short": "EXP_1", "badge_class": "badge-toponet", "color": "#14b8a6", "csv": "experiments/EXPERIMENT_1/results/EXPERIMENT_1_RESULTS_WO_BTF/run_wo_btf/validation_per_frame_results.csv", "img_dir_rel": "EXPERIMENT_1/results/EXPERIMENT_1_RESULTS_WO_BTF/run_wo_btf/patient_40_diagnostics", "desc": "Concat Fusion + Snake DSCNet + L_dice + L_cl + L_per"}, {"id": "toponet_wo_lcl", "name": "TopoNet: w/o L_cl", "suite": "EXP_1 (TopoNet)", "suite_short": "EXP_1", "badge_class": "badge-toponet", "color": "#06b6d4", "csv": "experiments/EXPERIMENT_1/results/EXPERIMENT_1_RESULTS_WO_LCL/run_wo_lcl/validation_per_frame_results.csv", "img_dir_rel": "EXPERIMENT_1/results/EXPERIMENT_1_RESULTS_WO_LCL/run_wo_lcl/patient_40_diagnostics", "desc": "BTF + Snake DSCNet + L_dice + L_per (Betti matching persistence)"}, {"id": "toponet_wo_lper", "name": "TopoNet: w/o L_per", "suite": "EXP_1 (TopoNet)", "suite_short": "EXP_1", "badge_class": "badge-toponet", "color": "#f59e0b", "csv": "experiments/EXPERIMENT_1/results/EXPERIMENT_1_RESULTS_WO_LPER/run_wo_lper/validation_per_frame_results.csv", "img_dir_rel": "EXPERIMENT_1/results/EXPERIMENT_1_RESULTS_WO_LPER/run_wo_lper/patient_40_diagnostics", "desc": "BTF + Snake DSCNet + L_dice + L_cl (clDice soft centerline skeletonization)"}, {"id": "toponet_wo_lper_lcl", "name": "TopoNet: w/o L_per & L_cl", "suite": "EXP_1 (TopoNet)", "suite_short": "EXP_1", "badge_class": "badge-toponet", "color": "#f97316", "csv": "experiments/EXPERIMENT_1/results/EXPERIMENT_1_RESULTS_WO_LPER_LCL/run_wo_lper_lcl/validation_per_frame_results.csv", "img_dir_rel": "EXPERIMENT_1/results/EXPERIMENT_1_RESULTS_WO_LPER_LCL/run_wo_lper_lcl/patient_40_diagnostics", "desc": "BTF + Snake DSCNet + L_dice only (Dual topological losses removed)"}];
+const MODEL_METRICS = {"m2f_baseline": {"Patient_40_08460": {"macro_dice": 77.44, "fg_dice": 67.24, "macro_assd": 95.56, "ridge_dice": 67.55, "sil_dice": 64.76, "falc_dice": 100.0, "macro_iou": 66.29, "fg_iou": 50.65}, "Patient_40_08490": {"macro_dice": 54.55, "fg_dice": 66.56, "macro_assd": 26.83, "ridge_dice": 71.17, "sil_dice": 70.97, "falc_dice": 21.51, "macro_iou": 40.76, "fg_iou": 49.87}, "Patient_40_08550": {"macro_dice": 73.12, "fg_dice": 74.5, "macro_assd": 25.96, "ridge_dice": 77.05, "sil_dice": 67.51, "falc_dice": 74.8, "macro_iou": 57.79, "fg_iou": 59.37}, "Patient_40_08610": {"macro_dice": 69.54, "fg_dice": 71.85, "macro_assd": 6.93, "ridge_dice": 60.92, "sil_dice": 86.28, "falc_dice": 61.42, "macro_iou": 54.66, "fg_iou": 56.07}, "Patient_40_08670": {"macro_dice": 74.51, "fg_dice": 76.9, "macro_assd": 7.1, "ridge_dice": 73.07, "sil_dice": 81.29, "falc_dice": 69.18, "macro_iou": 59.64, "fg_iou": 62.47}, "Patient_40_08730": {"macro_dice": 13.56, "fg_dice": 31.92, "macro_assd": 180.28, "ridge_dice": 40.68, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 8.51, "fg_iou": 18.99}, "Patient_40_08790": {"macro_dice": 19.96, "fg_dice": 47.8, "macro_assd": 104.43, "ridge_dice": 59.88, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 14.24, "fg_iou": 31.41}, "Patient_40_08820": {"macro_dice": 65.08, "fg_dice": 76.55, "macro_assd": 5.58, "ridge_dice": 73.66, "sil_dice": 84.09, "falc_dice": 37.48, "macro_iou": 51.3, "fg_iou": 62.0}, "Patient_40_08880": {"macro_dice": 55.74, "fg_dice": 69.02, "macro_assd": 15.51, "ridge_dice": 68.51, "sil_dice": 81.27, "falc_dice": 17.45, "macro_iou": 43.37, "fg_iou": 52.69}, "Patient_40_08940": {"macro_dice": 7.56, "fg_dice": 9.25, "macro_assd": 211.77, "ridge_dice": 22.69, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 4.27, "fg_iou": 4.85}, "Patient_40_09000": {"macro_dice": 6.36, "fg_dice": 8.18, "macro_assd": 179.15, "ridge_dice": 19.08, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 3.51, "fg_iou": 4.26}, "Patient_40_09060": {"macro_dice": 53.77, "fg_dice": 72.22, "macro_assd": 22.85, "ridge_dice": 80.5, "sil_dice": 80.8, "falc_dice": 0.0, "macro_iou": 45.05, "fg_iou": 56.52}, "Patient_40_09120": {"macro_dice": 67.38, "fg_dice": 70.36, "macro_assd": 16.55, "ridge_dice": 60.89, "sil_dice": 81.84, "falc_dice": 59.41, "macro_iou": 51.76, "fg_iou": 54.27}, "Patient_40_09150": {"macro_dice": 80.23, "fg_dice": 82.74, "macro_assd": 10.38, "ridge_dice": 81.89, "sil_dice": 88.53, "falc_dice": 70.27, "macro_iou": 67.64, "fg_iou": 70.56}, "Patient_40_09210": {"macro_dice": 48.4, "fg_dice": 69.02, "macro_assd": 25.08, "ridge_dice": 71.98, "sil_dice": 73.22, "falc_dice": 0.0, "macro_iou": 37.99, "fg_iou": 52.7}, "Patient_40_09270": {"macro_dice": 7.2, "fg_dice": 12.87, "macro_assd": 125.69, "ridge_dice": 21.59, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 4.03, "fg_iou": 6.87}, "Patient_40_09330": {"macro_dice": 66.67, "fg_dice": 0.0, "macro_assd": 142.98, "ridge_dice": 100.0, "sil_dice": 0.0, "falc_dice": 100.0, "macro_iou": 66.67, "fg_iou": 0.0}, "Patient_40_09390": {"macro_dice": 70.87, "fg_dice": 72.51, "macro_assd": 5.66, "ridge_dice": 72.0, "sil_dice": 75.1, "falc_dice": 65.52, "macro_iou": 55.04, "fg_iou": 56.88}}, "m2f_wo_masked_attn": {"Patient_40_08460": {"macro_dice": 72.47, "fg_dice": 62.57, "macro_assd": 85.63, "ridge_dice": 57.87, "sil_dice": 59.53, "falc_dice": 100.0, "macro_iou": 61.03, "fg_iou": 45.53}, "Patient_40_08490": {"macro_dice": 52.23, "fg_dice": 63.6, "macro_assd": 35.5, "ridge_dice": 70.73, "sil_dice": 68.38, "falc_dice": 17.58, "macro_iou": 38.77, "fg_iou": 46.63}, "Patient_40_08550": {"macro_dice": 72.25, "fg_dice": 73.42, "macro_assd": 30.61, "ridge_dice": 76.86, "sil_dice": 63.78, "falc_dice": 76.1, "macro_iou": 56.89, "fg_iou": 58.0}, "Patient_40_08610": {"macro_dice": 73.42, "fg_dice": 74.86, "macro_assd": 6.13, "ridge_dice": 65.85, "sil_dice": 86.25, "falc_dice": 68.17, "macro_iou": 58.88, "fg_iou": 59.82}, "Patient_40_08670": {"macro_dice": 79.33, "fg_dice": 80.1, "macro_assd": 5.09, "ridge_dice": 75.22, "sil_dice": 81.97, "falc_dice": 80.79, "macro_iou": 65.84, "fg_iou": 66.81}, "Patient_40_08730": {"macro_dice": 15.01, "fg_dice": 38.23, "macro_assd": 58.93, "ridge_dice": 45.04, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 9.69, "fg_iou": 23.64}, "Patient_40_08790": {"macro_dice": 53.48, "fg_dice": 49.56, "macro_assd": 62.59, "ridge_dice": 60.44, "sil_dice": 0.0, "falc_dice": 100.0, "macro_iou": 47.77, "fg_iou": 32.95}, "Patient_40_08820": {"macro_dice": 58.93, "fg_dice": 76.46, "macro_assd": 13.8, "ridge_dice": 73.44, "sil_dice": 78.65, "falc_dice": 24.7, "macro_iou": 45.64, "fg_iou": 61.89}, "Patient_40_08880": {"macro_dice": 47.32, "fg_dice": 67.9, "macro_assd": 54.74, "ridge_dice": 64.22, "sil_dice": 77.73, "falc_dice": 0.0, "macro_iou": 36.96, "fg_iou": 51.41}, "Patient_40_08940": {"macro_dice": 4.29, "fg_dice": 5.75, "macro_assd": 71.18, "ridge_dice": 12.87, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 2.29, "fg_iou": 2.96}, "Patient_40_09000": {"macro_dice": 4.91, "fg_dice": 11.51, "macro_assd": 106.98, "ridge_dice": 14.74, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 2.65, "fg_iou": 6.1}, "Patient_40_09060": {"macro_dice": 58.63, "fg_dice": 71.98, "macro_assd": 16.32, "ridge_dice": 72.13, "sil_dice": 83.37, "falc_dice": 20.4, "macro_iou": 46.42, "fg_iou": 56.23}, "Patient_40_09120": {"macro_dice": 64.03, "fg_dice": 72.29, "macro_assd": 20.87, "ridge_dice": 74.21, "sil_dice": 78.97, "falc_dice": 38.92, "macro_iou": 49.47, "fg_iou": 56.6}, "Patient_40_09150": {"macro_dice": 74.7, "fg_dice": 79.62, "macro_assd": 18.01, "ridge_dice": 81.94, "sil_dice": 85.38, "falc_dice": 56.79, "macro_iou": 61.18, "fg_iou": 66.14}, "Patient_40_09210": {"macro_dice": 47.19, "fg_dice": 68.53, "macro_assd": 33.35, "ridge_dice": 69.91, "sil_dice": 71.65, "falc_dice": 0.0, "macro_iou": 36.52, "fg_iou": 52.13}, "Patient_40_09270": {"macro_dice": 1.08, "fg_dice": 2.8, "macro_assd": 115.0, "ridge_dice": 3.24, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 0.55, "fg_iou": 1.42}, "Patient_40_09330": {"macro_dice": 66.67, "fg_dice": 0.0, "macro_assd": 80.0, "ridge_dice": 100.0, "sil_dice": 0.0, "falc_dice": 100.0, "macro_iou": 66.67, "fg_iou": 0.0}, "Patient_40_09390": {"macro_dice": 64.61, "fg_dice": 69.81, "macro_assd": 10.58, "ridge_dice": 67.84, "sil_dice": 74.81, "falc_dice": 51.18, "macro_iou": 48.49, "fg_iou": 53.62}}, "m2f_wo_multiscale": {"Patient_40_08460": {"macro_dice": 36.21, "fg_dice": 52.95, "macro_assd": 150.85, "ridge_dice": 47.24, "sil_dice": 61.39, "falc_dice": 0.0, "macro_iou": 25.07, "fg_iou": 36.01}, "Patient_40_08490": {"macro_dice": 56.75, "fg_dice": 65.92, "macro_assd": 50.27, "ridge_dice": 68.97, "sil_dice": 73.69, "falc_dice": 27.59, "macro_iou": 42.33, "fg_iou": 49.17}, "Patient_40_08550": {"macro_dice": 72.3, "fg_dice": 73.49, "macro_assd": 19.97, "ridge_dice": 78.01, "sil_dice": 61.39, "falc_dice": 77.51, "macro_iou": 57.17, "fg_iou": 58.09}, "Patient_40_08610": {"macro_dice": 68.14, "fg_dice": 71.33, "macro_assd": 7.41, "ridge_dice": 63.97, "sil_dice": 83.27, "falc_dice": 57.17, "macro_iou": 52.8, "fg_iou": 55.44}, "Patient_40_08670": {"macro_dice": 79.34, "fg_dice": 79.26, "macro_assd": 10.32, "ridge_dice": 76.24, "sil_dice": 80.44, "falc_dice": 81.32, "macro_iou": 65.8, "fg_iou": 65.65}, "Patient_40_08730": {"macro_dice": 10.69, "fg_dice": 40.43, "macro_assd": 184.61, "ridge_dice": 32.06, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 6.36, "fg_iou": 25.34}, "Patient_40_08790": {"macro_dice": 16.78, "fg_dice": 43.09, "macro_assd": 181.02, "ridge_dice": 50.35, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 11.21, "fg_iou": 27.47}, "Patient_40_08820": {"macro_dice": 70.54, "fg_dice": 75.03, "macro_assd": 22.85, "ridge_dice": 72.64, "sil_dice": 79.77, "falc_dice": 59.23, "macro_iou": 55.15, "fg_iou": 60.04}, "Patient_40_08880": {"macro_dice": 55.79, "fg_dice": 70.14, "macro_assd": 132.7, "ridge_dice": 70.81, "sil_dice": 79.31, "falc_dice": 17.25, "macro_iou": 43.32, "fg_iou": 54.01}, "Patient_40_08940": {"macro_dice": 6.19, "fg_dice": 12.69, "macro_assd": 333.57, "ridge_dice": 18.57, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 3.41, "fg_iou": 6.77}, "Patient_40_09000": {"macro_dice": 7.34, "fg_dice": 14.82, "macro_assd": 227.43, "ridge_dice": 21.77, "sil_dice": 0.0, "falc_dice": 0.25, "macro_iou": 4.11, "fg_iou": 8.01}, "Patient_40_09060": {"macro_dice": 48.21, "fg_dice": 64.27, "macro_assd": 30.21, "ridge_dice": 67.12, "sil_dice": 77.39, "falc_dice": 0.12, "macro_iou": 37.9, "fg_iou": 47.35}, "Patient_40_09120": {"macro_dice": 63.65, "fg_dice": 67.41, "macro_assd": 16.29, "ridge_dice": 62.21, "sil_dice": 78.92, "falc_dice": 49.83, "macro_iou": 47.84, "fg_iou": 50.85}, "Patient_40_09150": {"macro_dice": 75.67, "fg_dice": 78.66, "macro_assd": 19.22, "ridge_dice": 81.93, "sil_dice": 85.13, "falc_dice": 59.93, "macro_iou": 62.1, "fg_iou": 64.82}, "Patient_40_09210": {"macro_dice": 46.26, "fg_dice": 65.02, "macro_assd": 57.97, "ridge_dice": 69.86, "sil_dice": 68.91, "falc_dice": 0.0, "macro_iou": 35.42, "fg_iou": 48.17}, "Patient_40_09270": {"macro_dice": 6.8, "fg_dice": 11.93, "macro_assd": 210.69, "ridge_dice": 20.39, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 3.78, "fg_iou": 6.35}, "Patient_40_09330": {"macro_dice": 33.33, "fg_dice": 1.36, "macro_assd": 80.0, "ridge_dice": 0.0, "sil_dice": 0.0, "falc_dice": 100.0, "macro_iou": 33.33, "fg_iou": 0.69}, "Patient_40_09390": {"macro_dice": 69.3, "fg_dice": 72.4, "macro_assd": 7.05, "ridge_dice": 71.22, "sil_dice": 74.33, "falc_dice": 62.35, "macro_iou": 53.25, "fg_iou": 56.74}}, "m2f_wo_self_attn": {"Patient_40_08460": {"macro_dice": 71.87, "fg_dice": 61.25, "macro_assd": 96.15, "ridge_dice": 52.15, "sil_dice": 63.47, "falc_dice": 100.0, "macro_iou": 60.59, "fg_iou": 44.15}, "Patient_40_08490": {"macro_dice": 57.07, "fg_dice": 66.43, "macro_assd": 24.74, "ridge_dice": 65.72, "sil_dice": 77.44, "falc_dice": 28.05, "macro_iou": 42.81, "fg_iou": 49.73}, "Patient_40_08550": {"macro_dice": 67.09, "fg_dice": 71.65, "macro_assd": 16.62, "ridge_dice": 75.86, "sil_dice": 67.9, "falc_dice": 57.52, "macro_iou": 50.96, "fg_iou": 55.83}, "Patient_40_08610": {"macro_dice": 64.56, "fg_dice": 72.04, "macro_assd": 6.91, "ridge_dice": 67.18, "sil_dice": 86.88, "falc_dice": 39.62, "macro_iou": 50.7, "fg_iou": 56.3}, "Patient_40_08670": {"macro_dice": 78.18, "fg_dice": 79.4, "macro_assd": 4.51, "ridge_dice": 77.88, "sil_dice": 81.07, "falc_dice": 75.59, "macro_iou": 64.23, "fg_iou": 65.84}, "Patient_40_08730": {"macro_dice": 15.16, "fg_dice": 37.14, "macro_assd": 56.27, "ridge_dice": 45.47, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 9.81, "fg_iou": 22.8}, "Patient_40_08790": {"macro_dice": 21.28, "fg_dice": 49.28, "macro_assd": 181.2, "ridge_dice": 63.84, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 15.63, "fg_iou": 32.7}, "Patient_40_08820": {"macro_dice": 68.78, "fg_dice": 73.82, "macro_assd": 6.4, "ridge_dice": 66.51, "sil_dice": 83.88, "falc_dice": 55.96, "macro_iou": 53.64, "fg_iou": 58.5}, "Patient_40_08880": {"macro_dice": 51.46, "fg_dice": 70.18, "macro_assd": 35.03, "ridge_dice": 69.48, "sil_dice": 84.91, "falc_dice": 0.0, "macro_iou": 42.34, "fg_iou": 54.06}, "Patient_40_08940": {"macro_dice": 2.2, "fg_dice": 3.11, "macro_assd": 152.63, "ridge_dice": 6.59, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 1.14, "fg_iou": 1.58}, "Patient_40_09000": {"macro_dice": 8.24, "fg_dice": 14.2, "macro_assd": 127.63, "ridge_dice": 24.71, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 4.7, "fg_iou": 7.64}, "Patient_40_09060": {"macro_dice": 55.44, "fg_dice": 72.8, "macro_assd": 7.27, "ridge_dice": 73.18, "sil_dice": 81.61, "falc_dice": 11.53, "macro_iou": 44.25, "fg_iou": 57.23}, "Patient_40_09120": {"macro_dice": 71.46, "fg_dice": 74.52, "macro_assd": 9.18, "ridge_dice": 69.58, "sil_dice": 80.19, "falc_dice": 64.62, "macro_iou": 56.0, "fg_iou": 59.39}, "Patient_40_09150": {"macro_dice": 82.1, "fg_dice": 83.79, "macro_assd": 8.1, "ridge_dice": 82.95, "sil_dice": 87.12, "falc_dice": 76.24, "macro_iou": 69.88, "fg_iou": 72.1}, "Patient_40_09210": {"macro_dice": 48.7, "fg_dice": 70.98, "macro_assd": 31.65, "ridge_dice": 74.82, "sil_dice": 71.29, "falc_dice": 0.0, "macro_iou": 38.38, "fg_iou": 55.02}, "Patient_40_09270": {"macro_dice": 9.96, "fg_dice": 12.85, "macro_assd": 112.72, "ridge_dice": 29.88, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 5.85, "fg_iou": 6.87}, "Patient_40_09330": {"macro_dice": 33.33, "fg_dice": 0.0, "macro_assd": 80.0, "ridge_dice": 0.0, "sil_dice": 0.0, "falc_dice": 100.0, "macro_iou": 33.33, "fg_iou": 0.0}, "Patient_40_09390": {"macro_dice": 61.14, "fg_dice": 67.48, "macro_assd": 10.58, "ridge_dice": 70.93, "sil_dice": 66.78, "falc_dice": 45.71, "macro_iou": 44.91, "fg_iou": 50.92}}, "toponet_baseline": {"Patient_40_08460": {"macro_dice": 33.33, "fg_dice": 0.0, "macro_assd": 315.0, "ridge_dice": 0.0, "sil_dice": 0.0, "falc_dice": 100.0, "macro_iou": 33.33, "fg_iou": 0.0}, "Patient_40_08490": {"macro_dice": 58.09, "fg_dice": 64.68, "macro_assd": 47.87, "ridge_dice": 66.54, "sil_dice": 64.92, "falc_dice": 42.8, "macro_iou": 41.72, "fg_iou": 47.8}, "Patient_40_08550": {"macro_dice": 65.27, "fg_dice": 71.57, "macro_assd": 34.95, "ridge_dice": 81.98, "sil_dice": 58.2, "falc_dice": 55.61, "macro_iou": 49.67, "fg_iou": 55.73}, "Patient_40_08610": {"macro_dice": 70.02, "fg_dice": 74.47, "macro_assd": 12.17, "ridge_dice": 67.42, "sil_dice": 85.3, "falc_dice": 57.34, "macro_iou": 55.14, "fg_iou": 59.32}, "Patient_40_08670": {"macro_dice": 64.68, "fg_dice": 75.83, "macro_assd": 16.88, "ridge_dice": 76.88, "sil_dice": 78.66, "falc_dice": 38.5, "macro_iou": 50.37, "fg_iou": 61.07}, "Patient_40_08730": {"macro_dice": 44.84, "fg_dice": 23.56, "macro_assd": 174.84, "ridge_dice": 34.53, "sil_dice": 0.0, "falc_dice": 100.0, "macro_iou": 40.29, "fg_iou": 13.35}, "Patient_40_08790": {"macro_dice": 46.78, "fg_dice": 37.12, "macro_assd": 183.33, "ridge_dice": 40.35, "sil_dice": 0.0, "falc_dice": 100.0, "macro_iou": 41.76, "fg_iou": 22.79}, "Patient_40_08820": {"macro_dice": 56.01, "fg_dice": 70.97, "macro_assd": 31.24, "ridge_dice": 65.0, "sil_dice": 81.09, "falc_dice": 21.96, "macro_iou": 42.89, "fg_iou": 55.01}, "Patient_40_08880": {"macro_dice": 32.65, "fg_dice": 49.04, "macro_assd": 118.25, "ridge_dice": 62.04, "sil_dice": 35.89, "falc_dice": 0.0, "macro_iou": 22.28, "fg_iou": 32.49}, "Patient_40_08940": {"macro_dice": 19.05, "fg_dice": 22.87, "macro_assd": 135.52, "ridge_dice": 42.48, "sil_dice": 14.67, "falc_dice": 0.0, "macro_iou": 11.63, "fg_iou": 12.91}, "Patient_40_09000": {"macro_dice": 13.31, "fg_dice": 18.31, "macro_assd": 140.34, "ridge_dice": 20.46, "sil_dice": 19.49, "falc_dice": 0.0, "macro_iou": 7.4, "fg_iou": 10.08}, "Patient_40_09060": {"macro_dice": 59.87, "fg_dice": 76.91, "macro_assd": 5.06, "ridge_dice": 77.56, "sil_dice": 86.54, "falc_dice": 15.51, "macro_iou": 49.34, "fg_iou": 62.48}, "Patient_40_09120": {"macro_dice": 67.87, "fg_dice": 71.74, "macro_assd": 26.63, "ridge_dice": 65.07, "sil_dice": 79.99, "falc_dice": 58.54, "macro_iou": 52.09, "fg_iou": 55.94}, "Patient_40_09150": {"macro_dice": 81.71, "fg_dice": 83.9, "macro_assd": 11.55, "ridge_dice": 80.47, "sil_dice": 86.5, "falc_dice": 78.16, "macro_iou": 69.23, "fg_iou": 72.27}, "Patient_40_09210": {"macro_dice": 48.93, "fg_dice": 61.3, "macro_assd": 48.13, "ridge_dice": 61.5, "sil_dice": 62.58, "falc_dice": 22.72, "macro_iou": 34.25, "fg_iou": 44.2}, "Patient_40_09270": {"macro_dice": 0.0, "fg_dice": 0.0, "macro_assd": 287.73, "ridge_dice": 0.0, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 0.0, "fg_iou": 0.0}, "Patient_40_09330": {"macro_dice": 33.33, "fg_dice": 0.0, "macro_assd": 377.42, "ridge_dice": 0.0, "sil_dice": 0.0, "falc_dice": 100.0, "macro_iou": 33.33, "fg_iou": 0.0}, "Patient_40_09390": {"macro_dice": 66.0, "fg_dice": 69.77, "macro_assd": 19.57, "ridge_dice": 68.7, "sil_dice": 72.03, "falc_dice": 57.26, "macro_iou": 49.57, "fg_iou": 53.57}}, "toponet_wo_btf": {"Patient_40_08460": {"macro_dice": 43.56, "fg_dice": 21.18, "macro_assd": 265.24, "ridge_dice": 0.0, "sil_dice": 30.67, "falc_dice": 100.0, "macro_iou": 39.37, "fg_iou": 11.85}, "Patient_40_08490": {"macro_dice": 56.75, "fg_dice": 63.97, "macro_assd": 50.54, "ridge_dice": 65.6, "sil_dice": 58.42, "falc_dice": 46.22, "macro_iou": 40.04, "fg_iou": 47.03}, "Patient_40_08550": {"macro_dice": 47.89, "fg_dice": 65.75, "macro_assd": 40.59, "ridge_dice": 78.82, "sil_dice": 54.36, "falc_dice": 10.47, "macro_iou": 35.97, "fg_iou": 48.97}, "Patient_40_08610": {"macro_dice": 63.49, "fg_dice": 66.82, "macro_assd": 7.64, "ridge_dice": 47.45, "sil_dice": 83.23, "falc_dice": 59.8, "macro_iou": 48.34, "fg_iou": 50.18}, "Patient_40_08670": {"macro_dice": 48.58, "fg_dice": 72.21, "macro_assd": 37.88, "ridge_dice": 66.49, "sil_dice": 79.24, "falc_dice": 0.0, "macro_iou": 38.47, "fg_iou": 56.5}, "Patient_40_08730": {"macro_dice": 41.66, "fg_dice": 25.49, "macro_assd": 209.36, "ridge_dice": 24.98, "sil_dice": 0.0, "falc_dice": 100.0, "macro_iou": 38.09, "fg_iou": 14.61}, "Patient_40_08790": {"macro_dice": 39.88, "fg_dice": 23.06, "macro_assd": 218.73, "ridge_dice": 19.63, "sil_dice": 0.0, "falc_dice": 100.0, "macro_iou": 36.96, "fg_iou": 13.03}, "Patient_40_08820": {"macro_dice": 44.3, "fg_dice": 66.68, "macro_assd": 55.95, "ridge_dice": 62.22, "sil_dice": 70.67, "falc_dice": 0.0, "macro_iou": 33.27, "fg_iou": 50.02}, "Patient_40_08880": {"macro_dice": 18.07, "fg_dice": 27.24, "macro_assd": 124.67, "ridge_dice": 28.43, "sil_dice": 25.77, "falc_dice": 0.0, "macro_iou": 10.45, "fg_iou": 15.76}, "Patient_40_08940": {"macro_dice": 19.06, "fg_dice": 26.39, "macro_assd": 128.31, "ridge_dice": 40.22, "sil_dice": 16.96, "falc_dice": 0.0, "macro_iou": 11.48, "fg_iou": 15.2}, "Patient_40_09000": {"macro_dice": 26.75, "fg_dice": 30.48, "macro_assd": 112.9, "ridge_dice": 66.27, "sil_dice": 13.96, "falc_dice": 0.0, "macro_iou": 19.02, "fg_iou": 17.98}, "Patient_40_09060": {"macro_dice": 53.9, "fg_dice": 63.67, "macro_assd": 33.91, "ridge_dice": 58.41, "sil_dice": 67.39, "falc_dice": 35.9, "macro_iou": 37.98, "fg_iou": 46.71}, "Patient_40_09120": {"macro_dice": 45.35, "fg_dice": 64.89, "macro_assd": 50.9, "ridge_dice": 72.62, "sil_dice": 63.44, "falc_dice": 0.0, "macro_iou": 34.49, "fg_iou": 48.03}, "Patient_40_09150": {"macro_dice": 73.05, "fg_dice": 76.5, "macro_assd": 15.83, "ridge_dice": 71.71, "sil_dice": 77.34, "falc_dice": 70.09, "macro_iou": 57.63, "fg_iou": 61.94}, "Patient_40_09210": {"macro_dice": 35.56, "fg_dice": 53.5, "macro_assd": 67.89, "ridge_dice": 56.45, "sil_dice": 50.23, "falc_dice": 0.0, "macro_iou": 24.29, "fg_iou": 36.52}, "Patient_40_09270": {"macro_dice": 0.0, "fg_dice": 0.0, "macro_assd": 274.63, "ridge_dice": 0.0, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 0.0, "fg_iou": 0.0}, "Patient_40_09330": {"macro_dice": 66.67, "fg_dice": 0.0, "macro_assd": 314.77, "ridge_dice": 100.0, "sil_dice": 0.0, "falc_dice": 100.0, "macro_iou": 66.67, "fg_iou": 0.0}, "Patient_40_09390": {"macro_dice": 49.47, "fg_dice": 64.44, "macro_assd": 10.8, "ridge_dice": 62.89, "sil_dice": 66.69, "falc_dice": 18.85, "macro_iou": 35.43, "fg_iou": 47.54}}, "toponet_wo_lcl": {"Patient_40_08460": {"macro_dice": 33.61, "fg_dice": 5.55, "macro_assd": 148.75, "ridge_dice": 0.82, "sil_dice": 0.0, "falc_dice": 100.0, "macro_iou": 33.47, "fg_iou": 2.85}, "Patient_40_08490": {"macro_dice": 55.58, "fg_dice": 59.57, "macro_assd": 37.91, "ridge_dice": 57.96, "sil_dice": 68.11, "falc_dice": 40.67, "macro_iou": 39.32, "fg_iou": 42.42}, "Patient_40_08550": {"macro_dice": 55.59, "fg_dice": 63.21, "macro_assd": 27.41, "ridge_dice": 60.48, "sil_dice": 66.35, "falc_dice": 39.93, "macro_iou": 39.31, "fg_iou": 46.21}, "Patient_40_08610": {"macro_dice": 54.12, "fg_dice": 66.43, "macro_assd": 6.15, "ridge_dice": 45.67, "sil_dice": 89.18, "falc_dice": 27.52, "macro_iou": 42.0, "fg_iou": 49.73}, "Patient_40_08670": {"macro_dice": 50.11, "fg_dice": 74.85, "macro_assd": 30.67, "ridge_dice": 70.26, "sil_dice": 80.08, "falc_dice": 0.0, "macro_iou": 40.31, "fg_iou": 59.81}, "Patient_40_08730": {"macro_dice": 11.6, "fg_dice": 28.02, "macro_assd": 143.65, "ridge_dice": 34.79, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 7.02, "fg_iou": 16.29}, "Patient_40_08790": {"macro_dice": 44.62, "fg_dice": 31.14, "macro_assd": 156.67, "ridge_dice": 33.87, "sil_dice": 0.0, "falc_dice": 100.0, "macro_iou": 40.13, "fg_iou": 18.44}, "Patient_40_08820": {"macro_dice": 52.76, "fg_dice": 68.06, "macro_assd": 11.19, "ridge_dice": 55.28, "sil_dice": 79.21, "falc_dice": 23.8, "macro_iou": 39.09, "fg_iou": 51.58}, "Patient_40_08880": {"macro_dice": 26.41, "fg_dice": 34.23, "macro_assd": 52.29, "ridge_dice": 33.04, "sil_dice": 30.16, "falc_dice": 16.04, "macro_iou": 15.42, "fg_iou": 20.65}, "Patient_40_08940": {"macro_dice": 5.11, "fg_dice": 18.31, "macro_assd": 179.58, "ridge_dice": 15.33, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 2.77, "fg_iou": 10.08}, "Patient_40_09000": {"macro_dice": 5.95, "fg_dice": 12.1, "macro_assd": 136.13, "ridge_dice": 16.79, "sil_dice": 1.04, "falc_dice": 0.0, "macro_iou": 3.23, "fg_iou": 6.44}, "Patient_40_09060": {"macro_dice": 57.16, "fg_dice": 67.62, "macro_assd": 14.01, "ridge_dice": 62.75, "sil_dice": 79.68, "falc_dice": 29.05, "macro_iou": 42.98, "fg_iou": 51.08}, "Patient_40_09120": {"macro_dice": 62.76, "fg_dice": 68.72, "macro_assd": 19.15, "ridge_dice": 65.0, "sil_dice": 79.02, "falc_dice": 44.27, "macro_iou": 47.3, "fg_iou": 52.35}, "Patient_40_09150": {"macro_dice": 77.29, "fg_dice": 76.72, "macro_assd": 15.33, "ridge_dice": 59.05, "sil_dice": 88.59, "falc_dice": 84.22, "macro_iou": 64.72, "fg_iou": 62.24}, "Patient_40_09210": {"macro_dice": 43.26, "fg_dice": 62.88, "macro_assd": 51.41, "ridge_dice": 64.55, "sil_dice": 60.86, "falc_dice": 4.36, "macro_iou": 31.21, "fg_iou": 45.86}, "Patient_40_09270": {"macro_dice": 0.0, "fg_dice": 9.76, "macro_assd": 148.03, "ridge_dice": 0.0, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 0.0, "fg_iou": 5.13}, "Patient_40_09330": {"macro_dice": 33.33, "fg_dice": 0.0, "macro_assd": 330.29, "ridge_dice": 0.0, "sil_dice": 0.0, "falc_dice": 100.0, "macro_iou": 33.33, "fg_iou": 0.0}, "Patient_40_09390": {"macro_dice": 61.07, "fg_dice": 66.99, "macro_assd": 15.96, "ridge_dice": 62.49, "sil_dice": 68.95, "falc_dice": 51.77, "macro_iou": 44.32, "fg_iou": 50.36}}, "toponet_wo_lper": {"Patient_40_08460": {"macro_dice": 34.18, "fg_dice": 5.44, "macro_assd": 190.87, "ridge_dice": 2.55, "sil_dice": 0.0, "falc_dice": 100.0, "macro_iou": 33.76, "fg_iou": 2.8}, "Patient_40_08490": {"macro_dice": 49.95, "fg_dice": 59.58, "macro_assd": 46.91, "ridge_dice": 59.92, "sil_dice": 62.3, "falc_dice": 27.63, "macro_iou": 34.68, "fg_iou": 42.42}, "Patient_40_08550": {"macro_dice": 62.3, "fg_dice": 66.55, "macro_assd": 43.01, "ridge_dice": 74.68, "sil_dice": 51.45, "falc_dice": 60.76, "macro_iou": 45.96, "fg_iou": 49.87}, "Patient_40_08610": {"macro_dice": 58.28, "fg_dice": 62.13, "macro_assd": 11.79, "ridge_dice": 30.03, "sil_dice": 82.16, "falc_dice": 62.66, "macro_iou": 44.34, "fg_iou": 45.07}, "Patient_40_08670": {"macro_dice": 44.38, "fg_dice": 65.97, "macro_assd": 48.81, "ridge_dice": 58.06, "sil_dice": 75.07, "falc_dice": 0.0, "macro_iou": 33.66, "fg_iou": 49.22}, "Patient_40_08730": {"macro_dice": 33.33, "fg_dice": 0.59, "macro_assd": 233.63, "ridge_dice": 0.0, "sil_dice": 0.0, "falc_dice": 100.0, "macro_iou": 33.33, "fg_iou": 0.29}, "Patient_40_08790": {"macro_dice": 33.84, "fg_dice": 6.47, "macro_assd": 203.81, "ridge_dice": 1.51, "sil_dice": 0.0, "falc_dice": 100.0, "macro_iou": 33.59, "fg_iou": 3.34}, "Patient_40_08820": {"macro_dice": 45.23, "fg_dice": 67.77, "macro_assd": 57.68, "ridge_dice": 65.62, "sil_dice": 70.08, "falc_dice": 0.0, "macro_iou": 34.26, "fg_iou": 51.25}, "Patient_40_08880": {"macro_dice": 18.08, "fg_dice": 31.4, "macro_assd": 118.96, "ridge_dice": 23.55, "sil_dice": 30.69, "falc_dice": 0.0, "macro_iou": 10.49, "fg_iou": 18.63}, "Patient_40_08940": {"macro_dice": 1.73, "fg_dice": 6.97, "macro_assd": 148.31, "ridge_dice": 0.0, "sil_dice": 5.18, "falc_dice": 0.0, "macro_iou": 0.89, "fg_iou": 3.61}, "Patient_40_09000": {"macro_dice": 1.6, "fg_dice": 6.11, "macro_assd": 151.16, "ridge_dice": 0.0, "sil_dice": 4.81, "falc_dice": 0.0, "macro_iou": 0.82, "fg_iou": 3.15}, "Patient_40_09060": {"macro_dice": 55.75, "fg_dice": 64.9, "macro_assd": 32.77, "ridge_dice": 64.78, "sil_dice": 71.07, "falc_dice": 31.4, "macro_iou": 40.55, "fg_iou": 48.04}, "Patient_40_09120": {"macro_dice": 54.35, "fg_dice": 63.34, "macro_assd": 12.39, "ridge_dice": 51.7, "sil_dice": 76.49, "falc_dice": 34.87, "macro_iou": 39.3, "fg_iou": 46.35}, "Patient_40_09150": {"macro_dice": 76.23, "fg_dice": 79.25, "macro_assd": 12.65, "ridge_dice": 69.99, "sil_dice": 83.06, "falc_dice": 75.64, "macro_iou": 61.9, "fg_iou": 65.63}, "Patient_40_09210": {"macro_dice": 38.8, "fg_dice": 57.19, "macro_assd": 81.0, "ridge_dice": 63.75, "sil_dice": 52.65, "falc_dice": 0.0, "macro_iou": 27.51, "fg_iou": 40.05}, "Patient_40_09270": {"macro_dice": 0.0, "fg_dice": 0.0, "macro_assd": 252.02, "ridge_dice": 0.0, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 0.0, "fg_iou": 0.0}, "Patient_40_09330": {"macro_dice": 33.33, "fg_dice": 0.0, "macro_assd": 287.47, "ridge_dice": 0.0, "sil_dice": 0.0, "falc_dice": 100.0, "macro_iou": 33.33, "fg_iou": 0.0}, "Patient_40_09390": {"macro_dice": 50.88, "fg_dice": 67.61, "macro_assd": 6.69, "ridge_dice": 68.2, "sil_dice": 70.88, "falc_dice": 13.55, "macro_iou": 37.97, "fg_iou": 51.07}}, "toponet_wo_lper_lcl": {"Patient_40_08460": {"macro_dice": 7.18, "fg_dice": 15.45, "macro_assd": 108.93, "ridge_dice": 0.0, "sil_dice": 21.55, "falc_dice": 0.0, "macro_iou": 4.03, "fg_iou": 8.37}, "Patient_40_08490": {"macro_dice": 64.27, "fg_dice": 66.52, "macro_assd": 52.34, "ridge_dice": 67.49, "sil_dice": 63.96, "falc_dice": 61.35, "macro_iou": 47.4, "fg_iou": 49.83}, "Patient_40_08550": {"macro_dice": 56.52, "fg_dice": 60.36, "macro_assd": 58.99, "ridge_dice": 68.31, "sil_dice": 42.1, "falc_dice": 59.14, "macro_iou": 40.17, "fg_iou": 43.22}, "Patient_40_08610": {"macro_dice": 55.28, "fg_dice": 60.57, "macro_assd": 9.72, "ridge_dice": 15.1, "sil_dice": 87.84, "falc_dice": 62.9, "macro_iou": 44.12, "fg_iou": 43.44}, "Patient_40_08670": {"macro_dice": 58.78, "fg_dice": 60.69, "macro_assd": 22.82, "ridge_dice": 34.58, "sil_dice": 74.79, "falc_dice": 66.98, "macro_iou": 43.66, "fg_iou": 43.57}, "Patient_40_08730": {"macro_dice": 33.46, "fg_dice": 2.58, "macro_assd": 222.5, "ridge_dice": 0.39, "sil_dice": 0.0, "falc_dice": 100.0, "macro_iou": 33.4, "fg_iou": 1.31}, "Patient_40_08790": {"macro_dice": 1.64, "fg_dice": 6.6, "macro_assd": 136.5, "ridge_dice": 4.91, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 0.84, "fg_iou": 3.41}, "Patient_40_08820": {"macro_dice": 62.67, "fg_dice": 75.49, "macro_assd": 30.02, "ridge_dice": 77.93, "sil_dice": 73.49, "falc_dice": 36.58, "macro_iou": 48.1, "fg_iou": 60.62}, "Patient_40_08880": {"macro_dice": 5.01, "fg_dice": 8.29, "macro_assd": 96.51, "ridge_dice": 0.0, "sil_dice": 15.03, "falc_dice": 0.0, "macro_iou": 2.71, "fg_iou": 4.32}, "Patient_40_08940": {"macro_dice": 8.78, "fg_dice": 18.86, "macro_assd": 164.95, "ridge_dice": 0.0, "sil_dice": 26.34, "falc_dice": 0.0, "macro_iou": 5.06, "fg_iou": 10.41}, "Patient_40_09000": {"macro_dice": 9.39, "fg_dice": 20.19, "macro_assd": 119.31, "ridge_dice": 0.0, "sil_dice": 28.16, "falc_dice": 0.0, "macro_iou": 5.46, "fg_iou": 11.23}, "Patient_40_09060": {"macro_dice": 61.71, "fg_dice": 68.13, "macro_assd": 40.23, "ridge_dice": 71.56, "sil_dice": 74.54, "falc_dice": 39.04, "macro_iou": 46.46, "fg_iou": 51.66}, "Patient_40_09120": {"macro_dice": 61.27, "fg_dice": 69.33, "macro_assd": 25.55, "ridge_dice": 74.52, "sil_dice": 69.04, "falc_dice": 40.27, "macro_iou": 45.77, "fg_iou": 53.06}, "Patient_40_09150": {"macro_dice": 73.74, "fg_dice": 73.43, "macro_assd": 38.07, "ridge_dice": 68.02, "sil_dice": 76.55, "falc_dice": 76.64, "macro_iou": 58.56, "fg_iou": 58.01}, "Patient_40_09210": {"macro_dice": 35.7, "fg_dice": 47.15, "macro_assd": 70.27, "ridge_dice": 46.93, "sil_dice": 48.58, "falc_dice": 11.6, "macro_iou": 22.97, "fg_iou": 30.85}, "Patient_40_09270": {"macro_dice": 0.0, "fg_dice": 0.0, "macro_assd": 167.02, "ridge_dice": 0.0, "sil_dice": 0.0, "falc_dice": 0.0, "macro_iou": 0.0, "fg_iou": 0.0}, "Patient_40_09330": {"macro_dice": 33.33, "fg_dice": 0.0, "macro_assd": 360.9, "ridge_dice": 0.0, "sil_dice": 0.0, "falc_dice": 100.0, "macro_iou": 33.33, "fg_iou": 0.0}, "Patient_40_09390": {"macro_dice": 54.04, "fg_dice": 63.03, "macro_assd": 14.45, "ridge_dice": 65.62, "sil_dice": 61.47, "falc_dice": 35.04, "macro_iou": 38.15, "fg_iou": 46.02}}};
+
+let currentFrameIdx = 0;
+let currentFilter = 'all';
+let currentView = 'full';
+let isPlaying = false;
+let playInterval = null;
+
+// Initialize Filmstrip
+const filmstripEl = document.getElementById('filmstrip');
+FRAMES.forEach((f, idx) => {
+  const pill = document.createElement('div');
+  pill.className = 'thumb-pill' + (idx === 0 ? ' active' : '');
+  pill.textContent = f.replace('Patient_40_', '');
+  pill.addEventListener('click', () => {
+    setFrame(idx);
+  });
+  filmstripEl.appendChild(pill);
+});
+
+function getValClass(val) {
+  if (val >= 65.0) return 'metric-val-high';
+  if (val >= 45.0) return 'metric-val-med';
+  return 'metric-val-low';
+}
+
+function renderCards() {
+  const frameName = FRAMES[currentFrameIdx];
+  const grid = document.getElementById('cards-grid');
+  grid.innerHTML = '';
+
+  document.getElementById('frame-indicator').textContent = `${frameName}.jpg (${currentFrameIdx + 1}/${FRAMES.length})`;
+
+  // Update filmstrip active pill
+  document.querySelectorAll('.thumb-pill').forEach((pill, idx) => {
+    pill.classList.toggle('active', idx === currentFrameIdx);
+    if (idx === currentFrameIdx) {
+      pill.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    }
+  });
+
+  let visibleModels = MODELS;
+  if (currentFilter === 'exp2') {
+    visibleModels = MODELS.filter(m => m.suite_short === 'EXP_2');
+  } else if (currentFilter === 'exp1') {
+    visibleModels = MODELS.filter(m => m.suite_short === 'EXP_1');
+  } else if (currentFilter === 'head2head') {
+    visibleModels = MODELS.filter(m => m.id === 'm2f_baseline' || m.id === 'toponet_baseline');
+  }
+
+  visibleModels.forEach(m => {
+    const metrics = MODEL_METRICS[m.id][frameName] || {};
+    const card = document.createElement('div');
+    card.className = 'model-card';
+
+    const mDice = metrics.macro_dice || 0;
+    const fgDice = metrics.fg_dice || 0;
+    const assd = metrics.macro_assd || 0;
+    const rDice = metrics.ridge_dice || 0;
+    const sDice = metrics.sil_dice || 0;
+    const fDice = metrics.falc_dice || 0;
+
+    const imgRel = `${m.img_dir_rel}/${frameName}_diag.png`;
+
+    let stageContent = '';
+    if (currentView === 'full') {
+      stageContent = `
+        <div class="panel-labels">
+          <div>1. Input RGB Keyframe</div>
+          <div>2. Ground Truth Landmarks</div>
+          <div>3. Model Prediction</div>
+          <div>4. Topological Error Map</div>
+        </div>
+        <div class="image-wrapper">
+          <img src="${imgRel}" class="full-montage-img" alt="${m.name} ${frameName}" onclick="openLightbox('${imgRel}')">
+        </div>
+      `;
+    } else if (currentView === 'pred') {
+      stageContent = `
+        <div class="crop-container crop-pred">
+          <img src="${imgRel}" alt="Prediction" onclick="openLightbox('${imgRel}')">
+        </div>
+      `;
+    } else if (currentView === 'error') {
+      stageContent = `
+        <div class="crop-container crop-error">
+          <img src="${imgRel}" alt="Error Map" onclick="openLightbox('${imgRel}')">
+        </div>
+      `;
+    } else if (currentView === 'gt_pred') {
+      stageContent = `
+        <div class="side-by-side-grid">
+          <div class="side-box">
+            <div class="side-box-title">Ground Truth Reference</div>
+            <div class="crop-container crop-gt">
+              <img src="${imgRel}" alt="Ground Truth" onclick="openLightbox('${imgRel}')">
+            </div>
+          </div>
+          <div class="side-box">
+            <div class="side-box-title">Model Prediction</div>
+            <div class="crop-container crop-pred">
+              <img src="${imgRel}" alt="Prediction" onclick="openLightbox('${imgRel}')">
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    card.innerHTML = `
+      <div class="card-header">
+        <div class="card-title-wrap">
+          <span class="badge ${m.badge_class}">${m.suite_short}</span>
+          <div>
+            <div class="card-title" style="color:${m.color};">${m.name}</div>
+            <div class="card-desc">${m.desc}</div>
+          </div>
+        </div>
+        <div class="metrics-strip">
+          <div class="metric-badge">Macro DSC: <span class="${getValClass(mDice)}">${mDice.toFixed(1)}%</span></div>
+          <div class="metric-badge">FG DSC: <span class="${getValClass(fgDice)}">${fgDice.toFixed(1)}%</span></div>
+          <div class="metric-badge">ASSD: <span>${assd.toFixed(1)} px</span></div>
+          <div class="metric-badge" style="color:var(--text-muted);">
+            R: <span style="color:#22c55e;">${rDice.toFixed(0)}%</span> |
+            S: <span style="color:#ef4444;">${sDice.toFixed(0)}%</span> |
+            F: <span style="color:#60a5fa;">${fDice.toFixed(0)}%</span>
+          </div>
+        </div>
+      </div>
+      <div class="image-stage">
+        ${stageContent}
+      </div>
+    `;
+
+    grid.appendChild(card);
+  });
+}
+
+function setFrame(idx) {
+  currentFrameIdx = (idx + FRAMES.length) % FRAMES.length;
+  renderCards();
+}
+
+// Controls
+document.getElementById('btn-prev').addEventListener('click', () => setFrame(currentFrameIdx - 1));
+document.getElementById('btn-next').addEventListener('click', () => setFrame(currentFrameIdx + 1));
+
+const playBtn = document.getElementById('btn-play');
+playBtn.addEventListener('click', () => {
+  isPlaying = !isPlaying;
+  if (isPlaying) {
+    playBtn.textContent = '⏸ Pause';
+    playBtn.classList.add('active');
+    playInterval = setInterval(() => setFrame(currentFrameIdx + 1), 1200);
+  } else {
+    playBtn.textContent = '▶ Play';
+    playBtn.classList.remove('active');
+    clearInterval(playInterval);
+  }
+});
+
+// Filter Buttons
+document.querySelectorAll('.filter-btn').forEach(btn => {
+  btn.addEventListener('click', (e) => {
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    e.target.classList.add('active');
+    currentFilter = e.target.dataset.filter;
+    renderCards();
+  });
+});
+
+// View Buttons
+document.querySelectorAll('.view-btn').forEach(btn => {
+  btn.addEventListener('click', (e) => {
+    document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
+    e.target.classList.add('active');
+    currentView = e.target.dataset.view;
+    renderCards();
+  });
+});
+
+// Accordion toggle
+const summaryToggle = document.getElementById('summary-toggle');
+const summaryContent = document.getElementById('summary-content');
+const summaryIcon = document.getElementById('summary-icon');
+summaryToggle.addEventListener('click', () => {
+  const isHidden = summaryContent.style.display === 'none';
+  summaryContent.style.display = isHidden ? 'block' : 'none';
+  summaryIcon.textContent = isHidden ? '▼ Click to collapse' : '▲ Click to expand';
+});
+
+// Lightbox
+const lightbox = document.getElementById('lightbox');
+const lightboxImg = document.getElementById('lightbox-img');
+const lightboxClose = document.getElementById('lightbox-close');
+
+function openLightbox(src) {
+  lightboxImg.src = src;
+  lightbox.classList.add('active');
+}
+
+lightboxClose.addEventListener('click', () => {
+  lightbox.classList.remove('active');
+});
+
+lightbox.addEventListener('click', (e) => {
+  if (e.target === lightbox) lightbox.classList.remove('active');
+});
+
+// Keyboard navigation
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
+    setFrame(currentFrameIdx - 1);
+  } else if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
+    setFrame(currentFrameIdx + 1);
+  } else if (e.key === ' ') {
+    e.preventDefault();
+    playBtn.click();
+  } else if (e.key === 'Escape') {
+    lightbox.classList.remove('active');
+  } else if (e.key === '1') {
+    document.querySelector('.view-btn[data-view="full"]').click();
+  } else if (e.key === '2') {
+    document.querySelector('.view-btn[data-view="pred"]').click();
+  } else if (e.key === '3') {
+    document.querySelector('.view-btn[data-view="gt_pred"]').click();
+  } else if (e.key === '4') {
+    document.querySelector('.view-btn[data-view="error"]').click();
+  }
+});
+
+// Initial render
+renderCards();
+</script>
+</body>
+</html>
