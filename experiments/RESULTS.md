@@ -15,6 +15,7 @@
 | Mask2Former Single Scale | 65.35% | 52.22% | 35.77 px | 10.6 FPS (94.1 ms) |
 | Mask2Former w/o Self Query | 66.34% | 53.12% | 22.54 px | 10.6 FPS (94.5 ms) |
 | Mask2Former-Bezier | 59.20% | 44.97% | 30.98 px | 14.5 FPS (68.9 ms) |
+| LandmarkBezier (EXP_04) | *In Progress* | *In Progress* | *In Progress* | *In Progress* |
 
 ---
 
@@ -28,6 +29,7 @@
 | Mask2Former Single Scale | 64.58% | 51.54% | 36.65 px | 10.7 FPS (93.8 ms) |
 | Mask2Former w/o Self Query | 64.12% | 51.05% | 24.02 px | 10.6 FPS (93.9 ms) |
 | Mask2Former-Bezier | 55.74% | 41.64% | 38.46 px | 16.2 FPS (61.7 ms) |
+| LandmarkBezier (EXP_04) | *In Progress* | *In Progress* | *In Progress* | *In Progress* |
 
 Insight from analysing the result and the patient 40 difficult cases:
 - TopoNet is way more computational heavier than the Mask2Former due to the loss functions: the clDice and the Betti Loss Matching due to they cannot be done parralelly

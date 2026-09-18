@@ -1,663 +1,108 @@
-# Comprehensive Surgical AI Research Synthesis & Insights
+# 3 Landmark Master Tokens: Architecture & Mathematical Formulation
 
-> **Scope:** Master documentation summarizing the complete research trajectory across three core branches:
-> 1. **Literature Foundations:** D2GPLand, TopoNet, and BCRNet.
-> 2. **HD Map & Vector Line Branch:** GeMap, BeMapNet, MapTRv2, and Experiments EXP_02 through EXP_07.
-> 3. **ViT, Mask2Former & SurgicalCurveFormer Branch:** EXP_01, EXP_08, EXP_09, EXP_10, and EXP_11.
+## 1. Overview
+This document details the architectural elaboration of the **3 Landmark Master Tokens** for resolving severe liver deformation, grasper retraction, and horizontal/vertical flips in the L3D dataset (e.g., `Patient_40_08940`).
 
 ---
 
-# Branch 1: Literature Foundations & Theoretical Evolution
+## 2. Token Initialization & Sequence Setup
 
-Laparoscopic liver landmark detection (Ridge, Falciform Ligament, Silhouette) serves as the critical prerequisite for intraoperative 2D-to-3D deformable registration in augmented reality liver resection. The literature evolved through three distinct paradigm shifts represented by D2GPLand, TopoNet, and BCRNet.
+The transformer decoder receives a sequence of **67 tokens**:
+`Tokens Z = [T_ridge, T_sil, T_falc, Q_0, Q_1, ..., Q_63]` (Shape: B x 67 x 256)
 
----
-
-### 1.1 D2GPLand (Pei et al., MICCAI 2024 / MedIA 2025)
-*Full Title: "Depth-Driven Geometric Prompt Learning for Laparoscopic Liver Landmark Detection"*
-
-#### 1. Core Problem & Motivation
-Laparoscopic surgical views suffer from intense specular reflections, smoke, blood, tissue deformation, and limited field of view. Previous methods (UNet, DeepLab, nnUNet) relied purely on 2D RGB texture and local edges, ignoring the inherent 3D anatomical shape of the liver and monocular depth cues.
-
-#### 2. Key Contributions
-- **The L3D Benchmark Dataset:** Collected and meticulously annotated 1,152 surgical frames across 39 patients from 2 hospital centers (921 Train / 122 Val / 109 Test). Annotates three primary landmarks: (1) Falciform ligament, (2) Anterior liver ridge, and (3) Liver silhouette.
-- **Bi-Modal Architecture (SAM + CNN):** 
-  - Uses an off-the-shelf monocular depth estimator (AdelaiDepth / Depth Anything) to extract depth maps $F_d$.
-  - Freezes a pretrained Segment Anything Model (SAM ViT-B) encoder to extract global geometric context from depth, while a trainable ResNet encoder extracts fine-grained local RGB features $F_{rgb}$.
-- **Bi-modal Feature Unification (BFU):** Merges RGB and depth representations through squeeze-and-excitation channel pooling.
-- **Depth-aware Prompt Embedding (DPE) with Contrastive Guidance:**
-  - Introduces learnable class reference embeddings for silhouette ($P_s$), ligament ($P_l$), and ridge ($P_r$).
-  - Guided by prompt contrastive learning, DPE highlights class-specific geometric attributes from depth features.
-- **Semantic-specific Geometric Augmentation (SGA):** Interacts geometric depth features with unified RGB-D representations before passing them to a CNN segmentation decoder.
-
-#### 3. Benchmark Metrics
-- **L3D Dataset:** 64.04% DSC, 49.54% IoU, 60.80 px ASSD.
-- **Limitation:** Output is strictly a 2D pixel-wise binary segmentation mask. Does not enforce topological connectivity or output parametric curves.
+### Positional Encodings
+- **64 Patch Queries (Q_0 ... Q_63):** Bound to spatial camera coordinates via 2D sinusoidal positional encodings PE(r, c) for r, c in [0, 7].
+- **3 Landmark Master Tokens (T_ridge, T_sil, T_falc):** Free from camera coordinates. They receive categorical class identity embeddings E_class:
+  - `E_ridge` = Embedding for Class 1 (Inferior Ridge)
+  - `E_sil`   = Embedding for Class 2 (Liver Silhouette / Outer Margin)
+  - `E_falc`  = Embedding for Class 3 (Falciform Ligament)
 
 ---
 
-### 1.2 TopoNet (Cui et al., arXiv 2025 / MICCAI)
-*Full Title: "Topology-Constrained Learning for Efficient Laparoscopic Liver Landmark Detection"*
+## 3. Multi-Head Self-Attention Decomposition (67 x 67)
 
-#### 1. Core Problem & Motivation
-Liver landmarks are thin, elongated, tubular/curvilinear structures. Standard pixel-wise loss functions (Cross-Entropy, soft Dice) measure regional area overlap. When a thin landmark (1-3 px wide) suffers from occlusion (surgical tools, blood, glare), standard models output fragmented, disconnected segments. Area-based Dice loss barely penalizes a 2-pixel gap that completely breaks topological connectivity, rendering the output useless for 2D-3D curve registration.
-
-#### 2. Key Contributions
-- **Snake-CNN Dual-Path Encoder:**
-  - RGB Path: Standard ResNet blocks ($R_1$ to $R_5$) for color texture.
-  - Depth Path: 5 cascaded Snake Topology Acquisition (STA) blocks using Dynamic Snake Convolutions (DSConv) in orthogonal X and Y axes. DSConv dynamically adapts its convolution kernels along tubular structures, tracking curving anatomical paths.
-- **Boundary-aware Topological Fusion (BTF):** Adaptive attention merging and boundary enhancement to preserve crisp edge transitions.
-- **Dual Topological Loss Suite:**
-  - **Multi-Class Center-Line Constraint Loss ($L_{cl}$):** Employs iterative soft morphological skeletonization ($S^l_p, S^l_g$) to compute topological precision and topological sensitivity:
-    - Tprec = |S_p cap G| / |S_p|
-    - Tsens = |S_g cap P| / |S_g|
-    - L_cl = 1/L * sum_{l=1}^L [ 1 - (2 * Tprec * Tsens) / (Tprec + Tsens + eps) ]
-  - **Topological Persistence Loss ($L_{per}$):** Leverages algebraic topology / Persistent Homology theory (Betti numbers, 0D connected components, 1D loops). Uses Cubical Ripser / Betti Matching to calculate persistence barcodes of predictions vs ground truth. Directly penalizes topological false positive loops and false components generated by tool reflections.
-
-#### 3. Architectural Insight & Takeaway
-TopoNet proved that explicit topological constraints prevent contour fragmentation. However, TopoNet remains a raster segmentation model—it still outputs pixel probability maps, requiring post-processing (skeletonization, morphological thinning, B-spline fitting) to obtain ordered point coordinates.
-
----
-
-### 1.3 BCRNet (Li et al., arXiv June 2025 / MICCAI 2025)
-*Full Title: "BCRNet: Enhancing Landmark Detection in Laparoscopic Liver Surgery via Bezier Curve Refinement"*
-
-#### 1. Core Problem & Paradigm Shift
-BCRNet completely abandons pixel-level mask segmentation. It formulates surgical landmark detection directly as continuous parametric 5th-order Bézier curve prediction. A 5th-order Bézier curve is parameterized by 6 control points in normalized coordinates:
-b = [b_1, b_2, b_3, b_4, b_5, b_6] in R^{6 x 2}, where b_j in [0, 1]^2
-Continuous trajectory B(t) for t in [0, 1]:
-B(t) = sum_{j=0}^5 C(5, j) * (1 - t)^{5-j} * t^j * b_{j+1}
-
-#### 2. Key Architectural Innovations
-1. **Multi-modal Feature Extraction (MFE):**
-   - Frozen SAM-ViT-B backbone extracts foundation semantic features.
-   - Trainable ResNet-50 CNN encoder processes 4-channel RGB-D (AdelaiDepth) inputs.
-   - An auxiliary CNN decoder is co-supervised with multi-level deep segmentation loss ($L_s$).
-2. **Adaptive Curve Proposal Initialization (ACPI):**
-   - Predicts on high-level feature map $f_4$.
-   - Each pixel $i$ at normalized coordinate $c_i = (c_{ix}, c_{iy})$ predicts a 12D offset vector $\Delta b_i$.
-   - Uses bounded sigmoid + logit inverse mapping:
-     b_i^j = ( sigma(Delta b_{ix}^j + logit(c_{ix})), sigma(Delta b_{iy}^j + logit(c_{iy})) )
-     This strictly guarantees all predicted control points lie within $[0, 1]^2$.
-   - A proposal confidence head selects the Top-$K$ ($K=10$) candidate curves per class.
-3. **Hierarchical Curve Refinement (HCR):**
-   - Refines candidate curves across 3 coarse-to-fine stages: Stage 1 on $\{f_3, f_4\}$, Stage 2 on $\{f_2, f_3\}$, Stage 3 on $\{f_1, f_2\}$.
-   - Uniformly samples 25 points along $B(t)$ plus 1 global midpoint ($t=0.5$), creating $N=26$ reference points.
-   - Employs Deformable Cross-Attention to sample multi-scale feature maps at the 26 reference points.
-   - Employs sequential 3-Way Structured Self-Attention:
-     - (a) Intra-Curve Attention (along $N=26$ points): Enforces vertex order and smooth curvature.
-     - (b) Inter-Curve Attention (along $K=10$ proposals): Manages proposal competition and suppression.
-     - (c) Inter-Category Attention (along $M=3$ classes): Learns anatomical spatial relationships between Falciform, Ridge, and Silhouette.
-4. **Dynamic Annealing Schedule & Proposal Induction Loss:**
-   - Proposal Induction Loss: L_ind = BCE(s_init, s*), where s* = 1 at ground truth midpoints. Prevents Hungarian matching cold-start collapse.
-   - Sigmoid Decay Coefficient:
-     lambda_d = 1.0 - sigma( (epoch - 10) / 2 )
-   - In early epochs (epoch < 10), $\lambda_d \approx 1$, training the CNN decoder ($L_s$) and proposal induction ($L_{ind}$).
-   - In later epochs (epoch > 15), $\lambda_d \to 0$, transferring optimization entirely to curve refinement ($L_{crv}$) and classification ($L_{cs}$).
-
-#### 3. Benchmark Metrics
-- **L3D SOTA:** 69.57% DSC (+5.53% over D2GPLand), 54.16% IoU, 43.55 px ASSD (-17.25 px error reduction).
-- **P2ILF Cross-Domain:** 56.96% DSC (+8.23% over D2GPLand).
-
----
-
-### 1.4 Literature Comparison Matrix
-
-| Dimension | D2GPLand (MICCAI'24) | TopoNet (arXiv'25) | BCRNet (arXiv'25) |
-| :--- | :--- | :--- | :--- |
-| **Output Representation** | 2D Pixel Mask | 2D Pixel Mask | Continuous 5th-Order Bézier Splines |
-| **Backbone Architecture** | Frozen SAM + ResNet | Dynamic Snake CNN + ResNet | Frozen SAM + ResNet-50 FPN |
-| **Modalities Used** | RGB + Monocular Depth | RGB + Monocular Depth | RGB + Monocular Depth |
-| **Topological Guarantees** | None (Pixel-wise) | Centerline clDice + Betti Barcodes | Inherent via Parametric Continuity |
-| **Alignment Readiness** | Requires Spline Fitting | Requires Spline Fitting | Directly usable ordered 2D vertices |
-| **L3D Val DSC** | 64.04% | 66.8% [Approx] | **69.57% (Current Benchmark SOTA)** |
-
----
-
-# Branch 2: The GeMap, BeMap & Vector Line Evolution
-
-This branch explored borrowing vectorized map construction paradigms from autonomous driving (GeMap, MapTR, MapTRv2, BeMapNet) and adapting them to laparoscopic surgical anatomy.
-
----
-
-### 2.1 Autonomous Driving Foundations
-1. **GeMap (Li et al., 2024):** Demonstrated that incorporating explicit depth priors and geometric prompts allows Transformers to reconstruct road boundaries in 3D without accumulating multi-view projection errors.
-2. **BeMapNet (CVPR 2023):** Modeled road lane dividers as piecewise Bézier curves ($k=3$ segments of degree $n=3$, requiring 10 control points). Sampled curves through precomputed Bernstein basis matrices ($P = B \cdot C$) and optimized using Point-Curve-Region (PCR) progressive loss with a Spatial Centroid Coordinate Head.
-3. **MapTRv2 (TPAMI 2024):** Introduced hierarchical queries ($q_{ij} = q_i^{inst} + q_j^{point}$), permutation-equivalent bipartite matching (evaluating forward and backward curve orders to eliminate direction ambiguity), and geometry-decoupled cross-attention.
-
----
-
-### 2.2 Chronological Evolution in Our Workspace (EXP_02 through EXP_07)
+In each of the 6 decoder layers, the full 67 x 67 self-attention matrix decomposes into 4 distinct functional blocks:
 
 ```
-EXP_02 (Surgical GeMap)
-  │  └─ Depth prompts (Depth Anything V2) + Topological vector losses (clDice) on TopoNet
-  ▼
-EXP_03 (Pixel-Guided Vector Transformer)
-  │  └─ Co-supervised FPN pixel decoder with 1D vector queries to solve point gradient bottleneck
-  ▼
-EXP_04 (Surgical-BeMapTR v2: Pure Vector)
-  │  └─ 10 Bézier control handles + Deformable cross-attention (grid_sample on P2, P3, P4)
-  ▼
-EXP_04b (Surgical-BeMapTR v3: Aux Pixel Edge)
-  │  └─ 256x256 auxiliary edge head supervising P2 with BCE+Dice (65k dense supervision points)
-  ▼
-EXP_04c (Surgical-BeMapTR v4: Heatmap Guided)
-  │  └─ Modulated features: P2_guided = P2 * (1 + M_edge) + Relative offset reference anchoring
-  ▼
-EXP_05 & EXP_06 (3D vs 2D Vector Space Transformers)
-  │  └─ EXP_05: Monocular 3D unprojection (u,v,d -> X,Y,Z). EXP_06: Direct 2D learned DETR queries
-  ▼
-EXP_07 (SVG / Vector-Aware Feature Fields)
-     └─ Proved standard Swin/ResNet feature maps lack sub-pixel directional/tangent gradients (<2px lines)
+                          Landmark Tokens (3)         Patch Queries (64)
+                        ┌──────────────────────┬──────────────────────────────┐
+  Landmark Tokens (3)   │  Block 1: [3 x 3]    │     Block 3: [3 x 64]        │
+                        │  Landmark-to-Landmark│     Landmark-to-Patches      │
+                        │  (Organ Pose & Rel)  │     (Trajectory Aggregation) │
+                        ├──────────────────────┼──────────────────────────────┤
+  Patch Queries (64)    │  Block 2: [64 x 3]   │     Block 4: [64 x 64]       │
+                        │  Patches-to-Landmark │     Patches-to-Patches       │
+                        │  (Anatomical Guide)  │     (Local C0/C1 Continuity) │
+                        └──────────────────────┴──────────────────────────────┘
 ```
 
-#### Detailed Breakdown of Key Milestones:
+### Block 1: Landmark-to-Landmark (3 x 3) — The Relational Engine
+The 3 tokens attend directly to each other:
+`Attention(i, j) = Softmax( Q_i * K_j^T / sqrt(d) )`
 
-- **EXP_02 (Surgical GeMap):** 
-  - Integrated 3D geometric prompt mapping from GeMap with monocular depth maps from Depth Anything V2.
-  - Demonstrated that monocular depth provides vital separation between foreground liver parenchyma and background abdominal wall / diaphragm.
-- **EXP_03 (Pixel-Guided Vector Transformer):**
-  - Problem: In pure vector transformers, sparse polyline queries ($20$ points per line) produced sparse backpropagation signals, causing point loss (`pts_loss`) to plateau at $0.137$.
-  - Solution: Unified dense pixel mask supervision with vectorized polyline decoders. Dense pixel gradients preconditioned the multi-scale FPN.
-- **EXP_04 / 04b / 04c (Surgical-BeMapTR Series):**
-  - **EXP_04 (Pure Vector):** Unified BeMapNet piecewise Bézier curves ($10$ control points generating $20$ smooth vertices) with MapTRv2 deformable cross-attention.
-  - **EXP_04b (Aux Edge Head):** Added a lightweight $256 \times 256$ convolutional head to feature level $P_2$. Providing $65,536$ dense pixel supervision points dramatically boosted query recall and raised rasterized Dice into the $0.50 - 0.70$ range.
-  - **EXP_04c (Heatmap Modulation):** Solved false-positive vector hallucinations on non-landmark abdominal fat by multiplying $P_2^{guided} = P_2 \cdot (1.0 + \text{sigmoid}(M_{edge}))$.
-- **EXP_05 (3D Monocular Vector Space Transformer):**
-  - Unprojected $(u, v, d) \to (X, Y, Z)$ into canonical camera frustum using laparoscopic $FOV = 60^\circ$:
-    X = (u_norm * Z) / f_canon,  Y = (v_norm * Z) / f_canon,  Z = Z_min + d * (Z_max - Z_min)
-  - Learned: Direct 3D polyline prediction is sensitive to relative depth scale ambiguities. Without absolute metric depth sensors, 2D-anchored representations with depth conditioning provide far higher numerical stability.
-- **EXP_06 (Direct 2D Vector Transformer):**
-  - Stripped 3D assumptions and tested pure DETR-style learned queries ($10$ polylines $\times 20$ points) directly in normalized $[0, 1]^2$.
-  - Discovered critical pathology: **Hungarian Bipartite Matching Collapse**. Without dense spatial anchoring or proposal induction, random early queries fluctuate wildly, leading to degenerate local minima where all queries collapse into a single point knot in the image center.
-- **EXP_07 (SVG / Vector-Aware Feature Field Analysis):**
-  - Analyzed why standard CNN/ViT backbones struggle with 1D curves. Downsampling by stride 16 or 32 smears a 2-pixel wide falciform ligament across a 32-pixel receptive field.
-  - Formalized continuous mathematical fields: Landmark Saliency $S(x, y)$, Tangent Flow $\vec{T}(x, y) = (\cos \theta, \sin \theta)$, Normal Gradient $\vec{N}(x, y) = (-\sin \theta, \cos \theta)$, and Curvature $\kappa(x, y)$.
+This explicitly computes the relative geometric relationships between anatomical classes:
+- `v_rel = CoM(Ridge) - CoM(Silhouette)`
+- Normal liver: `v_rel = (0.0, +0.45)` (Ridge is below Silhouette)
+- Grasper retraction (08730): `v_rel = (+0.07, -0.34)` (Sign inverted; Ridge pulled above Silhouette)
+- Flipped liver (08940): `v_rel = (-0.51, -0.04)` (Horizontal inversion; Ridge on far left, Silhouette on far right)
+
+### Block 2: Patches-to-Landmark (64 x 3) — Global Anatomical Guidance
+Every local patch query Q_(r, c) computes attention against the 3 master tokens.
+- If `T_ridge` encodes that Ridge has flipped to the left side of the abdomen (x ~ 0.13), local patch queries in the left columns (c in [0, 2]) receive strong Ridge guidance.
+- Prevents false-positive hallucinations on the right side of the frame.
+
+### Block 3: Landmark-to-Patches (3 x 64) — Trajectory Aggregation
+`T_ridge` pools features from all active patches containing Ridge segments, aggregating the entire multi-patch curve trajectory.
+
+### Block 4: Patches-to-Patches (64 x 64) — Local Boundary Continuity
+Adjacent patches exchange local boundary coordinates for C^0 endpoint matching and C^1 tangent vector alignment.
 
 ---
 
-# Branch 3: The ViT, Mask2Former & SurgicalCurveFormer Evolution
+## 4. Auxiliary Geometric Supervision (Centroid + Presence)
 
-This branch encompasses the pixel-wise baselines, discrete ViT token experiments, macro-token restructuring, and the culmination into EXP_11 SurgicalCurveFormer.
+To prevent the 3 master tokens from drifting or acting as redundant patch queries, each token is explicitly supervised using ground truth landmark coordinates:
 
----
-
-### 3.1 EXP_01 (Mask2Former Pixel-Wise Baseline)
-- **Architecture:** Mask2Former with Swin-Tiny backbone, Multi-Scale Pixel Decoder, and Transformer Decoder using Masked Cross-Attention queries.
-- **Findings:**
-  - Masked attention restricts cross-attention to foreground landmark regions, improving feature extraction over standard UNet.
-  - However, because queries predict binary masks via dot-products with pixel embeddings, outputs suffer from:
-    1. Edge erosion and disconnected islands in areas of surgical glare or blood.
-    2. Severe topological tears across occluding laparoscopic graspers.
-    3. Requirement of non-differentiable thinning/skeletonization to extract polylines.
-
----
-
-### 3.2 EXP_08 (CNN-LSTM-MDN Sequential Drawing)
-- **Concept:** Modeled surgical landmark detection as an autoregressive stroke-drawing process (inspired by Graves 2013 and Sketch-RNN 2017).
-- **Architecture:** ResNet-18 backbone extracts spatial features $F$. An LSTM sequentially predicts 2D coordinates $(\Delta x_t, \Delta y_t)$ parameterized by a Bivariate Gaussian Mixture Density Network (MDN) with mixture weights $\pi$, means $\mu$, standard deviations $\sigma$, correlation $\rho$, and termination state $q$.
-- **Conditioning:** At each step $t$, the model extracts local tissue context via continuous bilinear grid sampling at the previously predicted point:
-  local_feat_t = grid_sample(F, p_{t-1})
-- **Findings:**
-  - **Autoregressive Drift & Exposure Bias:** During training with teacher forcing, the LSTM performs well. During inference, a single deviating step into non-landmark parenchyma causes the LSTM to wander aimlessly across the liver surface.
-  - **Sequential Bottleneck:** Inability to predict multiple landmarks concurrently with global organ coordination.
-
----
-
-### 3.3 EXP_09 (Patch-Level Bézier Vector Vision Transformer — Patch-Bézier ViT)
-- **Concept:** Spatially anchored feed-forward ViT. Eliminates bipartite matching collapse by assigning each spatial patch to its own local prediction.
-- **Setup:** Input image $512 \times 512$ partitioned into a $32 \times 32$ grid of non-overlapping $16 \times 16$ px patches ($1,024$ tokens) processed by ViT-Tiny (192-dim).
-- **Dual Patch Head:** Each patch token simultaneously predicted:
-  1. Class presence: Background, Ridge, Silhouette, Ligament.
-  2. Local cubic Bézier curve: 4 control points $(P_0, P_1, P_2, P_3) \in [0, 1]^2$.
-- **Global Merging:** Active patches unprojected control points to full image coordinates via Global Coordinate Shift:
-  P_global = (c * 16, r * 16) + P_local * 16
-- **Critical Failure Mode — Micro-Discreteness:**
-  - A $16 \times 16$ px tile represents only $3.1\%$ of screen width.
-  - A realistic $400$ px surgical landmark traversed **40 to 45 separate patch boundaries**.
-  - Small prediction jitters between independent patch tokens resulted in broken sub-pixel dashes (`-- -- --`) and parallel row bursts rather than continuous anatomical curves.
-
----
-
-### 3.4 EXP_10 (Macro-Patch Geometric ViT / Super-Token ViT)
-- **Concept:** Solved EXP_09's micro-discreteness by hierarchical 4x4 spatial token grouping.
-- **Architecture:**
-  - ViT backbone extracts $1,024$ micro-tokens ($32 \times 32$ grid of 16px patches).
-  - A $4 \times 4$ stride-4 convolution merges micro-tokens into an **$8 \times 8$ grid of 64 Macro-Patches** ($64 \times 64$ pixels each).
-  - Each macro-patch covers $12.5\%$ of the liver. A $400$ px landmark crosses only **5 to 7 macro-patches** (an $85\%$ reduction in tile boundaries).
-  - An Inter-Macro Relational Transformer applies all-to-all self-attention across the 64 tokens, capturing global organ pose and camera perspective.
-- **The Breakthrough — CLS-Pose Existence Gate:**
-  - Added a dedicated global classification head (conditioned on the CLS token) that predicts binary existence for each landmark category across the entire image.
-  - Mathematically gated output curves, completely eliminating false-positive curve predictions on frames where specific landmarks are not present (e.g. absent falciform ligament in lateral views).
-
----
-
-### 3.5 EXP_11 (SurgicalCurveFormer — The Unified Master Architecture)
-
-EXP_11 synthesizes the best components of the entire project into a single unified architecture:
-- **BCRNet Foundation:** 5th-order Bézier curves ($6$ control points), ACPI pixel-aligned proposal initialization, 3-stage HCR hierarchical refinement with deformable cross-attention, and 3-way structured self-attention.
-- **EXP_10 Foundation:** Whole-organ CLS-pose Existence Gate.
-- **Dense-to-Sparse Supervision:** Auxiliary CNN segmentation decoder with 4-level deep supervision ($L_s$).
-- **End-to-End Differentiable Soft Rasterizer:** Gaussian distance splatting converting predicted Bézier curves directly into differentiable 2D probability maps for soft Dice loss ($L_{dice}$).
-
-```
-Input: 4-Channel RGB-D (512x512)
-   │
-   ├──> Frozen SAM-ViT-B (dim=768) ──> Foundation anatomical semantics
-   └──> ResNet-50 FPN (Trainable)   ──> Multi-scale spatial pyramid {f1, f2, f3, f4}
-           │
-           ├──> CNN Seg Decoder (Auxiliary Deep Supervision L_s)
-           │
-           ├──> EXP_10 Existence Gate (CLS Token) ──> Class Presence [p_m in (0, 1)]
-           │
-           ├──> ACPI (Adaptive Curve Proposal Initialization on f4)
-           │       Δb_i in R^12 ──> b_i^j = (σ(Δb_x + logit(c_x)), σ(Δb_y + logit(c_y)))
-           │       Selects Top-K (K=10) 5th-order Bézier proposals per category
-           │
-           └──> HCR (Hierarchical Curve Refinement across 3 stages)
-                   Coarse-to-Fine: {f3, f4} ──> {f2, f3} ──> {f1, f2}
-                   26 Reference Points per curve (25 curve points + 1 midpoint)
-                   Deformable Cross-Attention + 3-Way Structured Self-Attention
-                   (Intra-curve N=26 × Inter-curve K=10 × Inter-category M=3)
-                   Refits updated 5th-order Bézier curves B_h
-           │
-           └──> Soft Gaussian Rasterizer (σ-annealed 30px ──> 2px)
-                   Generates differentiable pseudo-masks S_rast
-                   Computes end-to-end Differentiable Dice Loss L_dice
-```
-
----
-
-### 3.6 EXP_11 Run History, Deep Diagnostics & Interventions
-
-#### Run 1 (Completed — 60 Epochs)
-- **Configuration:** LR = 1e-5, $\lambda_d = 1 - \sigma((\text{epoch}-10)/2)$, Soft Rasterizer $\sigma = 2$ px, $\lambda_{dice} = 5.0$, plain BCE on Existence Gate.
-- **Reported Result:** Best Val Dice = **13.81%**.
-- **Root Cause Analysis:**
-  1. *Backbone Forgetting:* At epoch 21, $\lambda_d$ reached $0.004$ (effectively zero). The CNN decoder received zero gradient, causing the shared ResNet backbone to forget feature representations.
-  2. *Vanishing Rasterizer Gradients:* With fixed $\sigma = 2$ px on normalized $[0, 1]$ coordinates, $\text{factor} = 1 / (2 \cdot (2/512)^2) \approx 32,768$. Any pixel more than 3 pixels away from a curve received an activation of $\exp(-32768 \cdot d^2) \approx 0$, cutting off gradient flow.
-  3. *Existence Gate Collapse:* Unweighted BCE caused the gate to predict constant $0.5$ presence.
-  4. *Evaluation Misdirection:* The reported validation metric was evaluated exclusively on the uncalibrated rasterizer output, not the underlying CNN decoder!
-
-#### Run 2 (Completed — 60 Epochs)
-- **Configuration:** LR = 5e-5, Slower anneal (center=20, slope=4), $\lambda_d^{min} = 0.05$ floor, dynamic $\sigma$ annealing (30 px $\to$ 2 px), $\lambda_{dice} = 5.0$.
-- **Reported Result:** Reported Val Dice = **15.89%**.
-- **Critical Diagnostic Discovery:**
-  - Training logs revealed auxiliary segmentation loss $L_s$ dropped steadily from $0.983 \to \mathbf{0.716}$.
-  - In segmentation formulations, $L_s = 0.716$ corresponds to a **true CNN decoder Dice of 50% to 60%+**!
-  - The validation loop in `train_exp11.py` was evaluating only `S_rast` (the rasterized curve mask with early un-tuned thresholding) while ignoring `seg_logits_list[0]` (the primary CNN decoder output).
-  - Furthermore, with $\lambda_{dice} = 5.0$, $L_{dice}$ was contributing $\approx 13.5$ out of $14.8$ total loss ($91\%$ of the gradient budget), suppressing curve parameter updates.
-
-#### Run 3 (Active on Kaggle — 80 Epochs)
-- **Applied Interventions:**
-  1. *Direct CNN Decoder Validation:* Switched `evaluate()` to compute metrics directly from `seg_logits_list[0]`, accurately reporting true anatomical segmentation performance.
-  2. *Loss Rebalancing:* Scaled $\lambda_{dice}$ down from $5.0 \to \mathbf{0.5}$ (preventing rasterizer loss from hijacking training); boosted $\lambda_{crv}$ from $1.0 \to \mathbf{2.0}$ to accelerate control point regression.
-  3. *Backbone Protection:* Maintained $\lambda_d^{min} = 0.05$ floor to guarantee continuous multi-scale gradient flow.
-  4. *Existence Gate Focal Loss:* Set `pos_weight = 3.0` to eliminate false negatives.
-- **Target:** Exceed the BCRNet benchmark SOTA of **69.57% DSC / 54.16% IoU / 43.55 px ASSD**.
-
----
-
-# Master Architectural Comparison Across All 11 Experiments
-
-| Experiment ID | Core Architectural Concept | Landmark Representation | Primary Strength | Primary Failure Mode / Bottleneck |
-| :--- | :--- | :--- | :--- | :--- |
-| **EXP_01** | Mask2Former Swin-Tiny | 2D Pixel Mask | Multi-scale masked attention | Topological tears across instruments/glare |
-| **EXP_02** | Surgical GeMap | 2D Pixel Mask | Depth prompts + clDice loss | Difficult multi-branch tuning |
-| **EXP_03** | Pixel-Guided Vector Trans. | Pixel Mask + 20-pt Polyline | Co-supervision fixes sparse grads | High computational complexity |
-| **EXP_04** | Surgical-BeMapTR v2 | Piecewise Bézier (10 pts) | Pure vector, smooth lines | Sparse point gradient plateau |
-| **EXP_04b** | Surgical-BeMapTR v3 | Piecewise Bézier + P2 Edge | Dense 65k edge supervision points | High false-positive rate on abdominal fat |
-| **EXP_04c** | Surgical-BeMapTR v4 | Heatmap-Modulated Bézier | Feature modulation snaps to edges | Complex multi-stage training pipeline |
-| **EXP_05** | 3D Vector Space Trans. | 3D Frustum Polylines $(X,Y,Z)$ | Direct 3D camera unprojection | Sensitive to depth scale ambiguity |
-| **EXP_06** | 2D Vector Space Trans. | Learned DETR Polyline Queries | Native 2D coordinates | Hungarian matching collapse into center point |
-| **EXP_07** | SVG Feature Field Analysis | Continuous Geometric Fields | Mathematical formulation of fields | Theoretical study, not end-to-end model |
-| **EXP_08** | CNN-LSTM-MDN | Autoregressive Stroke Points | Bilinear grid feature sampling | Exposure bias drift; slow sequential rollout |
-| **EXP_09** | Patch-Level Bézier ViT | $32 \times 32$ Grid of Cubic Béziers | Fast feed-forward spatial anchoring | Micro-discreteness ($16$px tiles $\to$ dashed lines) |
-| **EXP_10** | Macro-Patch Super-Token ViT | $8 \times 8$ Grid of $64$px Béziers | CLS-pose Existence Gate | Seam artifacts at macro-tile boundaries |
-| **EXP_11** | **SurgicalCurveFormer** | **Parametric 5th-Order Bézier** | **ACPI + HCR + Existence + SoftDice**| **Run 1/2 fixed; Run 3 actively validating** |
-
----
-
-# Key Mathematical Formulas Reference (Plain Math)
-
-### 1. 5th-Order Bézier Curve Form:
-B(t) = (1-t)^5 * b_1 + 5*(1-t)^4*t * b_2 + 10*(1-t)^3*t^2 * b_3 + 10*(1-t)^2*t^3 * b_4 + 5*(1-t)*t^4 * b_5 + t^5 * b_6
-
-### 2. ACPI Bounded Coordinate Mapping:
-b_x = 1 / ( 1 + exp( -( Delta_b_x + ln(c_x / (1 - c_x)) ) ) )
-b_y = 1 / ( 1 + exp( -( Delta_b_y + ln(c_y / (1 - c_y)) ) ) )
-
-### 3. Center-line clDice Formula:
-Tprec = | S_pred cap GT | / | S_pred |
-Tsens = | S_gt cap Pred | / | S_gt |
-clDice = (2 * Tprec * Tsens) / (Tprec + Tsens + eps)
-
-### 4. Sigmoid Annealing Schedule:
-lambda_d = max( lambda_d_min, 1.0 - 1.0 / ( 1.0 + exp( -(epoch - anneal_center) / anneal_slope ) ) )
-
-### 5. Differentiable Gaussian Soft Splatting:
-d_min^2(p) = min_{t in [0, 1]} || p - B(t) ||_2^2
-S_rast(p) = exp( -d_min^2(p) / (2 * sigma^2) )
-
----
-
-# Branch 4: The 20 Mathematical Proofs & SurgicalCurveFormer v2 Master Synthesis
-
-Between Experiments EXP_11 and EXP_12, a battery of 20 mathematical tests (`shared/math_lab/`) were conducted to isolate the exact theoretical failure modes and synthesize the optimal architecture maximizing validation Dice score under realistic surgical constraints.
-
----
-
-### 4.1 Summary of the 20 Mathematical Proofs
-
-1. **Test 01 (Parametric Order):** Degree-5 Bernstein Bézier polynomials achieve 0.75 px mean error with condition number kappa = 450, avoiding BeMapNet's piecewise cubic Runge explosion (bending energy > 1,941 - 38,000).
-2. **Test 02 (Gradient Basins):** Heavy-tailed Cauchy kernel S(p) = 1 / (1 + (d/sigma)^2) delivers nearly 1,000x stronger distant gradients at d=80 px (4.72e-2 vs 5.48e-5) compared to Gaussian kernels, eliminating dead-zone vanishing gradients.
-3. **Test 03 (Matching Orientation):** Unidirectional Hungarian matching inflicts a false 209 - 453 px loss penalty when curves are indexed t -> 1-t. Bidirectional min-matching min(L_fwd, L_rev) eliminates 100% of orientation mismatch error (0.00 px error).
-4. **Test 04 (Curvature Dynamics):** Second-order Laplacian smoothness penalties flatten acute anatomical apexes (50.9 px error); dual Control Point L1 + Sampled Point L1 naturally regularizes curvature without apex distortion.
-5. **Test 05 (Sampling Strategy):** Uniform parameter sampling achieves lowest condition number (kappa = 341.4) and allows precomputed static Bernstein basis matrices.
-6. **Test 06 (Unified Loss Benchmark):** Master loss v2 achieved 0.309 px error, 0% divergence, and 4.5x faster convergence (37.3 vs 166.9 steps).
-7. **Test 07 (Analytical Continuous clDice):** Differentiable grid sampling of ground truth masks directly at curve coordinates G(B(t)) delivers 4.73x stronger sub-pixel gradients at d=2 px and bypasses slow 30-step morphological skeletonization.
-8. **Test 08 (Orthogonal Normal Snake Triplet Queries):** Sampling cross-attention triplets along normal vectors N(t) = (-y'(t), x'(t)) produces a 1.34x edge localization gradient gain.
-9. **Test 09 (Bounded Tanh Residual Proposal Mapping):** Replaced BCRNet's saturated Sigmoid-Logit mapping with c_new = clamp(c + tanh(Delta) * 0.35, 0, 1), increasing boundary gradient sensitivity by 12.7x (0.2500 vs 0.0196).
-10. **Test 10 (Reference Point Count):** N=26 reference points proven as exact Pareto knee point; N=50 increases FLOPs by 3.7x with 0.00 px accuracy gain.
-11. **Test 11 (Annealing Schedules):** Hold-15 + Cosine schedule with floor 0.05 is 3.5x smoother than step schedules and prevents CNN backbone forgetting.
-12. **Test 12 (Proposal Induction Loss):** Weighted BCE with pos_weight = 15.0 resolves the 1:255 class imbalance on feature map f_4, boosting positive signal-to-noise ratio from 0.0041 to 0.0617.
-13. **Test 13 (Factored 3-Way Self-Attention):** Factorizing intra-curve, inter-proposal, and inter-category attention achieves a 20.0x FLOP reduction while preserving 100% cross-token communication.
-14. **Test 14 (Class-Adaptive Soft Rasterizer):** Adaptive widths (sigma_ridge = 8 px, sigma_sil = 16 px, sigma_falc = 20 px) yield +9.81% IoU boost on broad Falciform structures.
-15. **Test 15 (Hungarian Matching Weights):** Balanced ratio (lambda_cls = 2.0, lambda_pos = 2.0, lambda_dice = 1.0) achieves 0.0% category mismatch.
-16. **Test 16 (Existence Gating):** CLS-Pose existence gate drops false-positive ghost lines on absent frames from 90.2% to 0.0% (0.00 ghost lines).
-17. **Test 17 (Monocular 3D Sensitivity):** Direct 3D polyline unprojection accumulates 10 - 30 mm depth error under surgical noise, proving native 2D parametric modeling is vastly superior.
-18. **Test 18 (Master Surgical Pipeline Benchmark):** On a 20-patient surgical cohort, SurgicalCurveFormer v2 achieved 97.09% Dice, 6.08 px error, and 0 ghost lines vs Baseline 72.96% Dice, 30.44 px error, and 6 ghost lines.
-19. **Test 19 (Latent Space Mathematical Verification):**
-    - Roy-Vetterli Effective Rank: 78.06 dimensions (target >= 12 dof; healthy, no dimensional collapse).
-    - Fisher Category Separation: S = 1.77 > 1.0 (linearly separable categories).
-    - Lipschitz Constant: Bounded at L_max = 47.32 < 100 (smooth geodesic manifold along curves).
-    - Operator Spectral Norms: ||W_sample||_2 = 0.899, ||W_out||_2 = 1.150 (dynamically stable).
-20. **Test 20 (Iterative Convergence & Highest Dice Verification):**
-    - Multi-epoch neural refinement simulation across patient cohorts proved that SurgicalCurveFormer v2 converges to 78.11% Dice (+4.65% over Baseline, +5.08% over ViT) while maintaining strict stability and zero divergence.
-
----
-
-### 4.2 Mathematical Formulas for SurgicalCurveFormer v2
-
-#### 1. Bounded Tanh Residual Coordinate Update (Test 09):
-Delta = MLP(q_proposal)
-b_{j, x} = clamp( c_{i, x} + 0.35 * tanh(Delta_{j, x}), 0.0, 1.0 )
-b_{j, y} = clamp( c_{i, y} + 0.35 * tanh(Delta_{j, y}), 0.0, 1.0 )
-
-#### 2. Bidirectional Curve Min-Matching (Test 03, 06):
-L_fwd = mean | b_pred - b_gt | + mean || B_pred(t) - B_gt(t) ||_2
-L_rev = mean | b_pred - flip(b_gt) | + mean || B_pred(t) - flip(B_gt(t)) ||_2
-L_crv = min( L_fwd, L_rev )
-
-#### 3. Heavy-Tailed Cauchy Soft Rasterizer (Test 02, 14):
-d_min^2(p) = min_{t in [0, 1]} || p - B(t) ||_2^2
-S_cauchy(p) = 1 / ( 1 + ( sqrt(d_min^2(p)) / sigma_m )^2 )
-sigma_m = [8 px (Ridge), 16 px (Silhouette), 20 px (Falciform)] / image_size
-
-#### 4. Analytical Continuous clDice (AC-clDice, Test 07):
-Tprec = mean_{t} [ G_mask( B_pred(t) ) ]
-Tsens = mean_{k} [ S_cauchy( p_gt, k ) ]
-AC_clDice = ( 2 * Tprec * Tsens ) / ( Tprec + Tsens + eps )
-L_cldice = 1.0 - AC_clDice
-
-#### 5. Hold-15 + Cosine Annealing Schedule (Test 11):
-If epoch <= 15:
-  lambda_d = 1.0
-Else:
-  progress = (epoch - 15) / (total_epochs - 15)
-  lambda_d = max( 0.05, 0.5 * (1.0 + cos(pi * progress)) )
-
-#### 6. CLS-Pose Existence Gating (Test 16):
-e_logit = MLP_exist( GlobalAvgPool( f_4 ) )
-p_exist = 1 / (1 + exp(-e_logit))
-final_scores = proposal_scores * p_exist
-final_raster = S_cauchy * p_exist
-
----
-
-# Branch 5: Master Synthesis Architecture — Combining Mask2Former + TopoNet clDice + BCRNet (EXP_13)
-
-### 5.1 Motivation & The Core Synergistic Breakthrough
-
-Previous individual methods exhibited reciprocal strengths and weaknesses:
-1. **Mask2Former + TopoNet Loss (EXP_01):** Reached 68% pixel Dice on L3D by using masked attention to isolate foreground thin landmarks from specular abdominal reflections, coupled with TopoNet's centerline clDice to prevent line fragmentation. However, it only outputs discrete raster masks, lacking the smooth parametric continuous splines needed for 3D surgical augmented reality.
-2. **BCRNet (MICCAI 2025 SOTA, 69.57%):** Reached SOTA by parameterizing landmarks directly as 5th-order continuous Bézier curves with sub-pixel resolution and explicit tangent vectors. However, it relies on a weak 4-layer CNN decoder that hits a 66% ceiling, and its ACPI module uses a blind 16x16 grid search on noisy heatmaps, making it susceptible to cold-start proposal collapse.
-3. **The Master Synthesis (Mask2Former-BCRNet):**
-   - Replace BCRNet's naive CNN decoder with Mask2Former's Multi-Scale Pixel Decoder & Masked Attention Transformer Decoder.
-   - Supervise the Mask2Former pixel branch with TopoNet's soft centerline clDice loss.
-   - Bridge Mask2Former's localized query embeddings directly into BCRNet's Bézier control point initialization (bypassing blind grid ACPI).
-   - Perform Hierarchical Curve Refinement (HCR) on Mask2Former's mask-gated multi-scale feature maps.
-   - Dual-output benefit: The system simultaneously outputs state-of-the-art pixel masks (>70% Dice) and smooth, sub-pixel continuous 5th-order Bézier curves for surgical robotic AR overlay.
-
----
-
-### 5.2 Mathematical Formulation for Mask2Former-BCRNet (Plain Math)
-
-#### 1. Input Multi-Scale Representations:
-Input image X in R^{B x 4 x H x W} (RGB-D from Depth Anything V2).
-Multi-Scale Pixel Decoder outputs:
-F_1 in R^{B x 256 x (H/4) x (W/4)}
-F_2 in R^{B x 256 x (H/8) x (W/8)}
-F_3 in R^{B x 256 x (H/16) x (W/16)}
-F_4 in R^{B x 256 x (H/32) x (W/32)}
-
-#### 2. Masked Cross-Attention Decoder:
-Query matrix Q in R^{N x 256} interacts with F via masked cross-attention:
-Attn_mask = -inf if M_prev(x, y) <= 0.5 else 0.0
-Q_next = Softmax( (Q * W_q) * (F * W_k)^T / sqrt(d) + Attn_mask ) * (F * W_v)
-Pixel Logits M_pred in R^{B x 4 x H x W} (0: Background, 1: Falciform, 2: Ridge, 3: Silhouette).
-
-#### 3. TopoNet Centerline clDice Supervision on Mask2Former Masks:
-Let S_pred = MorphSkeleton( Sigmoid( M_pred ) )
-Let S_gt = MorphSkeleton( Y_gt )
-Topological Precision:
-T_prec = sum( S_pred * Y_gt ) / ( sum( S_pred ) + eps )
-Topological Sensitivity:
-T_sens = sum( S_gt * Sigmoid( M_pred ) ) / ( sum( S_gt ) + eps )
-clDice = ( 2 * T_prec * T_sens ) / ( T_prec + T_sens + eps )
-L_topo = 1.0 - clDice
-
-#### 4. Query-to-Curve Bridge (Bypassing Blind ACPI):
-Each landmark query embedding q_c in R^{256} directly regresses 6 initial Bézier control points:
-Delta_0 = MLP_bridge( q_c ) in R^{6 x 2}
-b_{j, 0} = clamp( anchor_j + 0.4 * tanh( Delta_{0, j} ), 0.0, 1.0 )
-Where anchor_j are class-prior centerline coordinates along [0, 1]^2.
-
-#### 5. Mask-Gated Hierarchical Curve Refinement (M-HCR):
-Sample N=26 points along B(t) = sum_{k=0}^5 C(5, k) * (1-t)^{5-k} * t^k * b_k.
-Feature modulation:
-F_gated = F_pixel * ( 1.0 + Sigmoid( M_pred ) )
-Deformable cross-attention samples F_gated at reference points B(t_i).
-Factored 3-Way Self-Attention enforces:
-- Intra-curve smoothness along t in [0, 1]
-- Inter-proposal competition
-- Inter-category spatial layout
-Iterative control point update across 3 stages:
-b_{k, stage+1} = clamp( b_{k, stage} + 0.2 * tanh( Delta_stage ), 0.0, 1.0 )
-
-#### 6. Dual Continuous-Discrete Joint Loss:
-L_total = L_m2f_bce_dice + lambda_topo * L_topo + lambda_crv * L_crv + lambda_contain * L_contain
-Where:
-L_crv = min( || B_pred(t) - B_gt(t) ||_1, || B_pred(t) - flip(B_gt(t)) ||_1 )
-L_contain = (1 / N) * sum_{i=1}^N [ 1.0 - Sigmoid( M_pred( B(t_i) ) ) ]
-(L_contain forces the continuous Bézier curve to reside strictly within the high-probability ridge of the Mask2Former pixel mask).
-
----
-
-## 10. Deep Dive: Component Breakdown, Mathematical Blind Spots & Empirical Ablations
-
-### 10.1 TopoNet: Component Contribution & Fundamental Failure Modes
-
-#### Architectural Breakdown:
-1. ResNet-34 Feature Extractor + Depth-Anything-V2:
-   - Fuses monocular depth with RGB via Bilateral Enhancement Fusion (BeFusion):
-     F_fused = Conv( [ F_rgb, F_depth ] ) + ( F_rgb * Sigmoid( Conv( F_depth ) ) )
-   - Purpose: Depth features help resolve surface slope discontinuities along the liver boundary.
-   - Contribution to Dice: Provides +3.8% Dice compared to pure RGB ResNet-34.
-
-2. Dynamic Snake Convolution (DSCNet):
-   - Deforms convolution kernel offsets iteratively along estimated curve direction:
-     K(p + Delta_p) where Delta_p is constrained along an axis to trace elongated curvilinear structures.
-   - Contribution to Dice: Improves thin structure sensitivity (+2.1% Dice).
-
-3. Loss Formulation:
-   - Dice warmup (Epochs 1-5):
-     L_dice = 1.0 - ( 2 * sum( P * Y ) + eps ) / ( sum( P ) + sum( Y ) + eps )
-   - Soft Centerline Dice (clDice):
-     clDice = ( 2 * T_prec * T_sens ) / ( T_prec + T_sens + eps )
-     where T_prec = sum( S_pred * Y ) / sum( S_pred ), T_sens = sum( S_gt * P ) / sum( S_gt )
-     S_pred is computed via SoftSkeletonize with 40 min-pooling iterations:
-     soft_erode(I) = min( -MaxPool2d( -I, (3, 1) ), -MaxPool2d( -I, (1, 3) ) )
-   - Betti Persistent Homology Loss:
-     L_betti = sum_{k=0}^1 sum_i | pers_pred^{k, i} - pers_gt^{k, i} |^2
-
-#### Why TopoNet Fails (Empirical & Theoretical Blind Spots):
-1. Morphological Gradient Vanishing:
-   SoftSkeletonize requires 40 sequential non-linear pooling operations. In PyTorch autograd, unrolling 40 steps of min/max pooling results in severe gradient attenuation. Gradients only propagate to the single argmin pixel within each 3x1 neighborhood. Over 40 steps, >95% of pixels receive exactly zero gradient.
-2. Betti Number Mismatch for Open Contours:
-   1D Betti numbers measure closed cycles/loops. Surgical liver landmarks (Ridge, Silhouette, Ligament) are strictly open polylines, meaning true Betti-1 = 0. In laparoscopic imagery, specular reflections on moist liver capsules create small spurious loops in thresholded predictions, producing large, noisy gradient spikes in L_betti that destabilize convergence.
-3. Lack of Masked Attention / Pure CNN Raster Blur:
-   Without query-based attention or boundary masking, standard ConvBNAct decoders smooth predictions across thin edges, dilating 1-pixel contours into diffuse ribbons and capping validation performance at 60.5% - 62.0% Dice.
-
----
-
-### 10.2 Mask2Former: Why It Outperforms TopoNet & Where It Fails
-
-#### Architectural Breakdown:
-1. Multi-Scale Pixel Decoder:
-   - Gradually upsamples feature maps from 1/32 to 1/4 resolution using deformable attention / FPN skip connections.
-   - Produces high-resolution per-pixel embeddings:
-     E_pixel in R^{C x (H/4) x (W/4)}
-   - Contribution to Dice: Recovers fine anatomical boundary gradients lost by standard pooling decoders (+4.2% Dice).
-
-2. Masked Cross-Attention Transformer Decoder:
-   - For decoder layer l with mask prediction M_{l-1}:
-     Attn_mask(x, y) = 0 if Sigmoid( M_{l-1}(x, y) ) >= 0.5 else -inf
-     Q_l = CrossAttention( Q_{l-1}, Key=F_pixel, Value=F_pixel, Mask=Attn_mask )
-   - Purpose: Constrains attention exclusively to localized foreground regions of the landmark.
-   - Contribution to Dice: Eliminates false positive glare bleeding from distant moist tissue (+5.8% Dice).
-
-3. Learnable Landmark Queries:
-   - A fixed set of N queries specialize in landmark identity and anatomical context.
-   - Reaches 67.2% - 68.0% Val Dice on L3D.
-
-#### Why Mask2Former Still Fails:
-1. Topological Invariance of Per-Pixel Objective:
-   Cross-entropy and per-pixel Dice treat each pixel independently:
-   L_dice = 1.0 - 2 * |P intersect Y| / (|P| + |Y|)
-   A 2-pixel gap in a 300-pixel contour changes Dice by less than 0.7%, yet it completely fractures the contour into two disconnected components, rendering it useless for AR catheter alignment.
-2. Lack of Continuous Geometry:
-   Mask2Former outputs a discrete 2D raster grid. Converting this grid into continuous 3D coordinate trajectories requires heuristic thinning and spline fitting, which introduces branch artifacts, self-intersections, and noise.
-
----
-
-### 10.3 BCRNet: Why It Reaches SOTA (0.69 Val Dice) & Its Latent Bottlenecks
-
-#### Architectural Breakdown:
-1. Multi-Modal Feature Extraction (MFE):
-   - Frozen SAM ViT-B encoder (256x64x64) provides robust zero-shot foundation features.
-   - ResNet-50 4-channel encoder processes RGB + AdelaiDepth.
-   - Fusion: F_fused = Conv( [ F_resnet, Upsample( F_sam ) ] ).
-   - Paper ablation contribution: MFE adds +3.84% Dice (Table 3 in paper).
-
-2. Adaptive Curve Proposal Initialization (ACPI):
-   - Dense 5th-order Bézier proposal generation on top feature pyramid layer f_4:
-     b_i^j = ( Sigmoid( Delta b_{ix}^j + Logit( c_{ix} ) ), Sigmoid( Delta b_{iy}^j + Logit( c_{iy} ) ) )
-   - Bounded within [0, 1]^2 by sigmoid transformation.
-   - Paper ablation contribution: ACPI provides the single largest leap: +12.65% Dice (53.67% -> 66.32%).
-
-3. Hierarchical Curve Refinement (HCR):
-   - 3 coarse-to-fine deformable cross-attention stages: {f3, f4} -> {f2, f3} -> {f1, f2}.
-   - Samples N=26 reference points along B(t) = sum_{k=0}^5 C(5, k) * (1-t)^{5-k} * t^k * b_k.
-   - Structured 3-way self-attention: intra-curve (vertex dependencies), inter-curve (proposal competition), inter-category (class hierarchy).
-   - Paper ablation contribution: HCR adds +13.54% Dice (40.13% -> 53.67%).
-
-4. Proposal Induction Loss:
-   - L_ind = BCE( s_init, s* ) supervises early proposal heatmaps.
-   - Dynamic schedule: lambda_d = 1.0 - Sigmoid( (epoch - 10) / 2 ).
-   - Paper ablation contribution: Adds +3.25% Dice (66.32% -> 69.57%).
-
-#### BCRNet's Latent Bottlenecks:
-1. Weak 4-Layer CNN Decoder (66% ceiling):
-   The auxiliary deep supervision in BCRNet uses a basic 4-layer CNN decoder without multi-scale masked attention, limiting its pixel representation.
-2. Blind Grid ACPI Proposal Search:
-   Uniformly placing proposals across a 16x16 grid wastes compute and queries on empty background regions.
-3. Sigmoid-Logit Boundary Saturation:
-   Logit mapping Logit(c) = ln( c / (1 - c) ) saturates near borders (c -> 0 or c -> 1), causing gradient vanishing for landmarks that exit the surgical field of view.
-
----
-
-### 10.4 Master Synthesis (EXP_13): Mathematical Complementarity
-
-The synthesis unifies the three paradigms so each directly cancels the other's blind spot:
-1. Mask2Former provides localized, glare-free feature queries (canceling BCRNet's blind grid ACPI).
-2. 5th-Order Bézier curves provide continuous, gap-free geometry (canceling Mask2Former's topological fragmentation).
-3. Analytical Continuous clDice (AC-clDice) provides differentiable topological supervision without slow 40-step morphological unrolling (canceling TopoNet's gradient vanishing).
-
----
-
-# Branch 4: Systematic TopoNet Replication & Ablation Protocol (EXPERIMENT_1)
-
-### 11.1 Mathematical Formulation of the 6 Paper Ablations (Table 2)
-
-All loss functions and modules adhere to plain mathematical expressions:
-
-1. Standard Multi-Class Soft Dice Loss:
-   L_dice = 1.0 - (2 * sum(p * y) + epsilon) / (sum(p^2) + sum(y^2) + epsilon)
-   where p is the softmax prediction probability map and y is the one-hot ground truth binary mask.
-
-2. Centerline clDice Loss:
-   Tprec = sum( S_pred * V_gt ) / ( sum( S_pred ) + epsilon )
-   Tsens = sum( S_gt * V_pred ) / ( sum( S_gt ) + epsilon )
-   clDice = ( 2 * Tprec * Tsens ) / ( Tprec + Tsens + epsilon )
-   L_cl = 1.0 - clDice
-   where S denotes the soft morphological skeleton extracted via iterative min/max pooling, and V denotes the soft segmentation volume.
-
-3. Betti Matching Persistent Homology Loss:
-   L_per = sum_{d in {0, 1}} sum_{b in Betti_pairs} ( b_pred - b_target )^2
-   Guided by a dynamic sigmoid warmup weight schedule:
-   alpha(p) = ( 2.0 / ( 1.0 + exp( -10.0 * p ) ) - 1.0 ) * 0.05
-   where p = current_iteration / total_iterations.
-   Combined Loss: L_total = alpha(p) * L_per + ( 1.0 - alpha(p) ) * L_cl
-
-4. Boundary-Aware Topological Fusion (BTF) vs Simple Concatenation:
-   - BTF: Dynamic boundary attention query with directional gradient alignment:
-     F_fused = Conv( Cat( F_rgb * Attn_boundary, F_depth * Attn_topo ) ) + F_skip
-   - Simple Concat (Baseline & w/o BTF):
-     F_fused = Conv1x1( Cat( F_rgb, F_depth ) ) + F_skip
-
-### 11.2 Root Cause Analysis: Patient 32 4K Canvas Truncation Bug
-
-In the official TopoNet repository (`repos/TopoNet/utils/dataset.py`), the function `load_json` contained the following hardcoded logic:
+### Head Architecture
 ```python
-if any(x in path for x in ['_31', '_36', '_25', '_29']):
-    canvas = np.zeros((2160, 3840), dtype=np.uint8)
-else:
-    canvas = np.zeros((1080, 1920), dtype=np.uint8)
+self.landmark_head = nn.Sequential(
+    nn.Linear(256, 128),
+    nn.GELU(),
+    nn.Linear(128, 3) # outputs: [pred_cx, pred_cy, pred_presence_logit]
+)
 ```
-In the official L3D Validation split, 15 frames (12.3% of the entire validation set) belong to Patient 32. Patient 32 frames were recorded in 4K resolution (2160 x 3840). Because `_32` was omitted from the hardcoded list, the canvas was initialized at 1080p, and all landmark coordinates above y=1080 or x=1920 were clipped or truncated.
-This caused the official paper's Table 2 validation benchmark to drop to 59.79% DSC.
 
-Our decoupled `TopoNetDataset` (`experiments/EXPERIMENT_1/utils/dataset.py`) extracts image dimensions directly from the JSON metadata:
-```python
-height = data.get('imageHeight', 1080)
-width = data.get('imageWidth', 1920)
-canvas = np.zeros((height, width), dtype=np.uint8)
-```
-This dynamic canvas resolution restores the true validation DSC to ~66.0%.
+### Ground Truth Targets (Computed on-the-fly from JSON annotations)
+For each class k in {1, 2, 3}:
+- `y_k`: 1 if class k is present in the frame, 0 otherwise
+- `c_k* = (x_mean_k, y_mean_k)`: normalized center-of-mass of class k in [0, 1]^2
 
-### 11.3 Kaggle Automated Pipeline Structure
+### Loss Formulation
+`L_landmark = sum_{k=1}^3 [ BCE(pred_presence_k, y_k) + y_k * SmoothL1(pred_centroid_k, c_k*) ]`
 
-The self-contained Kaggle notebook `experiments/EXPERIMENT_1/TopoNet_Ablation_Kaggle.ipynb` executes in 8 sequential stages:
-1. Environment & GPU check (CUDA, VRAM detection).
-2. Dependency installation (`surface-distance`, `medpy`) and automated compilation of `Betti-Matching-3D`.
-3. TopoNet reference repo cloning into `/kaggle/working/repos/TopoNet`.
-4. Automated `wget` download of Depth Anything V2 ViT-B pretrained weights.
-5. Dynamic dataset discovery across `/kaggle/input/**` with Patient 32 canvas verification.
-6. Deployment of EXPERIMENT_1 modules (`dataset.py`, `metrics.py`, `toponet_ablation.py`, `train_toponet.py`).
-7. Configurable execution runner: Run 1.0 (Full TopoNet on Val & Test) or all 6 ablations sequentially.
-8. Automated markdown summary table rendering and packaging into `/kaggle/working/EXPERIMENT_1_RESULTS.zip` for one-click download.
+Total Loss:
+`L_total = L_patch_losses + lambda_landmark * L_landmark` (with lambda_landmark = 1.0)
 
+---
 
+## 5. Walkthrough: Resolving Patient_40_08940 (Flipped Liver Case)
 
+1. **Input:** Patient 40 frame 08940 with liver lobe retracted and flipped left-to-right.
+2. **Backbone Feature Extraction:** Swin-Tiny extracts image features. High edge contrast on left (x=0.13) and silhouette boundary on right (x=0.65).
+3. **Decoder Layer 1:**
+   - `T_ridge` attends to left features; its predicted centroid converges to (0.13, 0.25).
+   - `T_sil` attends to right features; its predicted centroid converges to (0.65, 0.29).
+4. **Decoder Layer 2 (Block 1 Self-Attention):**
+   - `T_ridge` and `T_sil` attend to each other, explicitly encoding `delta_x = 0.13 - 0.65 = -0.52`.
+   - The relational state is established as horizontally flipped.
+5. **Decoder Layers 3–6 (Block 2 Broadcast):**
+   - Left-column patch queries (x in [0, 0.3]) attend heavily to `T_ridge`. Their class logits predict Class 1 (Ridge).
+   - Right-column patch queries (x in [0.5, 0.8]) attend to `T_sil`, predicting Class 2 (Silhouette).
+6. **Result:** Correctly segments Ridge on the left and Silhouette on the right without false-positive leakage.
+
+---
+
+## 6. Computational Cost
+- Sequence length: 64 -> 67 tokens (+3 tokens)
+- Attention complexity: 67^2 = 4,489 vs 64^2 = 4,096 FLOPs per head
+- Latency impact: < 0.1 ms per frame (fully maintains 14.5 - 16.2 FPS on A100)
