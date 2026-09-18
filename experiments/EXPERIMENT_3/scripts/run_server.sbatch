@@ -68,7 +68,7 @@ python -u "${REPO_ROOT}/experiments/EXPERIMENT_3/scripts/train.py" \
     --val_dir       "$VAL_DIR"    \
     --test_dir      "$TEST_DIR"   \
     --epochs        60            \
-    --batch_size    8             \
+    --batch_size    4             \
     --accumulation_steps 1        \
     --lr            8e-5          \
     --weight_decay  3e-5          \
