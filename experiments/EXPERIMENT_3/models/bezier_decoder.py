@@ -68,10 +68,11 @@ class BezierPatchDecoder(nn.Module):
     """
     Bezier patch decoder module.
     """
-    def __init__(self, embed_dim=256, grid_size=8, num_classes=4, num_decoder_layers=6, num_heads=8):
+    def __init__(self, embed_dim=256, grid_size=8, num_classes=4, num_decoder_layers=6, num_heads=8, single_scale=False):
         super().__init__()
         self.grid_size = grid_size
         self.num_patches = grid_size * grid_size
+        self.single_scale = single_scale
         
         self.register_buffer('pos_enc', build_2d_sinusoidal_pe(grid_size, embed_dim))
         
@@ -99,7 +100,7 @@ class BezierPatchDecoder(nn.Module):
         queries = queries + self.pos_enc.to(queries.device)
         
         for i, layer in enumerate(self.decoder_layers):
-            f_cur = multi_scale_features[i % 3]
+            f_cur = multi_scale_features[1] if self.single_scale else multi_scale_features[i % 3]
             context = f_cur.flatten(2).transpose(1, 2)
             queries = layer(queries, context)
             

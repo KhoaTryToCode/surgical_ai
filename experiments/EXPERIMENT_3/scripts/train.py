@@ -62,6 +62,7 @@ def main():
     parser.add_argument('--num_workers', type=int, default=None)
     parser.add_argument('--smoke_test', action='store_true')
     parser.add_argument('--eval_splits', type=str, choices=['val', 'both'], default='both')
+    parser.add_argument('--single_scale', action='store_true', help="Lock all decoder layers to stride-16 features")
     
     args = parser.parse_args()
     os.makedirs(args.save_dir, exist_ok=True)
@@ -80,7 +81,7 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=nw)
     val_loader = DataLoader(val_dataset, batch_size=max(1, args.batch_size), shuffle=False, num_workers=nw)
     
-    model = BezierPatchModel(grid_size=args.grid_size)
+    model = BezierPatchModel(grid_size=args.grid_size, single_scale=args.single_scale)
     model.to(device)
     
     criterion = BezierPatchLoss(lambda_cls=2.0, lambda_ctrl=5.0, lambda_sample=2.0, lambda_cont=1.0, lambda_tan=0.5, continuity_phase_epoch=31)
@@ -172,6 +173,7 @@ def main():
                 'optimizer_state_dict': optimizer.state_dict(),
                 'best_val_dice': best_val_dice,
                 'grid_size': args.grid_size,
+                'single_scale': args.single_scale,
             }, os.path.join(args.save_dir, 'best_model.pth'))
             print(f'   New best model saved! Val MacroDice: {best_val_dice:.4f}')
         

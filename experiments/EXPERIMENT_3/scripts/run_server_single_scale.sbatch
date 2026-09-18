@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=exp3_single_scale
+#SBATCH --partition=gpu
+#SBATCH --account=lab
+#SBATCH --qos=normal
+#SBATCH --gres=gpu:a100:1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
+#SBATCH --time=08:00:00
+#SBATCH --output=/data/khoalq/logs/%x-%j.out
+#SBATCH --error=/data/khoalq/logs/%x-%j.err
+
+# ==============================================================================
+# SLURM: EXPERIMENT_3 Single-Scale Ablation (Stride-16 Lock)
+# Target Server: gpu-a240 (100.82.42.48)
+# Primary Hardware: NVIDIA A100-PCIE-40GB (batch_size=4, no accum)
+# ==============================================================================
+
+set -e
+set -o pipefail
+
+echo "=================================================================="
+echo "🚀 EXPERIMENT_3: Patch Bézier Single-Scale (Stride-16) Training"
+echo "   Job ID   : $SLURM_JOB_ID"
+echo "   Node     : $(hostname)"
+echo "   GPU(s)   : $CUDA_VISIBLE_DEVICES"
+echo "   Start    : $(date)"
+echo "=================================================================="
+
+# ── Environment ────────────────────────────────────────────────────────────────
+mkdir -p /data/khoalq/logs /data/khoalq/checkpoints
+
+source "/data/khoalq/miniconda3/etc/profile.d/conda.sh"
+conda activate surgical_ai
+
+export PYTHONPATH=/data/khoalq/surgical_ai:$PYTHONPATH
+export PYTHONUNBUFFERED=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+# ── Paths ──────────────────────────────────────────────────────────────────────
+REPO_ROOT="/data/khoalq/surgical_ai"
+DATA_ROOT="/data/khoalq/data/L3D"
+TRAIN_DIR="${DATA_ROOT}/Train"
+VAL_DIR="${DATA_ROOT}/Val"
+TEST_DIR="${DATA_ROOT}/Test"
+SAVE_DIR="/data/khoalq/checkpoints/exp3_patch_bezier_single_scale_60ep"
+
+# ── Sanity Checks ──────────────────────────────────────────────────────────────
+if [ ! -d "$TRAIN_DIR" ]; then
+    echo "ERROR: Train directory not found: $TRAIN_DIR"
+    exit 1
+fi
+
+echo ""
+echo "Dataset root  : $DATA_ROOT"
+echo "Checkpoint out: $SAVE_DIR"
+echo ""
+nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
+echo ""
+
+# ── Training ───────────────────────────────────────────────────────────────────
+python -u "${REPO_ROOT}/experiments/EXPERIMENT_3/scripts/train.py" \
+    --train_dir     "$TRAIN_DIR"  \
+    --val_dir       "$VAL_DIR"    \
+    --test_dir      "$TEST_DIR"   \
+    --epochs        60            \
+    --batch_size    4             \
+    --accumulation_steps 1        \
+    --lr            8e-5          \
+    --weight_decay  3e-5          \
+    --grid_size     8             \
+    --single_scale                \
+    --save_dir      "$SAVE_DIR"   \
+    --num_workers   8             \
+    --eval_splits   both          \
+    2>&1 | tee "/data/khoalq/logs/exp3_single_scale_${SLURM_JOB_ID}.log"
+
+echo ""
+echo "=================================================================="
+echo "✅ EXPERIMENT_3 SINGLE-SCALE COMPLETED AT $(date)"
+echo "   Results in: $SAVE_DIR"
+echo "=================================================================="

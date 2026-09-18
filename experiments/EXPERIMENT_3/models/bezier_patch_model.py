@@ -15,7 +15,7 @@ class BezierPatchModel(nn.Module):
     """
     Combined BezierPatchModel leveraging HF Mask2Former backbone.
     """
-    def __init__(self, grid_size=8, num_classes=4, embed_dim=256, num_decoder_layers=6):
+    def __init__(self, grid_size=8, num_classes=4, embed_dim=256, num_decoder_layers=6, single_scale=False):
         super().__init__()
         hf_model = Mask2FormerForUniversalSegmentation.from_pretrained(
             'facebook/mask2former-swin-tiny-ade-semantic',
@@ -29,6 +29,7 @@ class BezierPatchModel(nn.Module):
             grid_size=grid_size,
             num_classes=num_classes,
             num_decoder_layers=num_decoder_layers,
+            single_scale=single_scale,
         )
         
     def forward(self, pixel_values):
