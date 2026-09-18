@@ -122,41 +122,54 @@ class BezierPatchLoss(nn.Module):
                 bezier_b = pred_bezier[b]   # (64, 4, 2)
                 class_b  = target_class[b]  # (64,)
                 
+                # Horizontal neighbors (left-right)
                 for r in range(grid_size):
-                    for c in range(grid_size - 1):  # horizontal neighbors
+                    for c in range(grid_size - 1):
                         idx_left  = r * grid_size + c
                         idx_right = r * grid_size + c + 1
-                        if active_b[idx_left] and active_b[idx_right]:
-                            # Continuity: P3 of left patch should meet P0 of right patch
-                            # Convert to global coords (relative to grid, in [0, grid_size]^2 scale)
-                            P3_global_x = c + bezier_b[idx_left, 3, 0]   # c + local_P3_x
-                            P0_global_x = (c + 1) + bezier_b[idx_right, 0, 0]  # (c+1) + local_P0_x
-                            P3_global_y = r + bezier_b[idx_left, 3, 1]
-                            P0_global_y = r + bezier_b[idx_right, 0, 1]
+                        if active_b[idx_left] and active_b[idx_right] and (class_b[idx_left] == class_b[idx_right]) and (class_b[idx_left] > 0):
+                            P0_left = torch.stack([c + bezier_b[idx_left, 0, 0], r + bezier_b[idx_left, 0, 1]])
+                            P3_left = torch.stack([c + bezier_b[idx_left, 3, 0], r + bezier_b[idx_left, 3, 1]])
+                            P0_right = torch.stack([(c + 1) + bezier_b[idx_right, 0, 0], r + bezier_b[idx_right, 0, 1]])
+                            P3_right = torch.stack([(c + 1) + bezier_b[idx_right, 3, 0], r + bezier_b[idx_right, 3, 1]])
                             
-                            gap_x = (P3_global_x - P0_global_x) ** 2
-                            gap_y = (P3_global_y - P0_global_y) ** 2
-                            cont_losses.append(gap_x + gap_y)
+                            gap_fwd = (P3_left - P0_right).pow(2).sum()
+                            gap_rev = (P0_left - P3_right).pow(2).sum()
+                            cont_losses.append(torch.minimum(gap_fwd, gap_rev))
                             
-                            # Tangent: exit direction of left should match entry direction of right
-                            exit_tan  = bezier_b[idx_left, 3]  - bezier_b[idx_left, 2]   # P3 - P2
-                            entry_tan = bezier_b[idx_right, 1] - bezier_b[idx_right, 0]  # P1 - P0
-                            cos_sim = F.cosine_similarity(exit_tan.unsqueeze(0), entry_tan.unsqueeze(0))
+                            # Tangent direction matching
+                            if gap_fwd <= gap_rev:
+                                exit_tan  = bezier_b[idx_left, 3]  - bezier_b[idx_left, 2]
+                                entry_tan = bezier_b[idx_right, 1] - bezier_b[idx_right, 0]
+                            else:
+                                exit_tan  = bezier_b[idx_right, 3]  - bezier_b[idx_right, 2]
+                                entry_tan = bezier_b[idx_left, 1] - bezier_b[idx_left, 0]
+                            cos_sim = F.cosine_similarity(exit_tan.unsqueeze(0), entry_tan.unsqueeze(0)).squeeze(0)
                             tan_losses.append(1.0 - cos_sim)
                 
-                for r in range(grid_size - 1):  # vertical neighbors
+                # Vertical neighbors (top-bottom)
+                for r in range(grid_size - 1):
                     for c in range(grid_size):
                         idx_top    = r * grid_size + c
                         idx_bottom = (r + 1) * grid_size + c
-                        if active_b[idx_top] and active_b[idx_bottom]:
-                            P3_global_y = r + bezier_b[idx_top, 3, 1]
-                            P0_global_y = (r + 1) + bezier_b[idx_bottom, 0, 1]
-                            P3_global_x = c + bezier_b[idx_top, 3, 0]
-                            P0_global_x = c + bezier_b[idx_bottom, 0, 0]
+                        if active_b[idx_top] and active_b[idx_bottom] and (class_b[idx_top] == class_b[idx_bottom]) and (class_b[idx_top] > 0):
+                            P0_top = torch.stack([c + bezier_b[idx_top, 0, 0], r + bezier_b[idx_top, 0, 1]])
+                            P3_top = torch.stack([c + bezier_b[idx_top, 3, 0], r + bezier_b[idx_top, 3, 1]])
+                            P0_bot = torch.stack([c + bezier_b[idx_bottom, 0, 0], (r + 1) + bezier_b[idx_bottom, 0, 1]])
+                            P3_bot = torch.stack([c + bezier_b[idx_bottom, 3, 0], (r + 1) + bezier_b[idx_bottom, 3, 1]])
                             
-                            gap_y = (P3_global_y - P0_global_y) ** 2
-                            gap_x = (P3_global_x - P0_global_x) ** 2
-                            cont_losses.append(gap_x + gap_y)
+                            gap_v_fwd = (P3_top - P0_bot).pow(2).sum()
+                            gap_v_rev = (P0_top - P3_bot).pow(2).sum()
+                            cont_losses.append(torch.minimum(gap_v_fwd, gap_v_rev))
+                            
+                            if gap_v_fwd <= gap_v_rev:
+                                exit_tan  = bezier_b[idx_top, 3]  - bezier_b[idx_top, 2]
+                                entry_tan = bezier_b[idx_bottom, 1] - bezier_b[idx_bottom, 0]
+                            else:
+                                exit_tan  = bezier_b[idx_bottom, 3]  - bezier_b[idx_bottom, 2]
+                                entry_tan = bezier_b[idx_top, 1] - bezier_b[idx_top, 0]
+                            cos_sim = F.cosine_similarity(exit_tan.unsqueeze(0), entry_tan.unsqueeze(0)).squeeze(0)
+                            tan_losses.append(1.0 - cos_sim)
             
             if cont_losses:
                 L_cont = torch.stack(cont_losses).mean()

@@ -21,8 +21,7 @@ class BezierPatchModel(nn.Module):
             'facebook/mask2former-swin-tiny-ade-semantic',
             ignore_mismatched_sizes=True
         )
-        self.backbone = hf_model.model.pixel_level_module.encoder
-        self.pixel_decoder = hf_model.model.pixel_level_module.decoder
+        self.pixel_level_module = hf_model.model.pixel_level_module
         del hf_model
         
         self.bezier_decoder = BezierPatchDecoder(
@@ -33,17 +32,8 @@ class BezierPatchModel(nn.Module):
         )
         
     def forward(self, pixel_values):
-        backbone_output = self.backbone(pixel_values)
-        backbone_features = backbone_output.feature_maps
-        
-        pixel_decoder_output = self.pixel_decoder(backbone_features, output_hidden_states=False)
-        
-        if hasattr(pixel_decoder_output, 'multi_scale_features') and pixel_decoder_output.multi_scale_features is not None:
-            multi_scale_features = list(pixel_decoder_output.multi_scale_features)
-        elif hasattr(pixel_decoder_output, 'hidden_states') and pixel_decoder_output.hidden_states:
-            multi_scale_features = list(pixel_decoder_output.hidden_states)[-3:]
-        else:
-            multi_scale_features = list(backbone_features)[-3:]
+        pixel_level_outputs = self.pixel_level_module(pixel_values, output_hidden_states=True)
+        multi_scale_features = list(pixel_level_outputs.decoder_hidden_states)
             
         pred_class, pred_bezier = self.bezier_decoder(multi_scale_features)
         return pred_class, pred_bezier

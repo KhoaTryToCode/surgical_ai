@@ -97,7 +97,8 @@ class BezierPatchDataset(Dataset):
         json_paths = [
             os.path.join(base_dir, name + '.json'),
             os.path.join(base_dir, '..', 'labels', name + '.json'),
-            os.path.join(base_dir, 'labels', name + '.json')
+            os.path.join(base_dir, 'labels', name + '.json'),
+            os.path.join(base_dir.replace('images', 'labels'), name + '.json')
         ]
         
         json_path = None
@@ -118,23 +119,24 @@ class BezierPatchDataset(Dataset):
         with open(json_path, 'r') as f:
             data = json.load(f)
             
-        orig_h = data.get('imageHeight', self.canvas_size)
-        orig_w = data.get('imageWidth', self.canvas_size)
+        # Dynamic canvas size extraction (Patient 32 4K canvas bug fix)
+        orig_h = data.get('imageHeight', 1080)
+        orig_w = data.get('imageWidth', 1920)
+        canvas_raw = np.zeros((orig_h, orig_w), dtype=np.uint8)
         
-        scale_x = self.canvas_size / orig_w
-        scale_y = self.canvas_size / orig_h
+        scale_x = self.canvas_size / float(orig_w)
+        scale_y = self.canvas_size / float(orig_h)
         
-        gt_2d_np = np.zeros((self.canvas_size, self.canvas_size), dtype=np.int64)
-        
-        polylines_by_class = {1: [], 2: [], 3: []}
+        # Store individual resampled curve segments to avoid merging disconnected polylines
+        curves_by_class = {1: [], 2: [], 3: []}
         
         for shape in data.get('shapes', []):
-            label = shape.get('label', '').lower().strip()
+            label = str(shape.get('label', '')).lower().strip()
             if label.startswith('r') or 'ridge' in label or 'rigde' in label:
                 class_id = 1
             elif label.startswith('s') or 'sil' in label or 'margin' in label:
                 class_id = 2
-            elif label.startswith('f') or 'falc' in label or 'ligament' in label:
+            elif label.startswith('f') or 'falc' in label or 'lig' in label or 'ligament' in label:
                 class_id = 3
             else:
                 continue
@@ -143,27 +145,25 @@ class BezierPatchDataset(Dataset):
             if len(points) < 2:
                 continue
                 
-            scaled_points = []
-            for pt in points:
-                scaled_points.append([pt[0] * scale_x, pt[1] * scale_y])
-            scaled_points = np.array(scaled_points, dtype=np.int32)
-            
-            # Draw segment by segment for compatibility
-            for i in range(len(scaled_points) - 1):
-                pt1 = tuple(scaled_points[i])
-                pt2 = tuple(scaled_points[i+1])
-                cv2.line(gt_2d_np, pt1, pt2, int(class_id), thickness=35)
+            # 1. Draw on raw canvas with thickness 35 (matching EXPERIMENT_1 & 2 bit-for-bit)
+            for i in range(1, len(points)):
+                pt1 = tuple(map(int, points[i - 1]))
+                pt2 = tuple(map(int, points[i]))
+                cv2.line(canvas_raw, pt1, pt2, int(class_id), thickness=35)
                 
-            polylines_by_class[class_id].append(scaled_points)
+            # 2. Scale points for 1024x1024 Bézier fitting
+            scaled_line = np.array([[p[0] * scale_x, p[1] * scale_y] for p in points], dtype=np.float32)
+            resampled = resample_polyline(scaled_line, spacing=5.0)
+            if len(resampled) >= 2:
+                curves_by_class[class_id].append(resampled)
             
-        # Build Bezier patch targets
-        all_resampled_points = {1: [], 2: [], 3: []}
-        for cid, lines in polylines_by_class.items():
-            for line in lines:
-                if len(line) >= 2:
-                    resampled = resample_polyline(line, spacing=5.0)
-                    all_resampled_points[cid].extend(resampled)
-                    
+        # Downsample ground truth canvas to 1024x1024
+        if canvas_raw.shape[0] != self.canvas_size or canvas_raw.shape[1] != self.canvas_size:
+            gt_2d_np = cv2.resize(canvas_raw, (self.canvas_size, self.canvas_size), interpolation=cv2.INTER_NEAREST)
+        else:
+            gt_2d_np = canvas_raw
+            
+        # Build Bézier patch targets from individual curves
         for r in range(self.grid_size):
             for c in range(self.grid_size):
                 patch_idx = r * self.grid_size + c
@@ -171,26 +171,28 @@ class BezierPatchDataset(Dataset):
                 y_min = r * self.patch_size
                 x_max = (c + 1) * self.patch_size
                 y_max = (r + 1) * self.patch_size
+                patch_bbox = [x_min, y_min, x_max, y_max]
                 
-                points_in_patch = {1: [], 2: [], 3: []}
-                for cid, pts in all_resampled_points.items():
-                    for pt in pts:
-                        px, py = pt[0], pt[1]
-                        if x_min <= px < x_max and y_min <= py < y_max:
-                            points_in_patch[cid].append(pt)
+                best_curve_pts = None
+                best_class_id = 0
+                max_pts_count = 0
+                
+                for cid in [1, 2, 3]:
+                    for curve in curves_by_class[cid]:
+                        inside_mask = (
+                            (curve[:, 0] >= x_min) & (curve[:, 0] < x_max) &
+                            (curve[:, 1] >= y_min) & (curve[:, 1] < y_max)
+                        )
+                        pts_inside = curve[inside_mask]
+                        if len(pts_inside) > max_pts_count:
+                            max_pts_count = len(pts_inside)
+                            best_curve_pts = pts_inside
+                            best_class_id = cid
                             
-                counts = {cid: len(pts) for cid, pts in points_in_patch.items()}
-                if counts:
-                    dominant_class = max(counts, key=counts.get)
+                if best_curve_pts is not None and max_pts_count >= 2:
+                    bezier_ctrl = fit_bezier_to_patch(best_curve_pts, patch_bbox)
+                    target_class[patch_idx] = best_class_id
+                    target_bezier[patch_idx] = torch.from_numpy(bezier_ctrl).float()
+                    active_mask[patch_idx] = True
                     
-                    if counts[dominant_class] >= 2:
-                        dom_pts = np.array(points_in_patch[dominant_class])
-                        # fit_bezier_to_patch expects canvas-space points + [x_min,y_min,x_max,y_max]
-                        patch_bbox = [x_min, y_min, x_max, y_max]
-                        bezier_ctrl = fit_bezier_to_patch(dom_pts, patch_bbox)
-
-                        target_class[patch_idx] = dominant_class
-                        target_bezier[patch_idx] = torch.from_numpy(bezier_ctrl).float()
-                        active_mask[patch_idx] = True
-                    
-        return torch.from_numpy(gt_2d_np), target_class, target_bezier, active_mask
+        return torch.from_numpy(gt_2d_np.astype(np.int64)), target_class, target_bezier, active_mask

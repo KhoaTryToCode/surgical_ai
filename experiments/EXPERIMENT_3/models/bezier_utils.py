@@ -120,26 +120,36 @@ def fit_bezier_to_patch(pts_in_canvas, patch_bbox):
     
     P0 = local_pts[0]
     P3 = local_pts[-1]
-    
+
+    if len(local_pts) < 3:
+        P1 = P0 + (P3 - P0) * (1.0 / 3.0)
+        P2 = P0 + (P3 - P0) * (2.0 / 3.0)
+        control_points = np.array([P0, P1, P2, P3], dtype=np.float32)
+        return np.clip(control_points, 0, 1)
+
     B0 = (1 - t)**3
     B1 = 3 * (1 - t)**2 * t
     B2 = 3 * (1 - t) * t**2
     B3 = t**3
-    
+
     A = np.column_stack((B1, B2))
-    
+
     RHS_x = local_pts[:, 0] - B0 * P0[0] - B3 * P3[0]
     RHS_y = local_pts[:, 1] - B0 * P0[1] - B3 * P3[1]
     RHS = np.column_stack((RHS_x, RHS_y))
-    
+
     try:
-        result = np.linalg.lstsq(A, RHS, rcond=None)[0]
-        P1 = result[0]
-        P2 = result[1]
+        if np.linalg.matrix_rank(A) < 2:
+            P1 = P0 + (P3 - P0) * (1.0 / 3.0)
+            P2 = P0 + (P3 - P0) * (2.0 / 3.0)
+        else:
+            result = np.linalg.lstsq(A, RHS, rcond=None)[0]
+            P1 = result[0]
+            P2 = result[1]
     except Exception:
-        P1 = P0 + (P3 - P0) * 0.33
-        P2 = P0 + (P3 - P0) * 0.67
-        
+        P1 = P0 + (P3 - P0) * (1.0 / 3.0)
+        P2 = P0 + (P3 - P0) * (2.0 / 3.0)
+
     control_points = np.array([P0, P1, P2, P3], dtype=np.float32)
     return np.clip(control_points, 0, 1)
 

@@ -38,7 +38,7 @@ export PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # Ensure required packages are installed in the active env
-pip install -q transformers surface-distance medpy 2>&1 | tail -5
+# pip install -q transformers surface-distance medpy 2>&1 | tail -5
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 REPO_ROOT="/data/khoalq/surgical_ai"
