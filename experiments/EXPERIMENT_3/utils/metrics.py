@@ -112,15 +112,13 @@ def _render_patient40_panel(img_tensor, gt_2d, pred_map, fname, out_dir):
     }
     
     def apply_overlay(base_img, mask):
-        overlay = np.zeros_like(base_img)
-        for cls_idx, color in colors.items():
-            if cls_idx == 0: continue
-            overlay[mask == cls_idx] = color
+        result = base_img.copy()
         alpha = 0.5
-        result = cv2.addWeighted(base_img, 1, overlay, alpha, 0)
         for cls_idx, color in colors.items():
             if cls_idx == 0: continue
-            result[mask == cls_idx] = cv2.addWeighted(base_img[mask == cls_idx], 1 - alpha, np.full_like(base_img[mask == cls_idx], color), alpha, 0)
+            idx = (mask == cls_idx)
+            if np.any(idx):
+                result[idx] = (base_img[idx].astype(np.float32) * (1.0 - alpha) + np.array(color, dtype=np.float32) * alpha).astype(np.uint8)
         return result
         
     gt_vis = apply_overlay(img_bgr, gt_2d)

@@ -69,6 +69,26 @@ python -u /data/khoalq/surgical_ai/experiments/EXPERIMENT_3/scripts/train.py \
 
 ---
 
+## 4. Standalone Evaluation (Rerun Evaluation on Existing Checkpoint)
+
+If the model is already trained and `best_model.pth` is saved, evaluate both Val & Test and generate diagnostics directly without retraining:
+
+```bash
+# On server:
+bash experiments/EXPERIMENT_3/scripts/run_eval_server.sh
+
+# Or directly with python:
+python -u /data/khoalq/surgical_ai/experiments/EXPERIMENT_3/scripts/evaluate.py \
+    --checkpoint /data/khoalq/checkpoints/exp3_patch_bezier_60ep/best_model.pth \
+    --val_dir /data/khoalq/data/L3D/Val \
+    --test_dir /data/khoalq/data/L3D/Test \
+    --save_dir /data/khoalq/checkpoints/exp3_patch_bezier_60ep \
+    --batch_size 4 \
+    --eval_splits both
+```
+
+---
+
 ## Key Differences: Kaggle vs Server
 
 | Setting | Kaggle T4 (~16GB) | Server A100-40GB |
