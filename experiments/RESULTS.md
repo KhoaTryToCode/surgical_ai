@@ -34,6 +34,6 @@ Insight from analysing the result and the patient 40 difficult cases:
 - Another interesting finding is that for the hardcases of the patient 40, which related to geometry deformation of the liver, the model with single scale actually perform quite well compare to other images. We could check images: 08730, 09000, 08940, 08790, 09330 to see the results.
 
 => Moving forward:
-    - Checking if the Training dataset has the geometry deformation data enough for the model to understand the different when the liver contract or flipped
-    - We should consider about the scale of the model feature map before its going through the attention mechanism
-    - Using the pretrained model from ADE20K.
+- Checking if the Training dataset has the geometry deformation data enough for the model to understand the different when the liver contract or flipped
+- We should consider about the scale of the model feature map before its going through the attention mechanism
+- Using the pretrained model from ADE20K.
