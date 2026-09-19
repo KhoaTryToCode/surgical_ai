@@ -101,9 +101,9 @@ def _render_patient40_panel(img_tensor, gt_2d, pred_map, fname, out_dir, pred_ce
     img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
     
     colors = {
-        1: (0, 0, 255), # Red: Ridge
-        2: (0, 255, 0), # Green: Silhouette
-        3: (255, 0, 0)  # Blue: Falciform
+        1: (0, 255, 0), # Green: Ridge (Class 1)
+        2: (0, 0, 255), # Red: Silhouette (Class 2)
+        3: (255, 140, 0)  # Blue: Falciform (Class 3)
     }
     
     def apply_overlay(base_img, mask):

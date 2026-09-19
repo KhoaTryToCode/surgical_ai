@@ -15,7 +15,8 @@
 | Mask2Former Single Scale | 65.35% | 52.22% | 35.77 px | 10.6 FPS (94.1 ms) |
 | Mask2Former w/o Self Query | 66.34% | 53.12% | 22.54 px | 10.6 FPS (94.5 ms) |
 | Mask2Former-Bezier | 59.20% | 44.97% | 30.98 px | 14.5 FPS (68.9 ms) |
-| LandmarkBezier (EXP_04) | *In Progress* | *In Progress* | *In Progress* | *In Progress* |
+| Mask2Former-Bezier-SingleScale | 58.59% | 44.56% | 29.89 px | 15.6 FPS (64.0 ms) |
+| Mask2Former-Bezier-Landmark | 57.40% | 43.33% | 29.87 px | 15.1 FPS (66.1 ms) |
 
 ---
 
@@ -29,7 +30,8 @@
 | Mask2Former Single Scale | 64.58% | 51.54% | 36.65 px | 10.7 FPS (93.8 ms) |
 | Mask2Former w/o Self Query | 64.12% | 51.05% | 24.02 px | 10.6 FPS (93.9 ms) |
 | Mask2Former-Bezier | 55.74% | 41.64% | 38.46 px | 16.2 FPS (61.7 ms) |
-| LandmarkBezier (EXP_04) | *In Progress* | *In Progress* | *In Progress* | *In Progress* |
+| Mask2Former-Bezier-SingleScale | 56.12% | 42.08% | 35.24 px | 16.7 FPS (59.9 ms) |
+| Mask2Former-Bezier-Landmark | 55.52% | 41.43% | 34.23 px | 16.7 FPS (60.0 ms) |
 
 Insight from analysing the result and the patient 40 difficult cases:
 - TopoNet is way more computational heavier than the Mask2Former due to the loss functions: the clDice and the Betti Loss Matching due to they cannot be done parralelly
@@ -37,7 +39,12 @@ Insight from analysing the result and the patient 40 difficult cases:
 - From the Mask2Former Ablation, we can see that the multiscalle and the pretrained weights of the model on the ADE20K (27000 images) play crucial roles in the performance while the mask attention makes no different. 
 - Another interesting finding is that for the hardcases of the patient 40, which related to geometry deformation of the liver, the model with single scale actually perform quite well compare to other images. We could check images: 08730, 09000, 08940, 08790, 09330 to see the results.
 
-=> Moving forward:
+September 18, 2026
 - Checking if the Training dataset has the geometry deformation data enough for the model to understand the different when the liver contract or flipped
 - We should consider about the scale of the model feature map before its going through the attention mechanism
 - Using the pretrained model from ADE20K.
+
+September 19, 2026
+- From my observation, the single scale and the multiscale does not make much different
+- We implemented a method to learn about the geometry deformation, the first one was the center of mass of each landmark which doesnt work well since they might be saturated
+- We are moving on to the second method which is the joint point anchor, this method is the joint point of the landmarks and those point would be the guide (queries) to help the model changes its prediction based on the geometric discoveries of those new Point Queries.

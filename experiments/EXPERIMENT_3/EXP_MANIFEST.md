@@ -33,5 +33,9 @@ The overall loss is a weighted sum of several components:
 - `scripts/`: `train.py` main execution script.
 - `results/`: Execution outputs, checkpoints, and patient_40 diagnostic renderings.
 
+## Execution Variants
+1. **Multi-Scale Bézier (`exp3_patch_bezier_60ep`):** Cycles across 3 feature resolutions in the decoder layers.
+2. **Single-Scale Bézier (`exp3_patch_bezier_single_scale_60ep`):** Anchored purely on $H/16$ medium feature map, yielding higher test set generalization (56.12% Macro Dice, 35.24 px ASSD) and +2.40% on Ridge.
+
 ## Status
-In Progress
+✅ **COMPLETED** (Both Multi-Scale and Single-Scale runs evaluated; detailed in [`RESULTS_LEDGER.md`](file:///Users/khoale/Downloads/Surgical%20AI/experiments/EXPERIMENT_3/RESULTS_LEDGER.md)).
