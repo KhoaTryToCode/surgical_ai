@@ -89,6 +89,51 @@ class JunctionSteeredMask2Former(nn.Module):
         # 2. Query Steering Block
         self.query_steering = JunctionQuerySteering(embed_dim=embed_dim, num_heads=8)
         
+    def forward_transformer_decoder(self, multi_scale_features, mask_features, steered_query_feat):
+        """
+        Runs the Mask2Former Transformer Decoder directly with sample-specific steered queries,
+        bypassing static queries_features.weight repeating.
+        """
+        tm = self.m2f.model.transformer_module
+        multi_stage_features = []
+        multi_stage_positional_embeddings = []
+        size_list = []
+
+        for i in range(tm.num_feature_levels):
+            size_list.append(multi_scale_features[i].shape[-2:])
+            multi_stage_positional_embeddings.append(
+                tm.position_embedder(
+                    multi_scale_features[i].shape, multi_scale_features[i].device, multi_scale_features[i].dtype, None
+                ).flatten(2)
+            )
+            multi_stage_features.append(
+                tm.input_projections[i](multi_scale_features[i]).flatten(2)
+                + tm.level_embed.weight[i][None, :, None]
+            )
+            # Permute NxCxHW to HWxNxC
+            multi_stage_positional_embeddings[-1] = multi_stage_positional_embeddings[-1].permute(2, 0, 1)
+            multi_stage_features[-1] = multi_stage_features[-1].permute(2, 0, 1)
+
+        _, batch_size, _ = multi_stage_features[0].shape
+
+        # [num_queries, batch_size, num_channels]
+        query_embeddings = tm.queries_embedder.weight.unsqueeze(1).repeat(1, batch_size, 1)
+        # steered_query_feat: (B, 100, 256) -> permute to (100, B, 256)
+        query_features = steered_query_feat.permute(1, 0, 2)
+
+        decoder_output = tm.decoder(
+            inputs_embeds=query_features,
+            multi_stage_positional_embeddings=multi_stage_positional_embeddings,
+            pixel_embeddings=mask_features,
+            encoder_hidden_states=multi_stage_features,
+            query_position_embeddings=query_embeddings,
+            feature_size_list=size_list,
+            output_hidden_states=False,
+            output_attentions=False,
+            return_dict=True,
+        )
+        return decoder_output
+
     def forward(self, pixel_values, mask_labels=None, class_labels=None):
         """
         Forward pass with dynamic query steering.
@@ -127,40 +172,15 @@ class JunctionSteeredMask2Former(nn.Module):
         steered_query_feat, j_attn_weights = self.query_steering(base_query_feat, j_features, pred_j_coords)
         
         # 4. Forward through Mask2Former Transformer Decoder with steered queries
-        # Temporarily patch queries_features during this forward pass
-        orig_queries_features = tm.queries_features
-        class DynamicQueryFeatures(nn.Module):
-            def __init__(self, steered_tensor):
-                super().__init__()
-                self.steered = steered_tensor
-            def forward(self, *args, **kwargs):
-                return self.steered
-                
-        # Run standard transformer module forward
-        # In HuggingFace, transformer_module forward expects (multi_scale_features, mask_features)
-        # We temporarily hook the query features
-        old_weight = tm.queries_features.weight
-        # Steered mean across batch as weight, or pass per-sample into decoder:
-        # HuggingFace transformer_module:
-        # query_features = self.queries_features.weight.unsqueeze(0).repeat(batch_size, 1, 1)
-        # We hook tm.queries_features:
-        tm.queries_features = DynamicQueryFeatures(steered_query_feat)
+        decoder_output = self.forward_transformer_decoder(
+            multi_scale_features,
+            mask_features,
+            steered_query_feat
+        )
         
-        try:
-            decoder_outputs = tm(
-                multi_scale_features,
-                mask_features,
-                output_hidden_states=False,
-                output_attentions=False
-            )
-        finally:
-            tm.queries_features = orig_queries_features # Restore
-            
         # Extract class & mask logits
-        class_queries_logits = self.m2f.class_predictor(decoder_outputs[0]) # (B, 100, num_classes + 1)
-        mask_embeddings = self.m2f.mask_embedder(decoder_outputs[0])       # (B, 100, 256)
-        # Dot product with mask_features: (B, 100, 256) x (B, 256, H/4, W/4) -> (B, 100, H/4, W/4)
-        masks_queries_logits = torch.einsum("bqc,bchw->bqhw", mask_embeddings, mask_features)
+        class_queries_logits = self.m2f.class_predictor(decoder_output.last_hidden_state) # (B, 100, num_classes + 1)
+        masks_queries_logits = decoder_output.masks_queries_logits[-1]                    # (B, 100, H/4, W/4)
         
         output = {
             'masks_queries_logits': masks_queries_logits,
