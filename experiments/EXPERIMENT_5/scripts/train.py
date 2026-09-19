@@ -102,6 +102,7 @@ def main():
     parser.add_argument('--lr_backbone', type=float, default=1e-5, help="Learning rate for Swin backbone")
     parser.add_argument('--weight_decay', type=float, default=1e-4)
     parser.add_argument('--lambda_coord', type=float, default=5.0, help="Weight for junction coordinate loss")
+    parser.add_argument('--lambda_vis', type=float, default=1.0, help="Weight for junction visibility loss")
     parser.add_argument('--num_workers', type=int, default=4, help="DataLoader workers")
     parser.add_argument('--eval_splits', type=str, default='both', choices=['val', 'both'], help="Splits to evaluate after training")
     parser.add_argument('--smoke_test', action='store_true', help="Run 1 step of train and val for verification")
