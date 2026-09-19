@@ -3,7 +3,7 @@
 #SBATCH --partition=gpu
 #SBATCH --account=lab
 #SBATCH --qos=normal
-#SBATCH --gres=gpu:a100:1
+#SBATCH --gres=gpu:a100_3g.20gb:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --time=12:00:00
@@ -13,7 +13,7 @@
 # ==============================================================================
 # SLURM: EXPERIMENT_5 — Junction-Steered Mask2Former
 # Target Server: gpu-a240 (100.82.42.48)
-# Primary Hardware: NVIDIA A100-PCIE-40GB (batch_size=4, 8 workers, no accum)
+# Primary Hardware: NVIDIA A100 MIG 3g.20gb (20 GB Dedicated Isolated VRAM)
 # ==============================================================================
 
 set -e
