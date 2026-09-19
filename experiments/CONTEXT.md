@@ -152,7 +152,7 @@ Pay close attention to these 7 traps. **Do not repeat them:**
 - **Kaggle Notebooks (EXP_2):** `experiments/EXPERIMENT_2/Mask2Former_Run_*.ipynb`
 - **HPC Cluster Slurm Scripts:** `experiments/EXPERIMENT_2/scripts/run_mask2former_*.sbatch`
 - **Cluster Code Location:** `/data/khoalq/surgical_ai/` on `gpu-a240` (`100.82.42.48`)
-
+- **Environment** Everything should be run under the venv surgical_ai on both the local and the server machine
 ---
 
 ## 6. Checklist for the Next Agent
