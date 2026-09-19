@@ -56,13 +56,13 @@ nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
 echo ""
 
 # ── Training Execution ─────────────────────────────────────────────────────────
-# A100-40GB: batch_size=4, num_workers=8, no accumulation needed
+# Training with batch_size=2, accum_steps=2 (effective batch_size=4, AMP enabled)
 python -u "${REPO_ROOT}/experiments/EXPERIMENT_5/scripts/train.py" \
     --data_dir      "$DATA_ROOT" \
     --out_dir       "$SAVE_DIR"  \
     --epochs        60           \
-    --batch_size    4            \
-    --accum_steps   1            \
+    --batch_size    2            \
+    --accum_steps   2            \
     --lr_head       1e-4         \
     --lr_backbone   1e-5         \
     --lambda_coord  5.0          \

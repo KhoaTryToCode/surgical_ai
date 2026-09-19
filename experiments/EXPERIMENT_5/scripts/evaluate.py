@@ -170,7 +170,10 @@ def run_evaluation(model, dataloader, device, split_name="Val", out_dir=None):
             is_p40s = batch['is_patient_40']
             
             t0 = time.time()
-            outputs = model(pixel_values)
+            use_amp = (device.type == 'cuda')
+            amp_dtype = torch.bfloat16 if (use_amp and torch.cuda.is_bf16_supported()) else torch.float16
+            with torch.amp.autocast('cuda', enabled=use_amp, dtype=amp_dtype):
+                outputs = model(pixel_values)
             latencies.append((time.time() - t0) * 1000.0)
             
             pred_masks_logits = outputs['masks_queries_logits'] # (B, 100, H/4, W/4)

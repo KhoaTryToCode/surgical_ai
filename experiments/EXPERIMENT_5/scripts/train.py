@@ -146,7 +146,7 @@ def main():
         pin_memory=(device.type == 'cuda')
     ) if test_dataset else None
     
-    # 2. Build Model, Loss, Optimizer
+    # 2. Build Model, Loss, Optimizer & AMP Scaler
     model = JunctionSteeredMask2Former(num_labels=4).to(device)
     criterion = JunctionSteeredLoss(lambda_m2f=1.0, lambda_coord=args.lambda_coord, lambda_vis=args.lambda_vis)
     optimizer, scheduler = build_optimizer_and_scheduler(
@@ -156,6 +156,11 @@ def main():
         weight_decay=args.weight_decay,
         epochs=args.epochs
     )
+    use_amp = (device.type == 'cuda')
+    amp_dtype = torch.bfloat16 if (use_amp and torch.cuda.is_bf16_supported()) else torch.float16
+    scaler = torch.amp.GradScaler('cuda', enabled=use_amp)
+    if use_amp:
+        print(f"⚡ AMP enabled: dtype={amp_dtype}")
     
     # Smoke Test
     if args.smoke_test:
@@ -169,10 +174,12 @@ def main():
             gt_j_vis = batch['junction_vis'].to(device)
             
             optimizer.zero_grad()
-            outputs = model(pixel_values, mask_labels=mask_labels, class_labels=class_labels)
-            total_loss, loss_dict = criterion(outputs, gt_j_coords, gt_j_vis)
-            total_loss.backward()
-            optimizer.step()
+            with torch.amp.autocast('cuda', enabled=use_amp, dtype=amp_dtype):
+                outputs = model(pixel_values, mask_labels=mask_labels, class_labels=class_labels)
+                total_loss, loss_dict = criterion(outputs, gt_j_coords, gt_j_vis)
+            scaler.scale(total_loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             print(f"   [Smoke Test Loss] Total: {loss_dict['loss']:.4f} | M2F: {loss_dict['m2f_loss']:.4f} | Coord: {loss_dict['coord_loss']:.4f} | Vis: {loss_dict['vis_loss']:.4f}")
             break
             
@@ -198,19 +205,22 @@ def main():
             gt_j_coords = batch['junction_coords'].to(device)
             gt_j_vis = batch['junction_vis'].to(device)
             
-            outputs = model(pixel_values, mask_labels=mask_labels, class_labels=class_labels)
-            total_loss, loss_dict = criterion(outputs, gt_j_coords, gt_j_vis)
+            with torch.amp.autocast('cuda', enabled=use_amp, dtype=amp_dtype):
+                outputs = model(pixel_values, mask_labels=mask_labels, class_labels=class_labels)
+                total_loss, loss_dict = criterion(outputs, gt_j_coords, gt_j_vis)
+                # Gradient accumulation
+                loss_scaled = total_loss / float(args.accum_steps)
             
-            # Gradient accumulation
-            loss_scaled = total_loss / float(args.accum_steps)
-            loss_scaled.backward()
+            scaler.scale(loss_scaled).backward()
             
             for k in epoch_losses.keys():
                 epoch_losses[k].append(loss_dict[k])
                 
             if (step + 1) % args.accum_steps == 0 or (step + 1) == len(train_loader):
+                scaler.unscale_(optimizer)
                 nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
                 optimizer.zero_grad()
                 
             if (step + 1) % 50 == 0 or (step + 1) == len(train_loader):
