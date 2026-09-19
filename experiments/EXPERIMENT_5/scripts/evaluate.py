@@ -57,11 +57,12 @@ def rasterize_class_map(masks_queries_logits, class_queries_logits, canvas_size=
     Standard Mask2Former post-processing:
     Argmax over query probabilities multiplied by sigmoid mask probabilities.
     """
-    # masks_queries_logits: (100, H/4, W/4)
-    # class_queries_logits: (100, num_classes + 1)
+    # Ensure float32 for interpolation, softmax, and numpy conversion (prevents BFloat16 NumPy error)
+    masks_queries_logits = masks_queries_logits.float()
+    class_queries_logits = class_queries_logits.float()
     
     # 1. Resize mask logits to canvas_size
-    masks = F_interpolate = torch.nn.functional.interpolate(
+    masks = torch.nn.functional.interpolate(
         masks_queries_logits.unsqueeze(0),
         size=(canvas_size, canvas_size),
         mode='bilinear',
@@ -179,7 +180,7 @@ def run_evaluation(model, dataloader, device, split_name="Val", out_dir=None):
             
             pred_masks_logits = outputs['masks_queries_logits'] # (B, 100, H/4, W/4)
             pred_cls_logits = outputs['class_queries_logits']   # (B, 100, 5)
-            pred_j_coords_t = outputs['pred_junction_coords'].cpu().numpy() # (B, 4, 2)
+            pred_j_coords_t = outputs['pred_junction_coords'].float().cpu().numpy() # (B, 4, 2)
             
             for b in range(pixel_values.shape[0]):
                 pred_map = rasterize_class_map(pred_masks_logits[b], pred_cls_logits[b])
@@ -199,7 +200,7 @@ def run_evaluation(model, dataloader, device, split_name="Val", out_dir=None):
                 if is_p40s[b] and p40_diag_dir:
                     diag_path = os.path.join(p40_diag_dir, f"{Path(filenames[b]).stem}_diag.jpg")
                     render_patient_40_diagnostic(
-                        orig_rgb_norm=pixel_values[b].cpu().numpy(),
+                        orig_rgb_norm=pixel_values[b].float().cpu().numpy(),
                         gt_mask=masks[b],
                         pred_map=pred_map,
                         pred_j_coords=pred_j_coords_t[b],
