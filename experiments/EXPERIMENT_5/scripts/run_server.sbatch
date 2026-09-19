@@ -75,5 +75,6 @@ python -u "${REPO_ROOT}/experiments/EXPERIMENT_5/scripts/train.py" \
 echo ""
 echo "=================================================================="
 echo "✅ EXPERIMENT_5 COMPLETED AT $(date)"
-echo "   Results in: $SAVE_DIR"
+echo "   Results in      : $SAVE_DIR"
+echo "   Packaged Archive: $SAVE_DIR/results.zip"
 echo "=================================================================="

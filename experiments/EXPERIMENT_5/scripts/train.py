@@ -13,6 +13,7 @@ import os
 import sys
 import time
 import json
+import zipfile
 import argparse
 import pandas as pd
 import numpy as np
@@ -90,6 +91,21 @@ def build_optimizer_and_scheduler(model, lr_backbone=1e-5, lr_head=1e-4, weight_
     
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
     return optimizer, scheduler
+
+def create_results_zip(source_dir, output_zip_path):
+    """
+    Packages evaluation outputs, checkpoints, and Patient 40 diagnostic montages into a zip archive
+    matching the project standard of EXPERIMENT_3 and EXPERIMENT_4.
+    """
+    with zipfile.ZipFile(output_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for root, _, files in os.walk(source_dir):
+            for file in files:
+                if file.endswith('.zip'):
+                    continue
+                file_path = os.path.join(root, file)
+                arcname = os.path.relpath(file_path, source_dir)
+                zipf.write(file_path, arcname)
+    print(f"📦 Results archive packaged: {output_zip_path} ({os.path.getsize(output_zip_path)/(1024*1024):.2f} MB)")
 
 def main():
     parser = argparse.ArgumentParser(description="Train Junction-Steered Mask2Former (EXPERIMENT_5)")
@@ -297,6 +313,10 @@ def main():
     with open(summary_json_path, 'w') as f:
         json.dump(full_summary, f, indent=4)
     print(f"🎉 Saved Metrics Summary JSON: {summary_json_path}")
+    
+    # 5. Package results into results.zip matching project standard
+    zip_path = os.path.join(args.out_dir, 'results.zip')
+    create_results_zip(args.out_dir, zip_path)
 
 if __name__ == '__main__':
     main()

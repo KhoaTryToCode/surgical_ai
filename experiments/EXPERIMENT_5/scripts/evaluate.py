@@ -13,6 +13,7 @@ import os
 import sys
 import time
 import json
+import zipfile
 import argparse
 import numpy as np
 import pandas as pd
@@ -295,6 +296,18 @@ def main():
     with open(summary_path, 'w') as f:
         json.dump(full_summary, f, indent=4)
     print(f"🎉 Complete Metrics Summary saved to: {summary_path}")
+    
+    # 5. Package results into results.zip
+    zip_path = os.path.join(args.out_dir, 'results.zip')
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for root, _, files in os.walk(args.out_dir):
+            for file in files:
+                if file.endswith('.zip'):
+                    continue
+                file_path = os.path.join(root, file)
+                arcname = os.path.relpath(file_path, args.out_dir)
+                zipf.write(file_path, arcname)
+    print(f"📦 Results archive packaged: {zip_path} ({os.path.getsize(zip_path)/(1024*1024):.2f} MB)")
 
 if __name__ == '__main__':
     main()
