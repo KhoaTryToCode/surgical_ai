@@ -165,3 +165,85 @@ Before running or touching code:
 - [ ] Check canvas resolution: Are you reading `imageHeight` and `imageWidth` from JSON metadata to prevent Patient 32 4K coordinate clipping?
 - [ ] If running evaluation on Kaggle/NumPy 2.x, did you include the `np.Inf = np.inf` monkeypatch?
 - [ ] Are you outputting the complete 4-file artifact deliverable (`.pth`, `summary_metrics.json`, CSVs, and `patient_40_diagnostics/`)?
+
+---
+
+## 7. EXPERIMENT_5 & EXPERIMENT_6 Generations (Chronicle & Discoveries)
+
+### EXPERIMENT_5 (`experiments/EXPERIMENT_5/`): Junction-Steered Mask2Former
+- **Architecture:** 4 learnable anatomical queries ($J_{\text{top}}, J_{\text{bottom}}, J_{\text{lat\_r}}, J_{\text{lat\_l}}$) attend to stride-16 features, then steer 100 Mask2Former queries via cross-attention with gated residual update:
+  `Q_steered = LayerNorm(Q + alpha * delta_Q)`
+- **Supervision:** 2-layer MLP predicting $(x, y) \in [0, 1]^2$ coordinates with Smooth-L1 loss + binary visibility BCE.
+- **Benchmark Results:**
+  - **Test Macro Dice:** **69.84%** (surpassing published BCRNet SOTA of 69.57% and Mask2Former baseline 65.73%).
+  - **Val Macro Dice:** **71.98%** (Patient 40 Val: **72.61%**).
+- **Key Flaw Diagnosed (Geometric Probing):**
+  Linear probing (`analyze_j_geometry.py`) proved $J$ vectors strongly capture organ translation ($R^2 = 0.857$ for Y-centroid, $0.648$ for X-centroid) and scale ($R^2 = 0.741$), but the MLP coordinate head forced hallucination of $(x, y)$ coordinates when landmarks were absent or occluded, resulting in **147.4 px mean test landmark error** and phantom hot-spots.
+
+### EXPERIMENT_6 (`experiments/EXPERIMENT_6/`): Heatmap-Guided Junction-Steered Mask2Former
+- **Architecture:** Keeps `delta_q` steering 100% intact. Replaces the decoupled MLP coordinate head with **2D continuous spatial sigmoid heatmaps ($4 \times 64 \times 64$)** via dynamic spatial dot product:
+  `dots = (J_proj · F_proj) / sqrt(d) + bias_prior`
+  `pred_heatmaps = sigmoid(dots)`
+- **Supervision:** CenterNet-style Gaussian Focal Loss:
+  - Visible landmark ($v_k = 1$): 2D Gaussian peak ($\sigma = 2.0\text{ px}$, peak = $1.0$).
+  - Absent landmark ($v_k = 0$): Clean all-zero plane ($0.0$), penalizing ghost activations and cleanly eliminating coordinate hallucination.
+- **Benchmark Results:**
+  - **Test Macro Dice:** **69.84%** (Tied SOTA, beats BCRNet 69.57%).
+  - **Val Macro Dice:** **71.51%** (Patient 40: **72.06%**).
+  - **Landmark Localization Error:** **81.57 px** on test set (**-44.7% reduction** from 147.42 px in EXP_5!).
+  - **Convergence:** Best model saved at **Epoch 20** (converged 2x faster than EXP_5's Epoch 40).
+
+---
+
+## 8. New Critical Traps, Mistakes Made & Rules (EXP_5 & EXP_6)
+
+### Trap 8: NEVER Modify, Delete, or Overwrite the User's Personal Log in `RESULTS.md`
+- **What happened:** When adding EXP_5 benchmark numbers, the AI overwrote the user's handwritten log under `September 19, 2026`. The user had to specifically request restoring it.
+- **Golden Rule:** When updating `experiments/RESULTS.md` for a new experiment:
+  1. **ONLY add exactly 2 rows to the tables** (one row in Table 1 Validation, one row in Table 2 Test).
+  2. **DO NOT touch, edit, or rephrase ANY text, notes, or dates written by the user.**
+  3. All detailed experimental breakdowns and findings belong in `experiments/<EXP_ID>/RESULTS_LEDGER.md`, NOT in the main notes of `RESULTS.md`.
+
+### Trap 9: Focal Loss Prior Bias in Dense Heatmap Heads
+- **What happened:** In `DynamicHeatmapHead`, the dot product `(J_proj · F_proj) / sqrt(d)` had zero mean at initialization, so `sigmoid(0) = 0.5` across all 16,384 pixels ($4 \times 64 \times 64$). Summing negative focal loss over 16,384 pixels produced an initial loss of **~4,139**, creating a severe gradient explosion risk that could disrupt pretrained Swin weights.
+- **How to fix / Golden Rule:** Follow RetinaNet and CenterNet: always initialize the bias of dense focal heatmap layers with $b = -2.19$ (or $-2.5$), such that $\text{sigmoid}(b) \approx 0.10$.
+  ```python
+  self.bias = nn.Parameter(torch.tensor(-2.19, dtype=torch.float32))
+  dots = dots + self.bias
+  ```
+  With this bias and $\lambda_{\text{heatmap}} = 1.0$, the heatmap loss starts at balanced scale (~3.0 to 6.0), harmoniously matching Mask2Former loss (~2.5).
+
+### Trap 10: Binary Overlap vs. Multi-Class Semantic Error Maps
+- **What happened:** In `evaluate.py`, Panel 4 (Error Map) was implemented as:
+  `tp = (pred_map > 0) & (gt_mask > 0)`
+  On `Patient_40_08790`, the model predicted Silhouette (Green) where Ridge (Red in GT) was supposed to be. Panel 4 painted the boundary Green (TP), making it look like a correct prediction and confusing the user.
+- **Clarification:** The quantitative metrics (`macro_dice` in `metrics.py`) are strictly class-aware and correctly caught the error (scoring 40.1% Dice). The flaw was purely cosmetic in the JPEG rendering.
+- **Golden Rule:** When rendering multi-class error maps, separate correct class overlap from class confusion:
+  ```python
+  tp_correct  = (pred_map == gt_mask) & (gt_mask > 0)                 # Correct Class -> Green
+  class_error = (pred_map > 0) & (gt_mask > 0) & (pred_map != gt_mask) # Wrong Class -> Yellow/Orange
+  fp          = (pred_map > 0) & (gt_mask == 0)                       # False Positive -> Cyan
+  fn          = (pred_map == 0) & (gt_mask > 0)                       # False Negative -> Red
+  ```
+
+### Trap 11: macOS BSD `rsync` Incompatibility (`--info=progress2`)
+- **What happened:** Command `rsync -avzP --info=progress2` crashed on macOS with `rsync: unrecognized option '--info=progress2'`.
+- **Root Cause:** macOS ships with BSD rsync 2.6.9, which does not support GNU rsync's `--info=progress2`.
+- **How to fix:** On macOS, use `rsync -avzP` (`-P` already includes `--partial --progress`).
+
+### Trap 12: User Execution Preference (Do Not Run Unsolicited Server/Git Commands)
+- **What happened:** Attempting to automatically run `sbatch` or `git commit` prompted permission denials because the user explicitly stated they want to run execution commands themselves.
+- **Golden Rule:** When server deployment or git commits are ready, provide the exact, copy-pasteable command to the user so they can review and execute it at their own pace.
+
+### Trap 13: 3D vs 4D Shape Agnosticism in Heatmap Utility Functions
+- **What happened:** `extract_peak_coords` crashed with `ValueError: too many values to unpack (expected 4)` when passed unbatched 3D tensors $(K, H, W)$ or when callers passed an extra dimension.
+- **How to fix:** Always support both $(K, H, W)$ and $(B, K, H, W)$ gracefully:
+  ```python
+  is_batch = (len(pred_heatmaps.shape) == 4)
+  if not is_batch:
+      pred_heatmaps = pred_heatmaps.unsqueeze(0)
+  # ... process ...
+  if not is_batch:
+      return coords.squeeze(0), visibilities.squeeze(0), confidences.squeeze(0)
+  ```
+

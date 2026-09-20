@@ -47,7 +47,7 @@ While EXPERIMENT_5 set a new benchmark high (**69.84% Test Macro Dice**, surpass
 | **Canvas Size** | 1024 x 1024 | Native surgical working resolution |
 | **Heatmap Resolution** | 64 x 64 | Stride-16 feature resolution (1 px = 16 canvas px) |
 | **Gaussian Sigma** | 2.0 px | Peak spread in feature grid (~32 px in canvas space) |
-| **Line Thickness** | 35 px | Standardized L3D line stroke |
+| **Line Thickness** | 35 px on raw canvas | Drawn on native camera resolution (1920x1080/4K) at thickness 35 and resized to 1024x1024 via `cv2.INTER_NEAREST` (effective width $\approx 18.7\text{ px}$), ensuring exact bit-for-bit parity with TopoNet and EXPERIMENT_1/2 |
 | **Epochs** | 60 | Training schedule with Cosine Annealing |
 | **Batch Size** | 2 | Per GPU step |
 | **Accumulation Steps** | 2 | Effective batch size = 4 |

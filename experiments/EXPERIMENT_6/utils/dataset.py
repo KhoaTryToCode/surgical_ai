@@ -93,32 +93,40 @@ class L3DDataset(Dataset):
         with open(json_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
             
-        # Handle Patient 32 4K canvas resolution properly
+        # Dynamic canvas size: guarantees Patient 32 4K (2160x3840) is never truncated
         data_w = data.get('imageWidth', orig_w)
         data_h = data.get('imageHeight', orig_h)
-        sx = float(self.image_size) / float(data_w)
-        sy = float(self.image_size) / float(data_h)
+        canvas_raw = np.zeros((data_h, data_w), dtype=np.uint8)
         
         # 3. Create dense raster mask
-        mask = np.zeros((self.image_size, self.image_size), dtype=np.uint8)
+        # Draw contours with thickness 35 on raw canvas (exact TopoNet / EXP_1 paper standard)
         shapes = data.get('shapes', [])
-        
         for shape in shapes:
             lbl = str(shape.get('label', '')).lower().strip()
-            pts = np.array(shape.get('points', []), dtype=np.float32)
+            pts = shape.get('points', [])
             if len(pts) < 2:
                 continue
                 
-            pts[:, 0] *= sx
-            pts[:, 1] *= sy
-            pts_int = np.round(pts).astype(np.int32).reshape((-1, 1, 2))
-            
-            if lbl.startswith('r') or 'ridge' in lbl or 'rigde' in lbl:
-                cv2.polylines(mask, [pts_int], isClosed=False, color=1, thickness=self.stroke_width, lineType=cv2.LINE_AA)
-            elif lbl.startswith('s') or 'sil' in lbl:
-                cv2.polylines(mask, [pts_int], isClosed=False, color=2, thickness=self.stroke_width, lineType=cv2.LINE_AA)
-            elif lbl.startswith('f') or 'falc' in lbl or 'lig' in lbl:
-                cv2.polylines(mask, [pts_int], isClosed=False, color=3, thickness=self.stroke_width, lineType=cv2.LINE_AA)
+            if lbl.startswith('r') or 'ridge' in lbl or 'rigde' in lbl or 'anterior' in lbl:
+                color = 1
+            elif lbl.startswith('s') or 'sil' in lbl or 'margin' in lbl or 'silhouette' in lbl:
+                color = 2
+            elif lbl.startswith('f') or lbl.startswith('l') or 'falc' in lbl or 'lig' in lbl:
+                color = 3
+            else:
+                color = 0
+                
+            if color > 0:
+                for i in range(1, len(pts)):
+                    pt1 = tuple(map(int, pts[i - 1]))
+                    pt2 = tuple(map(int, pts[i]))
+                    cv2.line(canvas_raw, pt1, pt2, color, self.stroke_width)
+
+        # Downsample to network resolution (1024x1024) using INTER_NEAREST (exact TopoNet / EXP_1 standard)
+        if data_w != self.image_size or data_h != self.image_size:
+            mask = cv2.resize(canvas_raw, (self.image_size, self.image_size), interpolation=cv2.INTER_NEAREST)
+        else:
+            mask = canvas_raw
 
         mask_tensor = torch.from_numpy(mask).long() # (H, W)
         

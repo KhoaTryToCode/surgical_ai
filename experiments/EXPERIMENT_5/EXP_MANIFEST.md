@@ -33,7 +33,7 @@ By dynamically steering the 100 Mask2Former queries using 4 biological junction 
 | Hyperparameter | Value | Description |
 | :--- | :--- | :--- |
 | **Canvas Size** | $1024 \times 1024$ | Native working resolution |
-| **Line Thickness** | 35 px | Standardized L3D line stroke |
+| **Line Thickness** | 35 px on raw canvas | Drawn on native camera resolution (1920x1080/4K) at thickness 35 and resized to $1024 \times 1024$ via `cv2.INTER_NEAREST` (effective width $\approx 18.7\text{ px}$), ensuring exact bit-for-bit parity with TopoNet and EXPERIMENT_1/2 |
 | **Epochs** | 60 | Training schedule with Cosine Annealing |
 | **Batch Size** | 2 | Per GPU step |
 | **Accumulation Steps** | 2 | Effective batch size = 4 |
