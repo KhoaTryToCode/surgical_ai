@@ -153,6 +153,8 @@ Pay close attention to these 7 traps. **Do not repeat them:**
 - **HPC Cluster Slurm Scripts:** `experiments/EXPERIMENT_2/scripts/run_mask2former_*.sbatch`
 - **Cluster Code Location:** `/data/khoalq/surgical_ai/` on `gpu-a240` (`100.82.42.48`)
 - **Environment** Everything should be run under the venv surgical_ai on both the local and the server machine
+- **Update result** Whenever you have a new experiment, you only do 2 things to log the result. First is that you only add 2 rows into the RESULT.md in the experiments folder, do not change anything else, and then you create a RESULT_LEDGER for that experiment. Do not change any log or any findings that I wrote in the RESULT.md
+
 ---
 
 ## 6. Checklist for the Next Agent
