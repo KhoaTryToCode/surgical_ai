@@ -61,8 +61,8 @@ python -u "${REPO_ROOT}/experiments/EXPERIMENT_7/scripts/train.py" \
     --data_dir      "$DATA_ROOT" \
     --out_dir       "$SAVE_DIR"  \
     --epochs        60           \
-    --batch_size    2            \
-    --accum_steps   2            \
+    --batch_size    4            \
+    --accum_steps   1            \
     --lr_head       1e-4         \
     --lr_backbone   1e-5         \
     --lambda_coord  5.0          \
