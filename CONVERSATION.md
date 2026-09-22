@@ -160,3 +160,71 @@ This explains why in `RESULTS.md`:
 
 The wider mask forces the boundary edge outwards, artificially inflating the Average Symmetric Surface Distance even when the centerline prediction is well-aligned.
 
+---
+
+# Mathematical Formulations: The Liver as an Embedded 2D Riemannian Manifold
+
+## 9. The 2-Chart Rhombus Model & Continuous Canonical Coordinate Mapping
+
+### 9.1 Anatomical Bijection to the Parametric Domain $\Omega$
+The reference liver surface is modeled as a 2D parametric domain $\Omega \subset \mathbb{R}^2$ with intrinsic coordinates $(u, v) \in [0, 1]^2$:
+- **Top Vertex $V_T = (0.5, 1.0)$:** Superior Falciform Junction $J_{\text{top}}$ (Falciform meets Silhouette).
+- **Bottom Vertex $V_B = (0.5, 0.0)$:** Inferior Falciform Junction $J_{\text{bot}}$ (Falciform meets Anterior Ridge).
+- **Left Vertex $V_L = (0.0, 0.5)$:** Left Lateral Apex $J_{\text{lat\_left}}$ (Segment II/III apex).
+- **Right Vertex $V_R = (1.0, 0.5)$:** Right Lateral Apex $J_{\text{lat\_right}}$ (Segment VI/VII apex).
+- **Crease / Hinge Edge $e_{\text{mid}} = (V_T, V_B)$:** Falciform Ligament dividing the surface into two triangular charts:
+  $$\mathcal{F}_{\text{left}} = \Delta(V_L, V_T, V_B) \quad (\text{Left Lobe: Segments II, III, IV})$$
+  $$\mathcal{F}_{\text{right}} = \Delta(V_R, V_T, V_B) \quad (\text{Right Lobe: Segments V, VI, VII, VIII})$$
+- **Boundary Perimeters:**
+  - $(V_L, V_T) \cup (V_T, V_R) \equiv$ Liver Silhouette (Superior border)
+  - $(V_L, V_B) \cup (V_B, V_R) \equiv$ Anterior Ridge (Inferior margin)
+
+### 9.2 The Physical 3D Embedding & Perspective Projection
+Let $\mathbf{x}(u, v) = (x(u, v), y(u, v), z(u, v)) \in \mathbb{R}^3$ denote the deformed 3D physical liver state, observed by a calibrated camera matrix $K \in \mathbb{R}^{3 \times 3}$:
+$$\mathbf{p}(u, v) = \pi(\mathbf{x}(u, v)) = \left( \frac{f_x x + c_x z}{z}, \; \frac{f_y y + c_y z}{z} \right) \in \mathbb{R}^2$$
+
+### 9.3 Inherent Limitations of Discrete 4-Vertex Wireframes
+Under local zoom (camera frustum restricted to a sub-domain $\mathcal{U} \subset \Omega$):
+$$\mathcal{U} \cap \{V_T, V_B, V_L, V_R\} = \emptyset$$
+All 4 global junction visibility flags collapse: $v_k = 0 \;\; \forall k \in \{1, 2, 3, 4\}$.
+A discrete keypoint detector has zero spatial conditioning, causing catastrophic failure under camera close-ups.
+
+### 9.4 Continuous Dense Canonical Coordinate Regression (DensePose for Surgery)
+To make every local patch $\mathcal{U}$ observable at any arbitrary zoom level without artificial fiducial markers, a deep neural network predicts a dense canonical coordinate field $\Phi: \mathbb{R}^2 \to [0, 1]^2$:
+$$\hat{\mathbf{u}}(p_x, p_y) = (\hat{u}, \hat{v})$$
+for every foreground liver pixel $(p_x, p_y)$.
+
+### 9.5 Local Metric Tensor, SVD, and Chirality/Flip Detection
+Given the local affine Jacobian $J = \nabla_{(u, v)} \mathbf{p} \in \mathbb{R}^{2 \times 2}$:
+$$J = \begin{bmatrix} \frac{\partial p_x}{\partial u} & \frac{\partial p_x}{\partial v} \\ \frac{\partial p_y}{\partial u} & \frac{\partial p_y}{\partial v} \end{bmatrix} = U \Sigma V^T$$
+
+1. **Orientation / 3D Flip Invariant:**
+   $$\operatorname{sgn}(\det(J)) = \begin{cases} +1 & \text{Normal Anatomical Anterior View (Right-handed)} \\ -1 & \text{Flipped / Retracted / Posterior View (Left-handed Parity)} \end{cases}$$
+2. **Local Scale & Tilt:**
+   Singular values $\sigma_1 \ge \sigma_2 > 0$ yield the isotropic zoom factor $\sqrt{\sigma_1 \sigma_2}$ and perspective foreshortening tilt angle $\theta = \arccos(\sigma_2 / \sigma_1)$.
+3. **Dihedral Angle Across the Falciform Hinge:**
+   Across the crease $e_{\text{mid}}$, the surface normals $\mathbf{n}_{\text{left}}$ and $\mathbf{n}_{\text{right}}$ define the 3D folding angle:
+   $$\cos(\theta_{\text{fold}}) = \langle \mathbf{n}_{\text{left}}, \; \mathbf{n}_{\text{right}} \rangle, \quad [\![ \nabla \mathbf{p} ]\!] = \nabla \mathbf{p}\big|_{\mathcal{F}_{\text{right}}} - \nabla \mathbf{p}\big|_{\mathcal{F}_{\text{left}}} \ne 0$$
+
+---
+
+## 10. Dataset-Wide Transfinite Ruled Surface Parameterization & Interactive Inspector (921 Frames)
+
+### 10.1 Boundary Interpolation via Monotonic Ruled Surface Parameterization
+For any surgical video frame where laparoscopic tools or tissue overlap introduce arbitrary gaps in the 1D landmark contours, the continuous liver parenchyma domain $\mathcal{D} \subset \mathbb{R}^2$ is closed and continuously parameterized using transfinite profile interpolation along the horizontal image coordinate $x \in [x_{\min}, x_{\max}]$:
+1. Let $y_{\text{sil}}(x)$ denote the piecewise linear interpolation of the superior silhouette points along the $x$-axis.
+2. Let $y_{\text{ridge}}(x)$ denote the piecewise linear interpolation of the inferior anterior ridge points along the $x$-axis.
+3. For every column $x$, the liver parenchyma span is bounded by $[y_{\text{top}}(x), y_{\text{bot}}(x)] = [\min(y_{\text{sil}}(x), y_{\text{ridge}}(x)), \max(y_{\text{sil}}(x), y_{\text{ridge}}(x))]$.
+4. The normalized vertical coordinate $v \in [0, 1]$ is continuously defined for all $(x, y) \in \mathcal{D}$ by:
+   $$v(x, y) = \begin{cases} \frac{y_{\text{bot}}(x) - y}{y_{\text{bot}}(x) - y_{\text{top}}(x)} & \text{Normal Anatomy (Ridge inferior, Silhouette superior)} \\ \frac{y - y_{\text{top}}(x)}{y_{\text{bot}}(x) - y_{\text{top}}(x)} & \text{Flipped Retraction (Ridge superior, Silhouette inferior)} \end{cases}$$
+5. The normalized horizontal coordinate $u \in [0, 1]$ across the Falciform hinge $x_{\text{hinge}}$ is continuously defined by:
+   $$u(x, y) = \begin{cases} 0.5 \cdot \frac{x - x_{\min}}{x_{\text{hinge}} - x_{\min}} & x \le x_{\text{hinge}} \\ 0.5 + 0.5 \cdot \frac{x - x_{\text{hinge}}}{x_{\max} - x_{\text{hinge}}} & x > x_{\text{hinge}} \end{cases}$$
+
+### 10.2 Dataset Audit Statistics across 921 Training Frames
+- **Total Valid Frames:** 921 / 921 (100.0% coverage, 0 corrupted files)
+- **Complete Triad (3 Landmarks):** 841 / 921 (91.3%)
+- **Partial Silhouette + Ridge (2 Landmarks):** 72 / 921 (7.8%) — Falciform hinge smoothly inferred from anatomical horizontal centerline
+- **Single Landmark Visible (1 Landmark):** 8 / 921 (0.9%) — Extrapolated via anatomical margin profile
+- **Flipped / Inverted Retraction Views:** 25 / 921 (2.7%) — Accurately detected via tip tangent cross-product parity and mean vertical landmark rank
+- **Interactive Visualizer:** Accessible at `data/inspections/uv_viewer.html`
+

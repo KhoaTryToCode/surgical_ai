@@ -1,0 +1,40 @@
+{
+    "val_summary": {
+        "split": "Val-Final",
+        "total_frames": 122,
+        "macro_dice": 0.681334723263243,
+        "macro_iou": 0.5511182749846526,
+        "macro_assd": 19.54370674539785,
+        "ridge_dice": 0.682493271181436,
+        "sil_dice": 0.7324012669552723,
+        "falc_dice": 0.6291096316530204,
+        "fg_dice": 0.7012558330765889,
+        "mean_latency_ms": 150.3858097264024,
+        "fps": 6.649563558019899,
+        "gpu_name": "NVIDIA A100-PCIE-40GB MIG 3g.20gb",
+        "patient_40_dice": 0.7091332927819981,
+        "patient_40_assd": 18.434608773429797,
+        "patient_40_count": 101,
+        "mean_junction_err_px": 168.40582823957135
+    },
+    "test_summary": {
+        "split": "Test-Final",
+        "total_frames": 109,
+        "macro_dice": 0.6686376824899717,
+        "macro_iou": 0.5392101229404609,
+        "macro_assd": 22.637572610050164,
+        "ridge_dice": 0.672571748525382,
+        "sil_dice": 0.7198598755695249,
+        "falc_dice": 0.6134814233750081,
+        "fg_dice": 0.69091074393607,
+        "mean_latency_ms": 149.37786188992587,
+        "fps": 6.694432410184609,
+        "gpu_name": "NVIDIA A100-PCIE-40GB MIG 3g.20gb",
+        "patient_40_dice": 0.0,
+        "patient_40_assd": 80.0,
+        "patient_40_count": 0,
+        "mean_junction_err_px": 157.06466025285997
+    },
+    "best_epoch": 11,
+    "checkpoint_path": "/data/khoalq/checkpoints/exp5_junction_m2f/best_model.pth"
+}

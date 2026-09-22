@@ -17,8 +17,7 @@
 | Mask2Former-Bezier | 59.20% | 44.97% | 30.98 px | 14.5 FPS (68.9 ms) |
 | Mask2Former-Bezier-SingleScale | 58.59% | 44.56% | 29.89 px | 15.6 FPS (64.0 ms) |
 | Mask2Former-Bezier-Landmark | 57.40% | 43.33% | 29.87 px | 15.1 FPS (66.1 ms) |
-| Mask2Former Junction-MLP-Steered | **71.98%** | **59.67%** | 35.06 px | 6.5 FPS (154.0 ms) |
-| Mask2Former Junction-Heatmap-Steered | 71.51% | 58.89% | 36.70 px | 6.5 FPS (154.1 ms) |
+| Mask2Former Junction-MLP-Steered | **68.13%** | **55.11%** | **19.54 px** | 6.6 FPS (150.4 ms) |
 
 ---
 
@@ -35,8 +34,7 @@
 | Mask2Former-Bezier | 55.74% | 41.64% | 38.46 px | 16.2 FPS (61.7 ms) |
 | Mask2Former-Bezier-SingleScale | 56.12% | 42.08% | 35.24 px | 16.7 FPS (59.9 ms) |
 | Mask2Former-Bezier-Landmark | 55.52% | 41.43% | 34.23 px | 16.7 FPS (60.0 ms) |
-| Mask2Former Junction-MLP-Steered | **69.84%** | **57.64%** | 34.61 px | 6.5 FPS (153.1 ms) |
-| Mask2Former Junction-Heatmap-Steered | **69.84%** | 57.42% | 37.49 px | 6.7 FPS (149.1 ms) |
+| Mask2Former Junction-MLP-Steered | **66.86%** | **53.92%** | **22.64 px** | 6.7 FPS (149.4 ms) |
 
 Insight from analysing the result and the patient 40 difficult cases:
 - TopoNet is way more computational heavier than the Mask2Former due to the loss functions: the clDice and the Betti Loss Matching due to they cannot be done parralelly
@@ -58,3 +56,7 @@ September 20, 2026
 - The result of using an addition query for diagnosing points anchor in the liver landmark is remarkable, pushing the validation score to 71.98 and the test score to 69.84 which is currently state of the art
 - However using the MLP to predict the coordinate is not geometrically generalized, proof showed that the predicted coordinate is unrelated to the actual anchor points, but the queries does contain information about the deformation of the liver so it helped the model perform better
 - We move on by using the spatial heatmap prediction rather than the MLP because we see that there are many cases that not all the 4 anchor points existed, therefore we create a heatmap for each of the anchor point for the model to learn
+
+September 22, 2026
+- I have found a critical bug in the EXPERIMENT 5 and 6, the grouth truth was rasterized with 35px wide, making it easier for the model to calculate the dice score on, making the result inflated
+- I have re-run the experiment and achieve 0.68 meaning that the module does improve the model prediction.
