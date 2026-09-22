@@ -3,7 +3,7 @@
 #SBATCH --partition=gpu
 #SBATCH --account=lab
 #SBATCH --qos=normal
-#SBATCH --gres=gpu:a100_3g.20gb:1
+#SBATCH --gres=gpu:a100:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --time=12:00:00
