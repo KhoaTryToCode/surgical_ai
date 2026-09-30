@@ -47,10 +47,12 @@ def resolve_anchor_json(candidate_path=None):
     """
     candidates = [
         candidate_path,
+        "/data/khoalq/data/L3D/train_biological_anchors_human.json",
+        "/data/khoalq/surgical_ai/data/llm_annotate/train_biological_anchors_human.json",
         "data/llm_annotate/train_biological_anchors_human.json",
         "../data/llm_annotate/train_biological_anchors_human.json",
         "../../data/llm_annotate/train_biological_anchors_human.json",
-        "/data/khoalq/surgical_ai/data/llm_annotate/train_biological_anchors_human.json",
+        "/data/khoalq/data/train_biological_anchors_human.json",
         "data/llm_annotate/train_biological_anchors.json"  # Fallback
     ]
     for c in candidates:

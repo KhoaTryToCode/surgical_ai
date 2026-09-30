@@ -40,7 +40,14 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # ── Paths ──────────────────────────────────────────────────────────────────────
 REPO_ROOT="/data/khoalq/surgical_ai"
 DATA_ROOT="/data/khoalq/data/L3D"
-ANCHOR_JSON="${REPO_ROOT}/data/llm_annotate/train_biological_anchors_human.json"
+
+# Auto-detect anchor JSON location (supports /data/khoalq/data/L3D/ or repo location)
+if [ -f "${DATA_ROOT}/train_biological_anchors_human.json" ]; then
+    ANCHOR_JSON="${DATA_ROOT}/train_biological_anchors_human.json"
+else
+    ANCHOR_JSON="${REPO_ROOT}/data/llm_annotate/train_biological_anchors_human.json"
+fi
+
 SAVE_DIR="/data/khoalq/checkpoints/exp8_human_anchor_m2f"
 
 # ── Sanity Checks ──────────────────────────────────────────────────────────────
