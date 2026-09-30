@@ -3,7 +3,7 @@
 #SBATCH --partition=gpu
 #SBATCH --account=lab
 #SBATCH --qos=normal
-#SBATCH --gres=gpu:a100_2g.10gb:1
+#SBATCH --gres=gpu:a100_2g.10gb_mps:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --time=12:00:00
@@ -13,7 +13,7 @@
 # ==============================================================================
 # SLURM: EXPERIMENT_8 — Human-Anchor-Steered Mask2Former
 # Target Server: gpu-a240 (100.82.42.48)
-# Primary Hardware: NVIDIA A100 MIG 2g.10gb (10 GB Dedicated Isolated VRAM)
+# Primary Hardware: NVIDIA A100 MIG 2g.10gb MPS (10 GB Dedicated Isolated VRAM)
 # ==============================================================================
 
 set -e
