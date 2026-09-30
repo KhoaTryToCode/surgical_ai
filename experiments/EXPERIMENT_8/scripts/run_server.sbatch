@@ -4,8 +4,8 @@
 #SBATCH --account=lab
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:a100_2g.10gb_mps:1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=16G
 #SBATCH --time=12:00:00
 #SBATCH --output=/data/khoalq/logs/%x-%j.out
 #SBATCH --error=/data/khoalq/logs/%x-%j.err
@@ -82,7 +82,7 @@ python -u "${REPO_ROOT}/experiments/EXPERIMENT_8/scripts/train.py" \
     --lr_backbone   1e-5           \
     --lambda_coord  5.0            \
     --lambda_vis    1.0            \
-    --num_workers   8              \
+    --num_workers   4              \
     --eval_splits   both           \
     --device        cuda           \
     2>&1 | tee "/data/khoalq/logs/exp8_human_anchor_m2f_${SLURM_JOB_ID}.log"
