@@ -3,7 +3,7 @@
 #SBATCH --partition=gpu
 #SBATCH --account=lab
 #SBATCH --qos=normal
-#SBATCH --gres=gpu:a100_3g.20gb:1
+#SBATCH --gres=gpu:a100_2g.10gb:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --time=12:00:00
@@ -13,7 +13,7 @@
 # ==============================================================================
 # SLURM: EXPERIMENT_8 — Human-Anchor-Steered Mask2Former
 # Target Server: gpu-a240 (100.82.42.48)
-# Primary Hardware: NVIDIA A100 MIG 3g.20gb (20 GB Dedicated Isolated VRAM)
+# Primary Hardware: NVIDIA A100 MIG 2g.10gb (10 GB Dedicated Isolated VRAM)
 # ==============================================================================
 
 set -e
@@ -70,14 +70,14 @@ nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
 echo ""
 
 # ── Training Execution ─────────────────────────────────────────────────────────
-# Training with batch_size=2, accum_steps=2 (effective batch_size=4, AMP enabled)
+# Training with batch_size=1, accum_steps=4 (effective batch_size=4, AMP enabled, 10GB VRAM optimized)
 python -u "${REPO_ROOT}/experiments/EXPERIMENT_8/scripts/train.py" \
     --data_dir      "$DATA_ROOT"   \
     --anchor_json   "$ANCHOR_JSON" \
     --out_dir       "$SAVE_DIR"    \
     --epochs        60             \
-    --batch_size    2              \
-    --accum_steps   2              \
+    --batch_size    1              \
+    --accum_steps   4              \
     --lr_head       1e-4           \
     --lr_backbone   1e-5           \
     --lambda_coord  5.0            \
