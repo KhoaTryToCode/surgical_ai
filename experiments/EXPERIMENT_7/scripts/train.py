@@ -19,7 +19,7 @@ if _WORKSPACE_ROOT not in sys.path:
 from experiments.EXPERIMENT_7.utils.dataset import L3DManifoldDataset
 from experiments.EXPERIMENT_7.models.manifold_steered_mask2former import ManifoldSteeredMask2Former
 from experiments.EXPERIMENT_7.models.losses import ManifoldMultiTaskLoss
-from experiments.EXPERIMENT_7.scripts.evaluate import run_evaluation, create_results_zip
+from experiments.EXPERIMENT_7.scripts.evaluate import run_evaluation, create_results_zip, load_manifold_steered_model
 
 
 def collate_fn_l3d(batch):
