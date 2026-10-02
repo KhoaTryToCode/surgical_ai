@@ -3,9 +3,9 @@
 #SBATCH --partition=gpu
 #SBATCH --account=lab
 #SBATCH --qos=normal
-#SBATCH --gres=gpu:a100_2g.10gb_mps:1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
+#SBATCH --gres=gpu:a100:1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
 #SBATCH --time=14:00:00
 #SBATCH --output=/data/khoalq/logs/%x-%j.out
 #SBATCH --error=/data/khoalq/logs/%x-%j.err
@@ -13,10 +13,11 @@
 # ==============================================================================
 # SLURM: EXPERIMENT_11 — Targeted Inversion-Weighted Junction-Steered Mask2Former
 # Target Server: gpu-a240 (100.82.42.48)
-# Primary Hardware: NVIDIA A100 MIG 2g.10gb MPS (10 GB Dedicated Isolated VRAM)
+# Primary Hardware: NVIDIA A100 (40 GB VRAM)
+# Note: If A100 full is busy, fallback to 20 GB MIG: --gres=gpu:a100_3g.20gb:1
 # Clean Controlled Ablation on EXP_5: Identical 2D continuous junction-steered
 # architecture, inflating rare inverted/retracted training frames via
-# WeightedRandomSampler (Tier 1: 15.0x, Tier 2: 5.0x) + Photometric ColorJitter.
+# WeightedRandomSampler (All 24 Unified Tier-1 cases at 15.0x) + ColorJitter.
 # ==============================================================================
 
 set -e
