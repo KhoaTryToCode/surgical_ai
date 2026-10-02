@@ -176,3 +176,8 @@ When a new AI agent takes over to implement a new architecture (e.g., Mask2Forme
 5. **Execution Choice:**
    - If the model is standard PyTorch without custom C++: **Write Kaggle notebook runners first** and distribute across the 10 accounts.
    - If the model requires custom CUDA/C++ extensions or heavy VRAM: **Write a Slurm `.sbatch` script** targeting `/data/khoalq/`.
+6. **Server Checkpoint & `results.zip` Standard (MANDATORY: Follow EXPERIMENT_9 Format Exactly):**
+   - In `run_server.sbatch`, set `SAVE_DIR="/data/khoalq/checkpoints/exp<ID>_<name>"` and pass `--out_dir "$SAVE_DIR"`. Both model weights (`best_model.pth`) and ALL evaluation deliverables must live together in `$SAVE_DIR`.
+   - `results.zip` must be saved directly at `$SAVE_DIR/results.zip` archiving the full `$SAVE_DIR` directory (excluding `.zip` and `.pth`): `val_predictions.csv`, `test_predictions.csv`, `metrics_summary.json`, `summary_metrics.json`, `training_history.csv`, and all `patient_40_diagnostics/` image montages.
+   - The user must always be able to pull deliverables directly via:  
+     `rsync -avzP khoalq@gpu-a240:/data/khoalq/checkpoints/exp<ID>_<name>/results.zip ./experiments/EXPERIMENT_<ID>/results/exp<ID>_results.zip`

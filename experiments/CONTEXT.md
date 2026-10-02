@@ -247,3 +247,11 @@ Before running or touching code:
       return coords.squeeze(0), visibilities.squeeze(0), confidences.squeeze(0)
   ```
 
+### Trap 14: Server Output Directory & `results.zip` Archival Standard (MANDATORY: Follow EXPERIMENT_9 Standard Exactly)
+- **What happened (Mistake in EXP_10):** In EXPERIMENT_10, outputs were split: checkpoints went to `/data/khoalq/checkpoints/exp10_depth_junction_m2f/`, but `results.zip` was saved inside the repo tree (`experiments/EXPERIMENT_10/results/`). Furthermore, `results.zip` only included a subset of files rather than the complete evaluation artifacts. This was WRONG and broke standard rsync workflows.
+- **Golden Rule for all future experiments:** Future agents MUST follow the **EXPERIMENT_9** format bit-for-bit:
+  1. **Unified Server Checkpoint & Output Directory:** In `run_server.sbatch`, set `SAVE_DIR="/data/khoalq/checkpoints/exp<ID>_<name>"` and pass `--out_dir "$SAVE_DIR"`. Both the model weights (`best_model.pth`) AND all evaluation artifacts must reside together inside `$SAVE_DIR`.
+  2. **Complete `results.zip` Contents:** At the end of training/eval, `results.zip` must be saved directly at `$SAVE_DIR/results.zip` by archiving everything in `$SAVE_DIR` (excluding `.zip` and `.pth`): `val_predictions.csv`, `val_per_frame_results.csv`, `test_predictions.csv`, `test_per_frame_results.csv`, `metrics_summary.json`, `summary_metrics.json`, `training_history.csv`, and all `patient_40_diagnostics/` image montages.
+  3. **Universal rsync Location:** The user must always be able to pull results directly using:
+     `rsync -avzP khoalq@gpu-a240:/data/khoalq/checkpoints/exp<ID>_<name>/results.zip ./experiments/EXPERIMENT_<ID>/results/exp<ID>_results.zip`
+

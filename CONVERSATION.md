@@ -367,3 +367,55 @@ Because lateral tips had v_k* = 0 for ~80% of images:
 1. **Build directly on EXPERIMENT_5:** EXPERIMENT_10 must retain the continuous, un-gated query steering formulation of EXPERIMENT_5, where all 4 junction tokens continuously pass spatial information into Mask2Former queries.
 2. **Auxiliary Visibility (Non-Blocking):** If anchor visibility is needed for clinical interpretation or audit, it must remain a strictly feedforward diagnostic output branch that **never masks, thresholds, or zeroes** the continuous tokens Q_J entering the query steering cross-attention module.
 3. **Synergy with Depth Fusion:** Depth maps provide physical surface elevation Delta z and boundary step discontinuities. Passing fused RGB-D features into continuous junction queries enables them to orient inverted flaps in 3D without suffering from missing-token starvation.
+
+
+---
+
+## 14. EXPERIMENT_11: Targeted Inversion Re-Weighting Formulation & Case Specification
+
+### 14.1 Diagnostic Root Cause: The 99:1 Dataset Spatial Prior Collapse
+In standard training across 921 laparoscopic frames:
+- Canonical frames (897 frames, 97.4%): Silhouette is strictly at the top ($Y \approx 0.20 - 0.40$), Ridge is strictly at the bottom ($Y \approx 0.60 - 0.85$).
+- Mean vertical margin delta: Delta_Y = mean(Y_ridge) - mean(Y_sil) = +0.365 (Ridge is on average 374 pixels lower than Silhouette).
+- In standard uniform sampling, the 8 severe inverted flap frames appear in only 8 iterations per epoch (~1.7% of batches). Gradients from the remaining 913 frames constantly overwrite and erase any query weights that attempt to associate Ridge with the upper half of the image.
+- Consequently, on retracted/inverted views (e.g. `Patient_40_08940` and `09000`), Mask2Former detects the anatomical curves with high precision, but assigns Silhouette to the top contour and Ridge to the bottom contour (Class-Swap Inversion Trap), plunging Dice to 0.0%.
+
+### 14.2 Specification of Target Deformed Training Cases
+From our exhaustive 921-frame audit, we isolate two distinct tiers of non-canonical frames:
+
+#### Tier 1: Severe Flap Inversion (8 Frames Total, Weight Multiplier = 15.0x)
+Frames where laparoscopic graspers pull the Inferior Ridge physically level with or ABOVE the Silhouette:
+1. `Patient_12_0266520`: Delta_Y = -0.000, Ridge peak Y = 0.008 (Ridge pulled across screen ceiling; resection cavity exposed beneath)
+2. `Patient_49_84900`: Delta_Y = -0.074, Ridge peak Y = 0.398 (Double metallic graspers & sutures lifting inferior edge above silhouette)
+3. `Patient_38_0368040`: Delta_Y = +0.029, Ridge peak Y = 0.111 (Heavy instrument traction pulling liver diagonally; 94.3% vertical span overlap)
+4. `Patient_20_0014880`: Delta_Y = +0.083, Ridge peak Y = 0.005 (Giant distended gallbladder elevates liver dome; Ridge loops across top border Y=0.005)
+5. `Patient_53_0133800`: Delta_Y = +0.098, Ridge peak Y = 0.161 (Dual graspers clamping and lifting visceral flap; sharp depth elevation discontinuity)
+6. `Patient_12_0267420`: Delta_Y = +0.112, Ridge peak Y = 0.125 (High-tension traction on segment boundary with tumor resection bed underneath)
+7. `Patient_53_0089640`: Delta_Y = +0.061, Ridge peak Y = 0.367 (Grasper with gauze pad retracts left lobe; 31.5 deg Falciform tilt, severe lateral rotation)
+8. `Patient_12_0265380`: Delta_Y = +0.158, Ridge peak Y = 0.110 (Retraction grasper on upper-left pulling margin upwards)
+
+#### Tier 2: Moderate Traction & High Ridge (Top 16 Frames, Weight Multiplier = 5.0x)
+Frames where instruments or gallbladder distension pull the inferior ridge significantly high up into the upper half of the image (Y < 0.25):
+`Patient_49_84930`, `Patient_20_0016200`, `Patient_20_0016080`, `Patient_33_0210000`, `Patient_20_0015600`, `Patient_12_0265320`, `Patient_20_0015960`, `Patient_38_0038880`, `Patient_12_0266580`, `Patient_12_0265980`, `Patient_61_0049680`, `Patient_22_0140280`, `Patient_12_0265080`, `Patient_38_0039240`, `Patient_8_0018840`, `Patient_12_0265140`.
+
+### 14.3 Strategy Comparison: Re-Weighting vs. Synthetic Geometric Augmentation
+1. **Why Naive Synthetic Vertical Flipping Fails:**
+   - Surgical laparoscopes illuminate from the trocar downward; blood and peritoneal fluid follow gravity. Flipping an image vertically creates impossible lighting physics.
+   - When a surgeon lifts a liver flap, the *visceral undersurface* is exposed (rough, caudate process, gallbladder fossa). An upside-down flipped normal frame still shows the smooth diaphragmatic dome, but upside down. Flipping labels teaches the network that diaphragmatic tissue is called "Ridge", corrupting biological feature learning.
+2. **Why Targeted Re-Weighting (WeightedRandomSampler) Succeeds:**
+   - Uses 100% genuine surgical frames with true human-annotated landmarks, real grasper traction mechanics, and authentic visceral textures.
+   - Sampling probability mass:
+     P(Tier 1) = (8 * 15.0) / (897 * 1.0 + 8 * 15.0 + 16 * 5.0) = 120 / 1097 = 10.94%
+     P(Tier 2) = (16 * 5.0) / 1097 = 80 / 1097 = 7.29%
+     P(Base) = 897 / 1097 = 81.77%
+     Combined deformed exposure = 18.23% (~1 every 5.5 samples).
+   - In every training epoch, the model encounters retracted flaps ~100 times, persistently penalizing queries that default to the canonical top/bottom prior.
+3. **Photometric Jitter as Overfitting Guardrail:**
+   - To prevent the Swin backbone from memorizing the 8 specific RGB images over 60 epochs, stochastic ColorJitter (brightness +/- 15%, contrast +/- 15%, saturation +/- 15%) is applied during training.
+   - This perturbs pixel values without altering the exact pixel coordinates of masks or biological junctions.
+
+### 14.4 User Directive: Unifying All 24 Deformed/Traction Cases into Tier 1
+Following the user's review of the visual atlas, all 24 identified non-standard cases (8 severe inversion + 16 high traction/margin elevation) have been unified into **Tier 1** with uniform 15.0x sampling weight multiplier:
+- Total probability mass: 24 * 15.0 + 897 * 1.0 = 360 + 897 = 1257
+- Unified Deformed sampling probability: 360 / 1257 = 28.64%
+- In every batch of 2 frames, approximately 50% of batches will contain an inverted/traction frame.
