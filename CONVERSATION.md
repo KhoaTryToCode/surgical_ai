@@ -320,5 +320,50 @@ Generated and verified under `data/llm_annotate/outputs/`:
 - `eval_Patient_40_08730.jpg`
 - `benchmark_overview_dashboard.jpg`
 
+---
 
+## 13. Architectural Autopsy: Why Selective Anchor Suppression (EXP_8) Degraded Performance vs. Continuous Steering (EXP_5)
 
+### 13.1 Empirical Discrepancy
+- **EXPERIMENT_5 (Continuous Junction Steering):**
+  - Validation Macro Dice: **68.13%**
+  - Mean IoU: **55.11%**
+  - Macro ASSD: **19.54 px**
+  - Patient 40 Average Dice: **70.91%**
+- **EXPERIMENT_8 (Selective Visibility-Gated Anchors):**
+  - Validation Macro Dice: **67.23%** (-0.90% drop)
+  - Patient 40 Hard Cases (`Patient_40_08730`): Stagnated at 37.33%
+
+### 13.2 Mathematical and Structural Root Causes
+
+#### 1. The Token Starvation Trap (Information Bottleneck)
+In EXPERIMENT_5, all 4 junction queries Q_J in R^{4 x 256} continuously pass through cross-attention with the image feature map F_{16} and update the 100 Mask2Former segmentation queries:
+Q_steered = LayerNorm(Q + alpha * CrossAttn(Q, Q_J, Q_J))
+
+Even when an anatomical point (e.g. J_{lat_right}) is physically outside the camera field-of-view, its Transformer query does NOT output random static noise. Instead, it aggregates spatial global context from the visible liver margin and acts as a **continuous directional orientation vector** pointing toward the organ apex.
+
+In EXPERIMENT_8, introducing selective visibility gating:
+M_vis(j) = 0 if sigma(v_j) >= 0.5, else -inf (suppressed)
+caused an immediate collapse on partial views:
+- Empirical dataset distribution across 921 training images:
+  - J_top visible: 86.8% (799 / 921)
+  - J_bottom visible: 88.9% (819 / 921)
+  - J_lat_right visible: **20.2%** (186 / 921) — absent in 79.8% of frames!
+  - J_lat_left visible: **27.1%** (250 / 921) — absent in 72.9% of frames!
+
+When lateral tips or retracted falciform roots are suppressed, the steering block receives null or zeroed key/value tokens (V_J -> 0). Exactly on the most difficult, cropped, or retracted frames (such as Patient 40), the Mask2Former decoder was **starved of geometric steering**, forcing it to fall back to static unsteered spatial queries.
+
+#### 2. Gradient Freezing and BCE Objective Domination
+The multi-task loss was formulated as:
+L_total = L_m2f + 5.0 * L_coord + 1.0 * L_vis
+where L_coord was visibility-masked:
+L_coord = (1 / sum(v_k*)) * sum_k v_k* * SmoothL1(J_hat_k - J_k*)
+
+Because lateral tips had v_k* = 0 for ~80% of images:
+1. **Zero Spatial Gradient:** For 8 out of every 10 training batches, the lateral anchor query weights received **zero gradient** from the coordinate loss.
+2. **Existence Classification Shortcut:** The BCE visibility loss L_vis heavily penalized any active coordinate feature, driving query weights to specialize strictly in binary presence detection (v_k -> -inf) rather than extracting rich spatial boundary features.
+
+### 13.3 Prescriptive Decision for EXPERIMENT_10
+1. **Build directly on EXPERIMENT_5:** EXPERIMENT_10 must retain the continuous, un-gated query steering formulation of EXPERIMENT_5, where all 4 junction tokens continuously pass spatial information into Mask2Former queries.
+2. **Auxiliary Visibility (Non-Blocking):** If anchor visibility is needed for clinical interpretation or audit, it must remain a strictly feedforward diagnostic output branch that **never masks, thresholds, or zeroes** the continuous tokens Q_J entering the query steering cross-attention module.
+3. **Synergy with Depth Fusion:** Depth maps provide physical surface elevation Delta z and boundary step discontinuities. Passing fused RGB-D features into continuous junction queries enables them to orient inverted flaps in 3D without suffering from missing-token starvation.
