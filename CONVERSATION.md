@@ -419,3 +419,38 @@ Following the user's review of the visual atlas, all 24 identified non-standard 
 - Total probability mass: 24 * 15.0 + 897 * 1.0 = 360 + 897 = 1257
 - Unified Deformed sampling probability: 360 / 1257 = 28.64%
 - In every batch of 2 frames, approximately 50% of batches will contain an inverted/traction frame.
+
+
+## 15. EXPERIMENT_13: Controlled Single-Variable Replication on L3D-2K
+
+### 15.1 Scientific Objective & Hypothesis
+Following the conclusion of EXPERIMENT_12 (Dual-Decoder L3D + CholecSeg8k), which plateaued at 66.47% Val Macro Dice due to laparoscopic procedural mismatch (gallbladder Calot's triangle vs. liver resection) and visual scale conflict, EXPERIMENT_13 isolates and directly addresses the core question:
+**Is the ~68% Val Macro Dice ceiling of 2D landmark segmentation caused by clinical patient cohort scarcity (39 patients) or an architectural representation asymptote?**
+
+To answer this conclusively without confounding variables, EXPERIMENT_13 preserves 100% of the architecture, loss functions, and hyperparameters from our state-of-the-art baseline (EXPERIMENT_5: 68.13% Val Macro Dice, 70.91% Patient 40 Dice), while changing strictly one variable: replacing the 921-frame L3D training set with the 1,532-frame **L3D-2K** training set (47 unique patients).
+
+### 15.2 Dataset Expansion (L3D vs. L3D-2K)
+- **Cohort:** 39 patients -> 47 patients (+20.5% clinical expansion)
+- **Training frames:** 921 frames -> 1,532 frames (+66.3% training data)
+- **Validation frames:** 122 frames -> 230 frames (+88.5% validation evaluation)
+- **Test frames:** 109 frames -> 238 frames (+118.3% test evaluation)
+- **Schema & Annotations:** Identical 3 classes (Ridge, Silhouette, Falciform) and identical 4 biological junctions (J_top, J_bottom, J_lat_right, J_lat_left).
+
+### 15.3 Mathematical Formulation
+L_total = lambda_m2f * L_m2f + lambda_coord * L_coord + lambda_vis * L_vis
+
+Where:
+- L_m2f = 2.0 * L_cls_focal + 5.0 * L_mask_bce + 5.0 * L_mask_dice (Hungarian bipartite matching loss)
+- L_coord = (1 / N_vis) * sum_{k in visible} Smooth_L1(pred_junction_coords_k, gt_junction_coords_k, beta=0.02)
+- L_vis = (1 / 4) * sum_{k=1}^4 BCEWithLogits(pred_junction_vis_k, gt_junction_vis_k)
+- Hyperparameters: lambda_m2f = 1.0, lambda_coord = 5.0, lambda_vis = 1.0, lr_backbone = 1e-5, lr_head = 1e-4, epochs = 60, effective batch size = 4 (batch_size=2, accum_steps=2).
+
+### 15.4 Cross-Evaluation Strategy
+Upon training completion, the best checkpoint (selected via L3D-2K Val Macro Dice) is evaluated across:
+1. L3D-2K Validation Split (230 frames)
+2. L3D-2K Test Split (238 frames)
+3. Original L3D Benchmark Test Split (109 frames) — provides a direct head-to-head comparison against EXPERIMENT_5 (which scored 66.86% Macro Dice and 70.91% Patient 40 Dice on the exact same 109 frames).
+
+### 15.5 Scientific Decision Matrix
+- If Val Dice > 71.0% and Original L3D Test Dice > 69.5%: Proves the bottleneck was clinical cohort size. 2D transformer architectures benefit from expanded anatomical patient diversity.
+- If Val Dice plateaus at ~67.5% - 68.5%: Proves the bottleneck is the 2D pixel-wise raster representation. High-frequency 35-pixel curves under severe deformation require continuous parametric splines or 3D depth-driven geometric lifting (Surgical GeMap).
