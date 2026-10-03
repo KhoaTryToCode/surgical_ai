@@ -33,4 +33,7 @@ results/*
 **/results/*
 !**/results/*.md
 !**/results/*.json
+result/*
+**/result/*
+
 

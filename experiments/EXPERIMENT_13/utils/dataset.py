@@ -1,0 +1,205 @@
+"""
+L3D-2K PyTorch Dataset for EXPERIMENT_13 (Junction-Steered Mask2Former).
+Provides:
+  - RGB images (1024x1024, normalized with ImageNet stats)
+  - Dense 3-class segmentation masks (0=BG, 1=Ridge, 2=Sil, 3=Falc)
+  - Ground-truth 4-junction coordinates in [0, 1]^2
+  - Ground-truth 4-junction binary visibility flags
+  - Automatic environment resolution (local macOS, Server gpu-a240, Kaggle CUDA)
+  - Seamless support for both L3D-2K (train/val/test) and L3D (Train/Val/Test)
+"""
+import os
+import glob
+import json
+import cv2
+import numpy as np
+import torch
+from torch.utils.data import Dataset
+from pathlib import Path
+
+from experiments.EXPERIMENT_13.utils.junction_extractor import extract_gt_junctions
+
+# Standard ImageNet statistics
+IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
+
+def resolve_l3d2k_root(candidate_root=None):
+    """
+    Auto-detects the L3D-2K or L3D dataset root path across local macOS, Linux, and Kaggle.
+    """
+    candidates = [
+        candidate_root,
+        "/data/khoalq/data/L3D-2K",
+        "/Users/khoale/Downloads/L3D-2K",
+        "data/L3D-2K",
+        "../data/L3D-2K",
+        "../../data/L3D-2K",
+        "/kaggle/input/l3d-2k",
+        "/kaggle/input/l3d-2k/L3D-2K",
+        "/kaggle/input/khoale05/l3d-2k",
+        # Fallbacks to standard L3D if L3D-2K not found
+        "/data/khoalq/data/L3D",
+        "data/L3D",
+        "../data/L3D",
+        "/kaggle/input/laparoscopic-liver-landmark-dataset/L3D"
+    ]
+    for c in candidates:
+        if c and os.path.exists(c):
+            return os.path.abspath(c)
+    return os.path.abspath("data/L3D-2K")
+
+
+def find_split_dir(root_dir, split):
+    """
+    Finds split directory with case insensitivity (e.g. 'train' vs 'Train').
+    """
+    candidates = [
+        split.lower(),
+        split.capitalize(),
+        split.upper(),
+        split
+    ]
+    for c in candidates:
+        p = os.path.join(root_dir, c)
+        if os.path.exists(p) and os.path.isdir(p):
+            return p
+    return os.path.join(root_dir, split.lower())
+
+
+class L3D2KDataset(Dataset):
+    def __init__(self, split='train', data_dir=None, image_size=1024, stroke_width=35):
+        super().__init__()
+        self.split = split
+        self.image_size = image_size
+        self.stroke_width = stroke_width
+        self.root_dir = resolve_l3d2k_root(data_dir)
+        
+        split_dir = find_split_dir(self.root_dir, split)
+        
+        # Check for images/ and labels/ subdirectories
+        img_dir_candidates = [
+            os.path.join(split_dir, 'images'),
+            os.path.join(split_dir, 'image'),
+            split_dir
+        ]
+        lbl_dir_candidates = [
+            os.path.join(split_dir, 'labels'),
+            os.path.join(split_dir, 'label'),
+            split_dir
+        ]
+        
+        self.img_dir = None
+        for d in img_dir_candidates:
+            if os.path.exists(d):
+                self.img_dir = d
+                break
+                
+        self.lbl_dir = None
+        for d in lbl_dir_candidates:
+            if os.path.exists(d):
+                self.lbl_dir = d
+                break
+
+        if self.lbl_dir is None or not os.path.exists(self.lbl_dir):
+            raise RuntimeError(f"Could not locate labels directory under {split_dir}")
+
+        self.json_files = sorted(glob.glob(os.path.join(self.lbl_dir, '*.json')))
+        if len(self.json_files) == 0:
+            raise RuntimeError(f"No JSON annotation files found in: {self.lbl_dir}")
+            
+        print(f"[{split}] Loaded {len(self.json_files)} frames from: {split_dir}")
+
+    def __len__(self):
+        return len(self.json_files)
+
+    def __getitem__(self, idx):
+        json_path = self.json_files[idx]
+        stem = Path(json_path).stem
+        
+        # Locate corresponding image
+        img_path = os.path.join(self.img_dir, f"{stem}.jpg")
+        if not os.path.exists(img_path):
+            img_path = os.path.join(self.img_dir, f"{stem}.png")
+        if not os.path.exists(img_path):
+            # Check parent or split dir
+            for ext in ['.jpg', '.png', '.jpeg', '.JPG']:
+                p = os.path.join(os.path.dirname(self.lbl_dir), 'images', f"{stem}{ext}")
+                if os.path.exists(p):
+                    img_path = p
+                    break
+            
+        # 1. Load image
+        img_bgr = cv2.imread(img_path)
+        if img_bgr is None:
+            raise FileNotFoundError(f"Failed to read image at: {img_path}")
+            
+        orig_h, orig_w = img_bgr.shape[:2]
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        
+        # Resize image to network resolution
+        if orig_w != self.image_size or orig_h != self.image_size:
+            img_resized = cv2.resize(img_rgb, (self.image_size, self.image_size), interpolation=cv2.INTER_LINEAR)
+        else:
+            img_resized = img_rgb
+            
+        # Normalize pixel values
+        norm_img = (img_resized.astype(np.float32) / 255.0 - IMAGENET_MEAN) / IMAGENET_STD
+        pixel_values = torch.from_numpy(norm_img).permute(2, 0, 1).float()  # (3, H, W)
+        
+        # 2. Parse JSON annotations
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            
+        # Dynamic canvas size: guarantees Patient 32 4K (2160x3840) is never truncated
+        data_w = data.get('imageWidth', orig_w)
+        data_h = data.get('imageHeight', orig_h)
+        canvas_raw = np.zeros((data_h, data_w), dtype=np.uint8)
+        
+        # 3. Create dense raster mask
+        # Draw contours with thickness 35 on raw canvas (exact TopoNet / EXP_1 / EXP_5 paper standard)
+        shapes = data.get('shapes', [])
+        for shape in shapes:
+            lbl = str(shape.get('label', '')).lower().strip()
+            pts = shape.get('points', [])
+            if len(pts) < 2:
+                continue
+                
+            if lbl.startswith('r') or 'ridge' in lbl or 'rigde' in lbl or 'anterior' in lbl:
+                color = 1
+            elif lbl.startswith('s') or 'sil' in lbl or 'margin' in lbl or 'silhouette' in lbl:
+                color = 2
+            elif lbl.startswith('f') or lbl.startswith('l') or 'falc' in lbl or 'lig' in lbl:
+                color = 3
+            else:
+                color = 0
+                
+            if color > 0:
+                for i in range(1, len(pts)):
+                    pt1 = tuple(map(int, pts[i - 1]))
+                    pt2 = tuple(map(int, pts[i]))
+                    cv2.line(canvas_raw, pt1, pt2, color, self.stroke_width)
+
+        # Downsample to network resolution (1024x1024) using INTER_NEAREST (exact TopoNet / EXP_1 / EXP_5 standard)
+        if data_w != self.image_size or data_h != self.image_size:
+            mask = cv2.resize(canvas_raw, (self.image_size, self.image_size), interpolation=cv2.INTER_NEAREST)
+        else:
+            mask = canvas_raw
+
+        mask_tensor = torch.from_numpy(mask).long()  # (H, W)
+        
+        # 4. Extract 4 GT Anatomical Junctions
+        coords_norm, vis, _ = extract_gt_junctions(data, data_w, data_h, canvas_size=self.image_size)
+        junction_coords = torch.from_numpy(coords_norm).float()  # (4, 2)
+        junction_vis = torch.from_numpy(vis).float()             # (4,)
+        
+        is_p40 = ('patient_40' in stem.lower() or '_40_' in stem.lower() or stem.lower().startswith('p40_'))
+        
+        return {
+            'pixel_values': pixel_values,
+            'mask': mask_tensor,
+            'junction_coords': junction_coords,
+            'junction_vis': junction_vis,
+            'filename': f"{stem}.jpg",
+            'is_patient_40': is_p40
+        }
