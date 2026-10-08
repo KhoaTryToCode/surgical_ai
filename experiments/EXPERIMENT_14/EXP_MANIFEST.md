@@ -41,7 +41,9 @@ In the original L3D benchmark:
   `L_total = L_m2f + 5.0 * L_coord + 1.0 * L_vis`
 * **Optimizer:** AdamW (`lr_backbone = 1e-5`, `lr_head = 1e-4`, `weight_decay = 1e-4`).
 * **Scheduler:** CosineAnnealingLR (`epochs = 60`, `eta_min = 1e-6`).
-* **Effective Batch Size:** 4 (batch size 2 $\times$ gradient accumulation 2).
+* **Effective Batch Size:** 4
+  - Standard/20GB Profile: `batch_size = 2`, `accum_steps = 2` (`run_server.sbatch`)
+  - 10GB Profile: `batch_size = 1`, `accum_steps = 4` (`run_server_10gb.sbatch`, peak VRAM ~7.5 GB)
 
 ---
 

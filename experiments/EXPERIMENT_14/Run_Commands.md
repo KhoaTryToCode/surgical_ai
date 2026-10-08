@@ -4,9 +4,16 @@
 
 Run directly from the root repository on the GPU server (`gpu-a240`):
 
+### For 20GB / 40GB GPU Partition:
 ```bash
 cd /data/khoalq/surgical_ai
 sbatch experiments/EXPERIMENT_14/scripts/run_server.sbatch
+```
+
+### For 10GB GPU Partition (`a100_2g.10gb:1`):
+```bash
+cd /data/khoalq/surgical_ai
+sbatch experiments/EXPERIMENT_14/scripts/run_server_10gb.sbatch
 ```
 
 ### Monitoring the Job:
