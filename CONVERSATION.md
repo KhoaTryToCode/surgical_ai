@@ -486,3 +486,317 @@ Upon training completion, the best checkpoint (selected via L3D-2K Val Macro Dic
 3. **Discarding the Native Polyline Sequence:**
    - The ground truth annotations in L3D and L3D-2K are stored as ordered vector coordinates (polylines in JSON).
    - Rasterizing them into boolean pixel masks discards line direction, connectivity, and endpoint ordering.
+
+---
+
+# Literature Review & Mathematical Specifications: TopoNet, BCRNet, and A2ONet
+
+## 17. Deep Literature Review: SOTA Laparoscopic Liver Landmark Architectures
+
+### 17.1 TopoNet: Topology-Constrained Learning (MICCAI 2025)
+- **Authors:** Ruize Cui, Jiaan Zhang, Jialun Pei, Kai Wang, Pheng-Ann Heng, Jing Qin
+- **Core Insight:** Overcomes landmark fragmentation and distant outlier false positives (blood, smoke, surgical tools) while achieving real-time inference without bulky vision foundation models.
+- **Architectural Mechanics:**
+  1. *Snake-CNN Dual-Path Encoder:* ResNet-34 extracts RGB appearance. Five cascaded Snake Topology Acquisition (STA) blocks use Dynamic Snake Convolutions (DSConv) along X- and Y-axes on depth maps (AdelaiDepth) to trace curvilinear tubular geometry invariant to RGB surface texture.
+  2. *Boundary-aware Topological Fusion (BTF):* Computes dual-modal attention $A_f = \sigma(\text{Pool}(\text{ReLU}(\text{BN}(\text{Conv}([D_i, R_i])))))$. Enhances boundaries via spatial subtraction $M_b = \hat{F}_i - \text{AvgPool}_{3\times 3}(\hat{F}_i)$, passing residual connections across scales.
+  3. *Multi-Class Center-line Loss ($L_{\text{cl}}$):* Extends clDice to 3 classes using soft skeletonization $S_p^l, S_g^l$:
+     $T_{\text{prec}} = |S_p^l \cap G_l| / |S_p^l|$, $T_{\text{sens}} = |S_g^l \cap P_l| / |S_g^l|$, $L_{\text{cl}} = \frac{1}{L} \sum_{l=1}^L \frac{2 \cdot T_{\text{prec}} \cdot T_{\text{sens}}}{T_{\text{prec}} + T_{\text{sens}}}$.
+  4. *Topological Persistence Loss ($L_{\text{per}}$):* Leverages persistent homology and Betti matching:
+     - Matched components $M$: $L_m^l = \frac{1}{N_m^l + s} \sum_{i \in M} (\|B_{\text{pc}}^m - B_{\text{gc}}^m\|_2 + \|D_{\text{pc}}^m - D_{\text{gc}}^m\|_2)$
+     - Unmatched components $U$ (spurious false-positive loops/blobs): $L_u^l = \frac{1}{N_u^l + s} \sum_{i \in U} \|B_{\text{pz}}^u - D_{\text{pz}}^u\|_2$
+     - Weighted combination: $L_{\text{per}} = \frac{1}{L} \sum_{l=1}^L \left( \frac{N_m^l}{N_m^l + N_u^l} L_m^l + \frac{N_u^l}{N_m^l + N_u^l} L_u^l \right)$.
+  5. *Total Objective:* $L_{\text{total}} = 0.4 \cdot L_{\text{dice}} + 0.4 \cdot L_{\text{cl}} + 0.2 \cdot L_{\text{per}}$.
+- **Empirical Claims:** 65.19% DSC, 50.56% IoU, 28.07 px ASSD on L3D; 86.43 ms inference speed (4x faster than D2GPLand), 276.99 GFLOPs.
+
+### 17.2 BCRNet: Bezier Curve Refinement Network (MICCAI 2025)
+- **Authors:** Qian Li, Feng Liu, Shuojue Yang, Daiyun Shen, Yueming Jin
+- **Core Insight:** Replaces pixel-wise raster segmentation with direct 5th-order Bezier parametric curve detection (6 control points), eliminating post-processing heuristics and natively preserving curve order for 2D-3D registration.
+- **Architectural Mechanics:**
+  1. *Multi-Modal Feature Extraction (MFE):* ResNet-50 CNN processes RGB-D (AdelaiDepth), frozen SAM-ViT-B processes RGB, and an auxiliary segmentation decoder with deep supervision $L_s = \sum_{l=1}^4 \text{Dice}(\hat{S}_l, S)$ produces explicit semantic features $f_d$, integrated via Transformer encoder.
+  2. *Adaptive Curve Proposal Initialization (ACPI):* Predicts 12-channel offsets $\Delta b_i$ from $f_4$ per pixel $c_i = (c_{ix}, c_{iy})$:
+     $b_i^j = (\sigma(\Delta b_{ix}^j + \text{logit}(c_{ix})), \sigma(\Delta b_{iy}^j + \text{logit}(c_{iy})))$. Top-10 proposals selected per class from 256 candidates.
+  3. *Hierarchical Curve Refinement (HCR):* 3 cascaded stages ($f_3, f_4 \to f_2, f_3 \to f_1, f_2$) sample $N=26$ points (25 uniform + 1 midpoint $P^*$). Features undergo 3-way self-attention (intra-curve $N$, inter-curve $K$, inter-category $M$) and deformable cross-attention to predict point offsets $\Delta P_s$.
+  4. *Proposal Induction Loss ($L_{\text{ind}}$):* Guides early proposal placement toward landmark midpoints via $L_{\text{ind}} = \text{BCE}(\hat{s}_{\text{init}}, s^*)$, with dynamic epoch annealing $\lambda_d = 1 - \sigma((\text{epoch} - 10) / 2)$.
+  5. *Total Objective:* $L = \lambda_d (\lambda_s L_s + \lambda_{\text{ind}} L_{\text{ind}}) + (1 - \lambda_d) \sum_{h=0}^3 [\lambda_{\text{cs}} L_{\text{cs}}(\hat{s}_h) + \lambda_{\text{crv}} L_{\text{crv}}(\hat{B}_h)]$.
+- **Empirical Claims:** 69.57% DSC, 54.16% IoU, 43.55 px ASSD on L3D (30-px dilation protocol); 56.96% DSC on P2ILF.
+
+### 17.3 A2ONet: Attenuation-Resilient Alternating Optimization (MICCAI)
+- **Authors:** Lanqing Liu, Ruize Cui, Jialun Pei, Diandian Guo, Tiffany Y. So, Pheng-Ann Heng, Jing Qin
+- **Core Insight:** Solves low-light peripheral illumination attenuation and resolves the "localization-continuity trade-off" (where masks break curves, but pure curves over-smooth endpoints) via alternating seg-curve optimization.
+- **Architectural Mechanics:**
+  1. *Illumination Field Compensation (IFC) Block:* Retinex decomposition $I(x) = R(x) \odot L(x)$.
+     - Intensity collapse: $I_{\text{max}}(x) = \max_{c \in \{r,g,b\}} I_c(x)$.
+     - Adaptive compression: $I_{\text{col}}(x) = (\sin(\pi I_{\text{max}}(x) / 2) + \epsilon)^{1/k}$, $k > 0$ learnable.
+     - Spatial conditioning: Concatenates $I_{\text{col}}(x)$, normalized $(x, y)$, and radial distance $r$ to estimate illumination field $L(x)$.
+     - Gain blending: $g_{\text{raw}}(x) = \frac{I_{\text{norm}}(x)}{I_{\text{max}}(x) + \epsilon}$, $g(x) = 1 + \alpha (g_{\text{raw}}(x) - 1)$. Compensated image $\tilde{I}(x) = I(x) \odot g(x)$.
+     - Regularization: $L_{\text{illum}} = \|\nabla L\|_1 + \|g - 1\|_1$.
+  2. *Frequency-Orientation Selective Filter (FOSF):*
+     - Wavelet high-frequency competition: Haar DWT generates $\{F_{\text{LL}}, F_{\text{LH}}, F_{\text{HL}}, F_{\text{HH}}\}$. Softmax gating balances high frequencies: $F_{\text{HF}} = w_{\text{LH}} |F_{\text{LH}}| + w_{\text{HL}} |F_{\text{HL}}| + w_{\text{HH}} |F_{\text{HH}}|$.
+     - Gabor orientation selection: $T=4$ fixed filters $\{0, \pi/4, \pi/2, 3\pi/4\}$ gated by pixel-wise weights $\pi_j(x)$ to extract dominant direction $G_{\text{sel}}(x) = \sum_{j=1}^T \pi_j(x) G_j(x)$. Refined via CBAM attention.
+  3. *Alternating Seg-Curve Optimization (ASCO) Decoder:*
+     - Models landmarks as Bezier curves $C$ with $M=5$ control points across $S=4$ stages.
+     - Curve-to-Mask (C2M): Softly rasterizes curve into Gaussian distance prior $P(x) = \exp\left(-\frac{1}{2\sigma^2} \min_{t \in [0,1]} \|x - C(t)\|_2^2\right)$, injected into mask decoder via cross-attention.
+     - Mask-to-Curve: Decoder features $F_d^{(s)}$ sampled along curve hypothesis $C^{(s)}$ to regress control point updates $p_k^{(s+1)} = p_k^{(s)} + R^{(s)}(\Phi(F_d^{(s)}, C^{(s)}))$.
+  4. *Total Objective:* $L = L_{\text{seg}} + 0.2 \cdot L_{\text{curve}} + 0.1 \cdot L_{\text{illum}}$.
+- **Empirical Claims:** 53.51% DSC, 38.32% IoU, 30.97 px ASSD on L3D-2K; 65.31% DSC on L3D; 43.02% DSC on P2ILF.
+
+
+---
+
+# Audit Report: EXPERIMENT_5 vs. TopoNet and BCRNet
+
+## 18. Deep Code & Theoretical Audit of EXPERIMENT_5
+
+### 18.1 Summary of Inquiries
+This audit evaluates whether the quantitative results achieved by **EXPERIMENT_5 (Junction-Steered Mask2Former)** — specifically **68.13% Val Macro Dice / 19.54 px ASSD** and **66.86% Test Macro Dice / 22.64 px ASSD** — stem purely from genuine architectural improvements comparable to **TopoNet** (Cui et al., MICCAI 2025) and **BCRNet** (Li et al., June 2025), or if they are influenced by implementation flaws, metric discrepancies, or protocol artifacts.
+
+---
+
+### 18.2 Critical Code Audit Findings in EXPERIMENT_5
+
+#### 1. The Disconnected Coordinate Regression Mechanism
+In `experiments/EXPERIMENT_5/models/junction_steered_mask2former.py`:
+- In `JunctionQuerySteering.forward(self, queries, junction_features, junction_coords=None)`:
+  The argument `junction_coords` (containing `pred_j_coords`) is accepted into the function signature, but is **completely unused** in the computation.
+- The 100 Mask2Former queries cross-attend strictly to `junction_features` ($J \in \mathbb{R}^{4 \times 256}$):
+  $$\Delta Q = \text{Softmax}\left(\frac{Q W_q (J W_k)^T}{\sqrt{d}}\right) J W_v$$
+- There is **no coordinate-to-token projection**, **no continuous positional embedding**, and **no spatial transformation** applied based on predicted junction $(x, y)$ positions.
+- Furthermore, the quantitative junction coordinate prediction error in `metrics_summary.json` is:
+  - Validation Mean Junction Error: **168.41 px** (16.4% of the 1024x1024 canvas)
+  - Test Mean Junction Error: **157.06 px** (15.3% of the 1024x1024 canvas)
+- **Architectural Reality:** The junction head did **not** learn to predict precise anatomical keypoint locations. Instead, linear probing (`method3_linear_probing_results.json`) demonstrated that the 4 tokens in $J$ learned to encode **holistic global organ deformation** (Centroid Y: $R^2 = 0.857$, Foreground Area: $R^2 = 0.741$, Centroid X: $R^2 = 0.648$, Aspect Ratio: $R^2 = 0.574$, Bounding Box Scale: $R^2 = 0.552$).
+- Thus, the model functions as a **4-token global context bottleneck adapter** regularized by multi-task loss, rather than a localized keypoint-steered geometric transformer.
+
+#### 2. Metric Discrepancy on Empty Ground-Truth Landmarks (ASSD Discrepancy)
+In `experiments/EXPERIMENT_1/utils/metrics.py` and `experiments/EXPERIMENT_2/utils/metrics.py`:
+- If an anatomical landmark is completely absent from a frame (e.g. Falciform absent in 8 validation frames and 4 test frames) and the model correctly predicts 0 foreground pixels, the metric function returned `fallback = 80.0 px`.
+In `experiments/EXPERIMENT_5/utils/metrics.py` (lines 43-46):
+- If both prediction and target are empty:
+  `if p_b.sum() == 0 and t_b.sum() == 0: return 0.0`
+- Recomputing EXP_5's validation metrics using the EXP_2 penalty (80.0 px for empty-empty):
+  - Reported EXP_5 Macro ASSD: **19.54 px**
+  - Standardized EXP_5 Macro ASSD (EXP_2 penalty): **20.64 px** (+1.10 px shift)
+  - Baseline EXP_2 Macro ASSD: **25.69 px**
+- **Conclusion:** While EXP_5 still achieves a genuine ~5 px surface distance reduction over EXP_2, approximately 1.10 px of the reported 6.15 px ASSD drop was an artifact of the empty-class metric calculation.
+
+#### 3. Post-Processing Probability Threshold Suppression
+In `experiments/EXPERIMENT_5/scripts/evaluate.py` (lines 85-86):
+```python
+max_prob = sem_probs.max(dim=0)[0].cpu().numpy()
+pred_map[max_prob < 0.25] = 0
+```
+- In standard HuggingFace Mask2Former evaluation (used in EXP_2), semantic segmentation is generated via pure `argmax` across classes without probability thresholding.
+- The 0.25 threshold in EXP_5 removes low-confidence scattered false-positive pixels, providing a modest bump in foreground precision and cleaning up background noise.
+
+#### 4. Ground-Truth Stroke Width Parity Check
+- Historically (prior to Sept 22), EXP_5 was run with direct 35-pixel lines on a 1024x1024 canvas ($W = 35.0\text{ px}$), which artificially inflated Dice to 71.98%.
+- In the current EXP_5 code (`dataset.py`), lines are rendered on the native camera resolution (1920x1080) at thickness 35 and resized via `cv2.INTER_NEAREST` to 1024x1024 (effective width $W \approx 18.7\text{ px}$).
+- This strictly matches TopoNet (EXP_1) and Mask2Former Baseline (EXP_2). The current 68.13% Val / 66.86% Test score is verified to be on the correct 18.7 px benchmark protocol.
+
+---
+
+### 18.3 Comparability Analysis: EXP_5 vs. TopoNet (MICCAI 2025)
+
+| Metric / Dimension | TopoNet Full (Cui et al., 2025) | Mask2Former Baseline (EXP_2) | Junction-Steered M2F (EXP_5) | Comparability Status |
+| :--- | :---: | :---: | :---: | :--- |
+| **Input Modality** | RGB + AdelaiDepth Depth | RGB Only | RGB Only | TopoNet uses multi-modal depth; EXP_5 is pure RGB |
+| **Backbone Architecture** | ResNet-34 CNN (ImageNet) | Swin-Tiny (ADE20K Pretrained) | Swin-Tiny (ADE20K Pretrained) | M2F leverages massive 27k-image ADE20K pretraining |
+| **Topological Constraints** | Centerline clDice ($L_{\text{cl}}$) + Betti matching ($L_{\text{per}}$) | None (Bipartite Focal + Mask BCE + Dice) | 4-Token Cross-Attention + Multi-Task Keypoint Loss | Fundamentally different topological mechanisms |
+| **Test Set Macro Dice** | 65.19% (Table 1) | 65.73% | **66.86%** | **Valid & Fair Comparison (Same 18.7px Canvas)** |
+| **Test Set ASSD** | 28.07 px | 28.43 px | **22.64 px** | Valid comparison (EXP_5 achieves lower surface error) |
+| **Inference Latency** | **86.4 ms (11.6 FPS)** | 94.4 ms (10.6 FPS) | 149.4 ms (6.7 FPS) | TopoNet is 1.7x faster; M2F decoder is compute-heavy |
+
+**Verdict on TopoNet Comparability:**
+The comparison against TopoNet is **100% fair and valid** in terms of metric definitions, resolution (1024x1024), and stroke thickness ($W \approx 18.7\text{ px}$). However, the performance advantage of EXP_5 (+1.67% over TopoNet on Test) is driven primarily by the **Swin-Tiny ADE20K foundation model backbone** (which gave EXP_2 a 65.73% baseline) and secondarily by the 4-token bottleneck (+1.13% gain over EXP_2).
+
+---
+
+### 18.4 Comparability Analysis: EXP_5 vs. BCRNet (MICCAI 2025)
+
+| Dimension | BCRNet (Li et al., June 2025) | Junction-Steered M2F (EXP_5) | Comparability Status |
+| :--- | :--- | :--- | :--- |
+| **Target Representation** | **Continuous 5th-Order Bézier Curves** (6 control points per landmark) | **Dense $1024 \times 1024$ Raster Masks** (0=BG, 1=Ridge, 2=Sil, 3=Falc) | **Representation Incommensurability** (Parametric vector vs. pixel raster) |
+| **Evaluation Protocol** | **30-Pixel Dilation Protocol** (Curves rasterized & dilated by 30 px) | **18.7-Pixel Effective Native Stroke** (No post-hoc dilation) | **Protocol Mismatch:** 30 px dilation substantially reduces spatial penalty |
+| **Reported L3D Test Dice** | **69.57%** (under 30-px dilation) | **66.86%** (under 18.7-px native stroke) / **69.84%** (under 35-px stroke) | Numbers are **NOT directly comparable** without protocol normalization |
+| **Reported L3D Test ASSD** | 43.55 px | **22.64 px** | EXP_5 achieves substantially tighter surface distance |
+| **Multi-Modal Inputs** | RGB + AdelaiDepth + Frozen SAM ViT-B | RGB Only (Swin-Tiny) | BCRNet utilizes two external foundation models (SAM + Depth) |
+
+**Verdict on BCRNet Comparability:**
+The raw reported score of BCRNet (69.57%) is **not directly comparable** to EXP_5's 66.86% because BCRNet evaluated on **30-pixel dilated masks**, which gives higher Dice overlap for thin curves ($|d\text{Dice}/d\delta| = 1/W$). When EXP_5 was evaluated under a comparable 35-px thickness, it scored **69.84% Test DSC**, directly matching/exceeding BCRNet.
+
+---
+
+### 18.5 Final Scientific Conclusions
+
+1. **Is the EXP_5 result purely from architectural improvement?**
+   - **Partially.** There is a genuine, verified architectural improvement of **+1.57% Val Dice / +1.13% Test Dice** and **~5 px ASSD reduction** over the baseline Mask2Former (EXP_2).
+   - However, the architectural mechanism is **not localized junction coordinate steering** (the predicted $(x, y)$ coordinates are unused in query steering and have 168 px error). Instead, it acts as a **global context bottleneck adapter** that pools organ scale, area, and vertical centroid position into the queries.
+2. **Are there code flaws/discrepancies?**
+   - **Yes, three specific implementation discrepancies were confirmed:**
+     a. `junction_coords` is an unused parameter in `JunctionQuerySteering.forward()`.
+     b. `compute_assd` assigned 0.0 px to empty-empty landmark classes (accounting for ~1.1 px of the ASSD drop relative to EXP_2's 80 px penalty).
+     c. Background threshold suppression (`max_prob < 0.25`) was introduced in EXP_5 post-processing, filtering low-confidence background clutter that standard Mask2Former would include.
+3. **Is it comparable to TopoNet?**
+   - Yes, rigorously comparable under the identical 18.7 px native stroke evaluation protocol. EXP_5 outperforms TopoNet (66.86% vs 65.19% Test DSC, 22.64 px vs 28.07 px ASSD), but largely due to the Swin-Tiny ADE20K foundation backbone.
+4. **Is it comparable to BCRNet?**
+   - No, because BCRNet reported metrics under a **30-pixel dilation protocol** and directly predicts parametric 5th-order Bézier curves rather than raster pixel masks.
+
+---
+
+## 19. Complete Architectural Decomposition: Mask2Former (From Input to Output)
+
+### 19.1 Conceptual Paradigm: Mask Classification vs. Per-Pixel Classification
+Traditional segmentation models (FCN, U-Net, DeepLab) perform per-pixel classification: given an input image $I \in \mathbb{R}^{3 \times H \times W}$, the network outputs a dense tensor $Y \in \mathbb{R}^{K \times H \times W}$ where each spatial coordinate $(x, y)$ is classified independently via cross-entropy.
+Limitations of Per-Pixel Classification:
+1. Struggles with overlapping instances and disconnected segments because pixels have no instance identity.
+2. Creates an architectural divide: semantic segmentation requires FCN/DeepLab, while instance segmentation requires bounding-box region proposals (Mask R-CNN).
+
+Mask2Former adopts the **Mask Classification Paradigm** (pioneered by MaskFormer and perfected by Mask2Former):
+- The model outputs a fixed set of $N$ predictions: $\{ (p_i, m_i) \}_{i=1}^N$
+- $p_i \in \Delta^{K+1}$ is a probability distribution over $K$ semantic categories plus a "no object" / background category $\varnothing$.
+- $m_i \in [0, 1]^{H \times W}$ is a binary spatial mask prediction.
+- This formulation natively unifies **Semantic**, **Instance**, and **Panoptic** segmentation under one single model architecture.
+
+---
+
+### 19.2 Global Architecture Pipeline
+The end-to-end forward pipeline flows through 4 principal blocks:
+1. **Backbone (Multi-Scale Feature Extraction):** Extracts multi-scale visual features from image $I$.
+2. **Pixel Decoder (Multi-Scale Feature Fusion):** Exchanges multi-scale context via Multi-Scale Deformable Attention (MSDeformAttn) and synthesizes high-resolution Per-Pixel Embeddings $\mathcal{F}_{\text{pixel}} \in \mathbb{R}^{D \times \frac{H}{4} \times \frac{W}{4}}$.
+3. **Transformer Decoder with Masked Attention:** Takes $N$ learnable object queries $Q \in \mathbb{R}^{N \times D}$ and progressively refines them across $L$ layers by constraining cross-attention to foreground mask hypotheses.
+4. **Prediction Heads & Deep Supervision:** Dual heads (Class Head and Mask MLP) produce category distributions and mask embeddings $\mathcal{E} \in \mathbb{R}^{N \times D}$. Masks are synthesized via spatial dot product $\mathcal{E} \cdot \mathcal{F}_{\text{pixel}}$.
+
+---
+
+### 19.3 Block 1: The Backbone Feature Extractor
+Given an input image $I \in \mathbb{R}^{3 \times H \times W}$:
+- Standard architectures: Swin Transformer (Swin-T, Swin-B, Swin-L) or ResNet (ResNet-50, ResNet-101).
+- Outputs a hierarchical feature pyramid across 4 spatial resolutions:
+  - $C_2$: Stride 4 ($H/4 \times W/4$), channels $C_2$ (fine boundary / texture features).
+  - $C_3$: Stride 8 ($H/8 \times W/8$), channels $C_3$.
+  - $C_4$: Stride 16 ($H/16 \times W/16$), channels $C_4$.
+  - $C_5$: Stride 32 ($H/32 \times W/32$), channels $C_5$ (high-level semantic context).
+
+---
+
+### 19.4 Block 2: The Multi-Scale Pixel Decoder
+Standard FPN uses linear convolutions with fixed receptive fields. Standard Multi-Head Self-Attention over multi-scale spatial tokens incurs prohibitive $O((HW)^2)$ complexity.
+Mask2Former deploys a **Multi-Scale Deformable Attention (MSDeformAttn) Pixel Decoder**:
+
+#### 1. Multi-Scale Deformable Attention Mechanism
+For each query token at 2D reference point $p_q$ on feature level $l$, deformable attention only samples a small fixed set of $K_{\text{pts}}$ points (typically $K_{\text{pts}} = 4$) per attention head across $L_{\text{levels}} = 3$ resolution levels ($C_3, C_4, C_5$):
+MSDeformAttn(q, p_q, \{x_l\}) = sum_{m=1}^M W_m [ sum_{l=1}^L sum_{k=1}^K A_{m, l, k} \cdot W'_m x_l(phi_l(p_q) + Delta p_{m, l, k}) ]
+- $M$: Number of attention heads.
+- $A_{m, l, k}$: Learned attention weights normalized via softmax.
+- $\Delta p_{m, l, k}$: Learned 2D sampling offsets predicted from query features.
+- $x_l(p)$: Bilinear interpolation of continuous sampling coordinate on feature map $l$.
+- Complexity: $O(N_q \cdot M \cdot K_{\text{pts}} \cdot D)$, which is linear in spatial resolution!
+
+#### 2. Outputs of the Pixel Decoder
+The pixel decoder outputs two essential representations:
+1. **Multi-Scale Feature Pyramid for the Decoder:**
+   - $F_{1/32} \in \mathbb{R}^{D \times \frac{H}{32} \times \frac{W}{32}}$
+   - $F_{1/16} \in \mathbb{R}^{D \times \frac{H}{16} \times \frac{W}{16}}$
+   - $F_{1/8} \in \mathbb{R}^{D \times \frac{H}{8} \times \frac{W}{8}}$
+   All projected to uniform channel dimension $D = 256$.
+2. **Dense Per-Pixel Embeddings ($\mathcal{F}_{\text{pixel}}$):**
+   - The stride-8 feature $F_{1/8}$ is upsampled $2\times$ and fused with backbone stride-4 feature $C_2$ via lateral projection.
+   - Refined with $3 \times 3$ convolutions to form:
+     $\mathcal{F}_{\text{pixel}} \in \mathbb{R}^{D \times \frac{H}{4} \times \frac{W}{4}}$
+   - This dense tensor acts as the high-resolution geometric coordinate codebook for final mask reconstruction.
+
+---
+
+### 19.5 Block 3: Transformer Decoder with Masked Attention
+In standard DETR cross-attention, queries attend to all spatial locations across the entire canvas:
+Attn = Softmax(Q K^T / sqrt(d)) V
+This leads to slow convergence (~300 epochs) because queries attend to irrelevant background noise and struggle to localize boundaries.
+
+#### 1. Masked Cross-Attention Formulation
+Mask2Former constrains cross-attention to the foreground region predicted by the query at the previous decoder layer:
+Attn = Softmax(M_{l-1} + Q K^T / sqrt(d)) V
+Where the spatial attention mask $M_{l-1}$ for query $i$ at 2D coordinate $(x, y)$ is defined as:
+M_{l-1}(x, y) = 0 if m_{l-1}(x, y) >= 0.5 (Foreground)
+M_{l-1}(x, y) = -infinity if m_{l-1}(x, y) < 0.5 (Background)
+
+- In the softmax operation, $\exp(-\infty) = 0$, completely zeroing out attention weights outside the query's hypothesized mask.
+- The query focuses 100% of its representation capacity on foreground structure.
+- **Layer 0 Initialization:** Before entering layer 1, the initial query embeddings $Q_0$ are dotted with $\mathcal{F}_{\text{pixel}}$ to produce the initial mask prior $M_0$.
+
+#### 2. Multi-Scale Round-Robin Layer Schedule
+Rather than feeding all feature scales into cross-attention simultaneously, Mask2Former passes one resolution level per layer in a round-robin schedule across $L = 9$ decoder layers:
+- Layer 1: Stride 32 ($H/32 \times W/32$) — Coarse global scene context
+- Layer 2: Stride 16 ($H/16 \times W/16$) — Intermediate object parts
+- Layer 3: Stride 8  ($H/8 \times W/8$)   — High-resolution boundary details
+- (Repeated 3 times: 1/32 -> 1/16 -> 1/8 -> 1/32 -> 1/16 -> 1/8 -> 1/32 -> 1/16 -> 1/8)
+
+#### 3. Step-by-Step Execution Inside Each Decoder Layer
+For layer $l \in \{1, \dots, L\}$ with query inputs $Q_{l-1} \in \mathbb{R}^{N \times D}$:
+1. **Masked Cross-Attention:**
+   - Downsample previous mask $M_{l-1}$ to the spatial size of the current feature scale.
+   - Perform cross-attention between queries $Q$ and flattened image feature tokens $K, V$ under mask $M_{l-1}$.
+   - Add residual connection and LayerNorm.
+2. **Query Self-Attention:**
+   - Standard Multi-Head Self-Attention between queries:
+     $Q \leftarrow \text{Softmax}(Q Q^T / \sqrt{d}) Q$
+   - Queries communicate to prevent duplicate detections (implicit NMS) and model inter-segment relationships.
+   - Add residual connection and LayerNorm.
+3. **Feed-Forward Network (FFN):**
+   - 2-layer MLP with expansion ratio 4 (typically $256 \to 1024 \to 256$), GELU/ReLU activation, residual connection, and LayerNorm.
+
+---
+
+### 19.6 Block 4: Prediction Heads & Deep Supervision
+At the output of each decoder layer $l$:
+1. **Classification Head:**
+   - Linear projection: $W_{\text{cls}} Q_l \in \mathbb{R}^{N \times (K + 1)}$
+   - Yields class probability logits for $K$ classes + "no object" $\varnothing$.
+2. **Mask Embedding Head:**
+   - 3-layer MLP with ReLU: $\mathcal{E}_l = \text{MLP}(Q_l) \in \mathbb{R}^{N \times D}$
+   - Each query $i$ produces a 1D embedding vector $\mathcal{E}_{l, i} \in \mathbb{R}^D$.
+3. **Dense Mask Synthesis via Dot Product:**
+   - Matrix multiplication between query mask embedding $\mathcal{E}_{l, i}$ and Per-Pixel Embeddings $\mathcal{F}_{\text{pixel}}$:
+     m_{l, i}(x, y) = Sigmoid( sum_{d=1}^D E_{l, i}(d) * F_{pixel}(d, x, y) )
+   - Produces continuous mask prediction $m_{l, i} \in [0, 1]^{\frac{H}{4} \times \frac{W}{4}}$.
+   - Mask predictions are supervised at EVERY decoder layer (deep supervision).
+
+---
+
+### 19.7 Block 5: Hungarian Bipartite Matching & Point-Based Loss
+
+#### 1. Bipartite Matching (Hungarian Algorithm)
+Let $y_j = (c_j, m_j)$ be ground truth objects ($j = 1 \dots N_{\text{gt}}$), padded with $\varnothing$ to match $N$.
+The matching cost $C(i, j)$ between predicted query $i$ and ground-truth $j$ is:
+C(i, j) = - lambda_cls * p_i(c_j) + lambda_ce * L_ce(m_i, m_j) + lambda_dice * L_dice(m_i, m_j)
+- Hungarian algorithm finds the optimal bijection $\hat{\sigma} \in \mathfrak{S}_N$:
+  $\hat{\sigma} = \operatorname{argmin}_{\sigma} \sum_{j=1}^N C(\sigma(j), j)$
+
+#### 2. Point-Based Mask Loss (Efficient Point Sampling)
+Computing full dense mask loss over $N = 100$ queries at resolution $H/4 \times W/4$ across 9 decoder layers requires excessive GPU memory.
+Mask2Former samples $K_{\text{pts}} = 12,544$ points per image:
+- **Uncertainty Sampling:** Points where mask probability $|p - 0.5|$ is smallest (boundary regions with highest ambiguity).
+- **Uniform Sampling:** A random fraction across the entire canvas to preserve global background stability.
+- The binary cross-entropy and Dice losses are evaluated ONLY over these sampled points:
+  L_dice = 1 - (2 * sum(m_pred * m_gt) + 1) / (sum(m_pred) + sum(m_gt) + 1)
+  L_ce = - [ m_gt * log(m_pred) + (1 - m_gt) * log(1 - m_pred) ]
+Total objective:
+L_total = lambda_cls * L_cls + lambda_ce * L_ce + lambda_dice * L_dice
+
+---
+
+### 19.8 Block 6: Inference & Universal Post-Processing
+Inference does not require Hungarian matching. Given final queries with $(p_i, m_i)$:
+
+1. **Semantic Segmentation:**
+   Aggregate query contributions for each semantic class $c \in \{1, \dots, K\}$:
+   P(c, x, y) = sum_{i=1}^N p_i(c) * m_i(x, y)
+   The predicted semantic class at $(x, y)$ is:
+   pred_class(x, y) = argmax_c P(c, x, y)
+
+2. **Instance Segmentation:**
+   - Discard queries where predicted class is background $\varnothing$ or confidence $p_i(c) < \tau$.
+   - Output binary mask $m_i(x, y) \ge 0.5$ and class label $c_i$ for each retained query.
+
+3. **Panoptic Segmentation:**
+   - Pixels are assigned to the query maximizing $p_i(c_i) \cdot m_i(x, y)$, resolving conflicts between "stuff" (amorphous semantic regions) and "things" (countable object instances) without overlapping boundaries.
+
