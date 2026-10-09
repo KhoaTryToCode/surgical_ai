@@ -108,6 +108,9 @@ def create_results_zip(source_dir, output_zip_path):
 def main():
     parser = argparse.ArgumentParser(description="Train Stratified Junction-Steered Mask2Former (EXPERIMENT_14)")
     parser.add_argument('--data_dir', type=str, default=None, help="L3D dataset root")
+    parser.add_argument('--train_dir', type=str, default=None, help="Explicit Train split directory")
+    parser.add_argument('--val_dir', type=str, default=None, help="Explicit Val split directory")
+    parser.add_argument('--test_dir', type=str, default=None, help="Explicit Test split directory")
     parser.add_argument('--out_dir', type=str, default=None, help="Output directory for checkpoints and logs")
     parser.add_argument('--epochs', type=int, default=60, help="Number of training epochs")
     parser.add_argument('--batch_size', type=int, default=2, help="Batch size per GPU step")
@@ -131,9 +134,9 @@ def main():
     print(f"🖥️ Using device: {device}")
     
     # 1. Stratified Datasets & DataLoaders (Option 1: Patient 40 <-> Patient 38)
-    train_dataset = StratifiedL3DDataset(split='Train', data_dir=args.data_dir)
-    val_dataset = StratifiedL3DDataset(split='Val', data_dir=args.data_dir)
-    test_dataset = StratifiedL3DDataset(split='Test', data_dir=args.data_dir) if args.eval_splits == 'both' else None
+    train_dataset = StratifiedL3DDataset(split='Train', data_dir=args.data_dir, train_dir=args.train_dir, val_dir=args.val_dir)
+    val_dataset = StratifiedL3DDataset(split='Val', data_dir=args.data_dir, train_dir=args.train_dir, val_dir=args.val_dir)
+    test_dataset = StratifiedL3DDataset(split='Test', data_dir=args.data_dir, test_dir=args.test_dir) if args.eval_splits == 'both' else None
     
     num_workers = args.num_workers if device.type == 'cuda' else 0
     
@@ -205,7 +208,8 @@ def main():
 
     # 3. Main Training Loop
     print(f"\n🚀 Starting Training: {args.epochs} Epochs | Effective Batch Size: {args.batch_size * args.accum_steps}...")
-    best_val_dice = 0.0
+    best_val_dice = -1.0
+    best_ckpt_path = os.path.join(args.out_dir, 'best_model.pth')
     training_log = []
     
     for epoch in range(1, args.epochs + 1):

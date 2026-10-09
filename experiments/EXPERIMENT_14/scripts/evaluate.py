@@ -53,29 +53,37 @@ JUNCTION_COLORS_BGR = {
 def rasterize_class_map(masks_queries_logits, class_queries_logits, canvas_size=1024):
     """
     Standard Mask2Former post-processing: Argmax over class probabilities * sigmoid mask probabilities.
+    Matches EXPERIMENT_5 implementation.
     """
+    # Ensure float32 for interpolation, softmax, and numpy conversion (prevents BFloat16 NumPy error)
     masks_queries_logits = masks_queries_logits.float()
     class_queries_logits = class_queries_logits.float()
     
-    masks_prob = torch.sigmoid(masks_queries_logits) # (100, H/4, W/4)
-    cls_prob = torch.softmax(class_queries_logits, dim=-1) # (100, 5)
-    
-    masks_interp = torch.nn.functional.interpolate(
-        masks_prob.unsqueeze(0),
+    # 1. Resize mask logits to canvas_size
+    masks = torch.nn.functional.interpolate(
+        masks_queries_logits.unsqueeze(0),
         size=(canvas_size, canvas_size),
         mode='bilinear',
         align_corners=False
-    ).squeeze(0) # (100, H, W)
+    ).squeeze(0).sigmoid() # (100, H, W)
     
-    # Exclude background/no-object class (0)
-    sem_prob = torch.einsum('qc,qhw->chw', cls_prob[:, 1:4], masks_interp) # (3, H, W)
+    # 2. Query classification probabilities
+    cls_probs = torch.softmax(class_queries_logits, dim=-1) # (100, 5), last is BG
     
-    bg_thresh = 0.5
-    fg_mask = (sem_prob.max(dim=0)[0] > bg_thresh)
-    pred_map = torch.zeros((canvas_size, canvas_size), dtype=torch.uint8)
+    # Exclude background class (index 4)
+    fg_cls_probs = cls_probs[:, :4] # (100, 4)
     
-    pred_labels = sem_prob.argmax(dim=0) + 1 # 1=Ridge, 2=Sil, 3=Falc
-    pred_map[fg_mask] = pred_labels[fg_mask].to(torch.uint8)
+    # Multiply: (100, 4, 1, 1) * (100, 1, H, W) -> (100, 4, H, W)
+    # Sem_prob[c, h, w] = sum_q (cls_prob[q, c] * mask_prob[q, h, w])
+    sem_probs = torch.einsum("qc,qhw->chw", fg_cls_probs, masks) # (4, H, W)
+    
+    # Thresholding & argmax in NumPy
+    pred_map = sem_probs.argmax(dim=0).cpu().numpy().astype(np.int64) # (H, W)
+    # Background suppression where probability is very low
+    max_prob = sem_probs.max(dim=0)[0].cpu().numpy()
+    pred_map[max_prob < 0.25] = 0
+    
+    return pred_map
     
 def render_frame_diagnostic(orig_rgb_norm, gt_mask, pred_map, pred_j_coords, gt_j_coords, gt_j_vis, out_path, metrics):
     """
@@ -149,9 +157,9 @@ def run_evaluation(model, dataloader, device, split_name="Val", out_dir=None, ma
             if max_batches is not None and idx >= max_batches:
                 break
             pixel_values = batch['pixel_values'].to(device)
-            masks = batch['mask'].numpy()
-            gt_j_coords = batch['junction_coords'].numpy()
-            gt_j_vis = batch['junction_vis'].numpy()
+            masks = batch['mask'].cpu().numpy()
+            gt_j_coords = batch['junction_coords'].cpu().numpy()
+            gt_j_vis = batch['junction_vis'].cpu().numpy()
             filenames = batch['filename']
             
             t0 = time.time()

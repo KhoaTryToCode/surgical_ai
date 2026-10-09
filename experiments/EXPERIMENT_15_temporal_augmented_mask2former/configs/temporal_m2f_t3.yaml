@@ -1,0 +1,37 @@
+# Config: EXPERIMENT_15 — Temporal-Augmented Mask2Former (T=3)
+experiment:
+  id: "EXPERIMENT_15"
+  name: "temporal_augmented_mask2former"
+  description: "Vanilla Mask2Former augmented with lightweight Temporal Query Cross-Attention on T=3 chronological patient clips."
+
+model:
+  base_checkpoint: "facebook/mask2former-swin-tiny-ade-semantic"
+  num_labels: 4           # 0: BG, 1: Ridge, 2: Silhouette, 3: Falciform
+  num_queries: 100
+  embed_dim: 256
+  clip_len: 3             # T=3 frames
+  temporal_nheads: 8
+  temporal_dropout: 0.1
+  gamma_init: 0.05        # Learnable gating parameter initialized small
+
+data:
+  image_size: 1024
+  stroke_width: 35
+  clip_len: 3
+  max_gap_frames: 240     # <= 8.0s at 30fps
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+
+loss:
+  lambda_cls: 2.0
+  lambda_mask: 5.0
+  lambda_dice: 5.0
+
+training:
+  epochs: 60
+  batch_size: 1           # 1 clip of T=3 frames per step
+  accum_steps: 4          # Effective batch size = 4 clips (12 frames)
+  lr_head: 1.0e-4
+  lr_backbone: 1.0e-5
+  weight_decay: 1.0e-4
+  num_workers: 2

@@ -27,6 +27,60 @@ from experiments.EXPERIMENT_14.utils.junction_extractor import extract_gt_juncti
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
+def find_split_path(split_name, explicit_path=None, base_dir=None):
+    """
+    Universally resolves directory paths for Train, Val, and Test splits.
+    Supports explicit paths, unified root directories, and multi-dataset Kaggle mounts.
+    """
+    if explicit_path and os.path.exists(explicit_path):
+        return os.path.abspath(explicit_path)
+    target = split_name.lower()
+    
+    # 1. Inside base_dir if given
+    if base_dir:
+        for candidate in [os.path.join(base_dir, split_name), os.path.join(base_dir, target)]:
+            if os.path.exists(candidate) and os.path.exists(os.path.join(candidate, 'labels')):
+                return os.path.abspath(candidate)
+        if os.path.exists(os.path.join(base_dir, 'labels')):
+            return os.path.abspath(base_dir)
+
+    # 2. Standard known paths (including Kaggle mounted datasets)
+    candidates = [
+        f"/kaggle/input/datasets/khoatrytopublish/l3d-{target}/{split_name}",
+        f"/kaggle/input/datasets/khoatrytopublish/l3d_{target}/{split_name}",
+        f"/kaggle/input/datasets/khoatrytopublish/l3d{target}/{split_name}",
+        f"/kaggle/input/l3d-{target}/{split_name}",
+        f"/kaggle/input/l3d_{target}/{split_name}",
+        f"/kaggle/input/l3d - {split_name}/{split_name}",
+        f"/kaggle/input/l3d - {target}/{split_name}",
+        f"/kaggle/input/l3d-{target}",
+        f"/kaggle/input/l3d/{split_name}",
+        f"/kaggle/input/laparoscopic-liver-landmark-dataset/L3D/{split_name}",
+        f"/kaggle/input/l3d-dataset/L3D/{split_name}",
+        f"/data/khoalq/data/L3D/{split_name}",
+        f"data/L3D/{split_name}",
+        f"../data/L3D/{split_name}",
+        f"../../data/L3D/{split_name}",
+    ]
+    for c in candidates:
+        if os.path.exists(c) and os.path.exists(os.path.join(c, 'labels')):
+            return os.path.abspath(c)
+            
+    # 3. Recursive search under /kaggle/input
+    if os.path.exists("/kaggle/input"):
+        for m in glob.glob(f"/kaggle/input/**/{split_name}", recursive=True):
+            if os.path.isdir(m) and os.path.exists(os.path.join(m, 'labels')):
+                return os.path.abspath(m)
+        for m in glob.glob(f"/kaggle/input/**/{target}", recursive=True):
+            if os.path.isdir(m) and os.path.exists(os.path.join(m, 'labels')):
+                return os.path.abspath(m)
+        for p in glob.glob("/kaggle/input/**/labels", recursive=True):
+            parent = os.path.dirname(p)
+            if target in parent.lower():
+                return os.path.abspath(parent)
+                
+    raise RuntimeError(f"Could not locate {split_name} split directory! Check your dataset inputs.")
+
 def resolve_l3d_root(candidate_root=None):
     """
     Auto-detects the L3D dataset root path across local macOS, Linux, and Kaggle.
@@ -53,27 +107,28 @@ class StratifiedL3DDataset(Dataset):
     """
     VAL_PATIENTS = {'patient_38', 'patient_32', 'patient_18'}
     
-    def __init__(self, split='Train', data_dir=None, image_size=1024, stroke_width=35):
+    def __init__(self, split='Train', data_dir=None, train_dir=None, val_dir=None, test_dir=None, image_size=1024, stroke_width=35):
         super().__init__()
         self.split = split
         self.image_size = image_size
         self.stroke_width = stroke_width
-        self.root_dir = resolve_l3d_root(data_dir)
         
         if split == 'Test':
-            split_dir = os.path.join(self.root_dir, 'Test')
+            self.test_dir = find_split_path('Test', test_dir, data_dir)
             self.items = []
-            for jf in sorted(glob.glob(os.path.join(split_dir, 'labels', '*.json'))):
+            for jf in sorted(glob.glob(os.path.join(self.test_dir, 'labels', '*.json'))):
                 stem = Path(jf).stem
-                img_path = os.path.join(split_dir, 'images', f"{stem}.jpg")
+                img_path = os.path.join(self.test_dir, 'images', f"{stem}.jpg")
                 if not os.path.exists(img_path):
-                    img_path = os.path.join(split_dir, 'images', f"{stem}.png")
+                    img_path = os.path.join(self.test_dir, 'images', f"{stem}.png")
                 self.items.append((jf, img_path))
         else:
+            self.train_dir = find_split_path('Train', train_dir, data_dir)
+            self.val_dir = find_split_path('Val', val_dir, data_dir)
+            
             # Pool all Train and Val files from disk without altering original filesystem
             all_files = []
-            for sp in ['Train', 'Val']:
-                sp_dir = os.path.join(self.root_dir, sp)
+            for sp_dir in [self.train_dir, self.val_dir]:
                 for jf in glob.glob(os.path.join(sp_dir, 'labels', '*.json')):
                     stem = Path(jf).stem
                     img_path = os.path.join(sp_dir, 'images', f"{stem}.jpg")
@@ -91,9 +146,9 @@ class StratifiedL3DDataset(Dataset):
                     self.items.append((jf, img_path))
                     
         if len(self.items) == 0:
-            raise RuntimeError(f"[{split}] No annotation files found in root: {self.root_dir}")
+            raise RuntimeError(f"[{split}] No annotation files found in resolved directories!")
             
-        print(f"[{split} - Stratified Option 1] Loaded {len(self.items)} frames from root: {self.root_dir}")
+        print(f"[{split} - Stratified Option 1] Loaded {len(self.items)} frames.")
 
     def __len__(self):
         return len(self.items)
