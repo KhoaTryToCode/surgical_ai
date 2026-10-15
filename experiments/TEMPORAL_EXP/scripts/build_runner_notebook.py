@@ -149,15 +149,11 @@ for p in test_vis[:3]:
     display(Image(filename=p))
 """)
 
-    # Write out runner notebooks
-    targets = [
-        NOTEBOOKS_DIR / "Kaggle_Temporal_Runner.ipynb",
-        NOTEBOOKS_DIR / "EXP17_MinVIS_Kaggle.ipynb"
-    ]
-    for target_path in targets:
-        with open(target_path, 'w', encoding='utf-8') as f:
-            json.dump(nb, f, indent=1)
-        print(f"✅ Generated Runner Notebook: '{target_path}'")
+    # Write out universal runner notebook
+    target_path = NOTEBOOKS_DIR / "Kaggle_Temporal_Runner.ipynb"
+    with open(target_path, 'w', encoding='utf-8') as f:
+        json.dump(nb, f, indent=1)
+    print(f"✅ Generated Runner Notebook: '{target_path}'")
 
 
 if __name__ == '__main__':

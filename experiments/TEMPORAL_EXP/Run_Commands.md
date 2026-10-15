@@ -50,9 +50,7 @@ This automatically scans all model outputs (`minvis`, `cutie`, `sam2`), calculat
 ## 2. Kaggle GPU Execution (Zero Code-Drift Git Runner)
 
 ### A. Runner Notebook
-Notebook files:
-* [`experiments/TEMPORAL_EXP/notebooks/Kaggle_Temporal_Runner.ipynb`](file:///Users/khoale/Downloads/Surgical%20AI/experiments/TEMPORAL_EXP/notebooks/Kaggle_Temporal_Runner.ipynb)
-* [`experiments/TEMPORAL_EXP/notebooks/EXP17_MinVIS_Kaggle.ipynb`](file:///Users/khoale/Downloads/Surgical%20AI/experiments/TEMPORAL_EXP/notebooks/EXP17_MinVIS_Kaggle.ipynb)
+Notebook file: [`experiments/TEMPORAL_EXP/notebooks/Kaggle_Temporal_Runner.ipynb`](file:///Users/khoale/Downloads/Surgical%20AI/experiments/TEMPORAL_EXP/notebooks/Kaggle_Temporal_Runner.ipynb)
 
 * **Architecture**: The notebook does not hardcode model classes or training loops. It runs `git clone` / `git pull` from `https://github.com/KhoaTryToCode/surgical_ai.git`, enters `experiments/TEMPORAL_EXP/`, and directly invokes the modular CLIs (`train.py`, `evaluate.py`, `aggregate.py`).
 * **Dataset Inputs**: Attach `l3d-train`, `l3d-val`, and `l3d-test` (or `laparoscopic-liver-landmarks`). The scripts automatically resolve all three sibling mounts via `resolve_all_split_dirs()`.
