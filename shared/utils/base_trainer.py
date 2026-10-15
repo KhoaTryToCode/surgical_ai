@@ -66,7 +66,8 @@ def evaluate_loader(
                         mode='bilinear',
                         align_corners=False
                     )
-                    tracked_sem_seg = tracker.track_sequence(query_embds, class_logits, mask_probs)
+                    res = tracker.track_sequence(query_embds, class_logits, mask_probs)
+                    tracked_sem_seg = res[0] if isinstance(res, (tuple, list)) else res
                     pred_target = tracked_sem_seg[-1].cpu().numpy()
                 else:
                     outputs = model(pv.unsqueeze(0))
@@ -122,9 +123,10 @@ def train_fold(
     val_dataset = PatientVideoL3DDataset(patient_ids=val_patients, split_dirs=all_split_dirs, image_size=1024, stroke_width=35, clip_len=3)
     test_dataset = PatientVideoL3DDataset(patient_ids=test_patients, split_dirs=all_split_dirs, image_size=1024, stroke_width=35, clip_len=3)
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=(device.type == 'cuda'), drop_last=True)
-    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=2, pin_memory=(device.type == 'cuda'))
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=2, pin_memory=(device.type == 'cuda'))
+    workers = 2 if device.type == 'cuda' else 0
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=workers, pin_memory=(device.type == 'cuda'), drop_last=True)
+    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=workers, pin_memory=(device.type == 'cuda'))
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=workers, pin_memory=(device.type == 'cuda'))
 
     m_kwargs = model_kwargs or {}
     model = model_class(**m_kwargs).to(device)
