@@ -577,7 +577,8 @@ class MinVISTracker:
 
             out = model(pv)
             mask_probs = F.interpolate(out['masks_queries_logits'].sigmoid(), size=(h, w), mode='bilinear', align_corners=False)
-            tracked_sem = tracker.track_sequence(out['query_embeddings'], out['class_queries_logits'], mask_probs)
+            res = tracker.track_sequence(out['query_embeddings'], out['class_queries_logits'], mask_probs)
+            tracked_sem = res[0] if isinstance(res, (tuple, list)) else res
             pred_target = tracked_sem[-1].cpu().numpy()
 
             all_metrics.append(evaluate_frame_metrics(pred_target, tm))

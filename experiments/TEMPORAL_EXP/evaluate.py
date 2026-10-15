@@ -91,7 +91,8 @@ def main():
         stroke_width=35,
         clip_len=3
     )
-    loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=2)
+    eval_workers = 2 if device.type == 'cuda' else 0
+    loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=eval_workers)
 
     model = entry['model_class'](**entry['default_model_kwargs']).to(device)
     checkpoint = torch.load(args.checkpoint, map_location=device)
@@ -119,7 +120,8 @@ def main():
             if tracker is not None:
                 outputs = model(pv)
                 mask_probs = torch.nn.functional.interpolate(outputs['masks_queries_logits'].sigmoid(), size=(h, w), mode='bilinear', align_corners=False)
-                tracked_sem = tracker.track_sequence(outputs['query_embeddings'], outputs['class_queries_logits'], mask_probs)
+                res = tracker.track_sequence(outputs['query_embeddings'], outputs['class_queries_logits'], mask_probs)
+                tracked_sem = res[0] if isinstance(res, (tuple, list)) else res
                 pred_prob = tracked_sem[-1].cpu().numpy()
             else:
                 outputs = model(pv.unsqueeze(0))

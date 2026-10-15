@@ -76,7 +76,8 @@ def evaluate_loader(
                         mode='bilinear',
                         align_corners=False
                     )
-                    tracked_sem_seg = tracker.track_sequence(query_embds, class_logits, mask_probs)
+                    res = tracker.track_sequence(query_embds, class_logits, mask_probs)
+                    tracked_sem_seg = res[0] if isinstance(res, (tuple, list)) else res
                     pred_target = tracked_sem_seg[-1].cpu().numpy()
                 else:
                     # Unified VOS / Streaming memory model paradigm (Cutie, SAM 2)
@@ -173,16 +174,17 @@ def train_fold(
         clip_len=3
     )
 
+    workers = 2 if device.type == 'cuda' else 0
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=2,
+        num_workers=workers,
         pin_memory=(device.type == 'cuda'),
         drop_last=True
     )
-    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=2, pin_memory=(device.type == 'cuda'))
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=2, pin_memory=(device.type == 'cuda'))
+    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=workers, pin_memory=(device.type == 'cuda'))
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=workers, pin_memory=(device.type == 'cuda'))
 
     print(f"📦 Train Batches: {len(train_loader)} | Val Clips: {len(val_loader)} | Frozen Test Clips: {len(test_loader)}")
 

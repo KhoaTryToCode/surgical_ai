@@ -100,7 +100,7 @@ DEVICE = "cuda"           # Compute device: 'cuda', 'cpu'
 
 print(f"🚀 Launching Benchmark: Model={MODEL.upper()} | Fold={FOLD_IDX} | Epochs={EPOCHS}")
 
-# 1. Execute 5-Fold Training & Frozen Test Evaluation
+# Execute 5-Fold Training, Evaluation & Leaderboard Aggregation
 !python train.py \\
     --model {MODEL} \\
     --fold_idx {FOLD_IDX} \\
@@ -110,30 +110,24 @@ print(f"🚀 Launching Benchmark: Model={MODEL.upper()} | Fold={FOLD_IDX} | Epoc
     --lr-backbone {LR_BACKBONE} \\
     --weight-decay {WEIGHT_DECAY} \\
     --data-root {DATA_ROOT} \\
-    --device {DEVICE}
-
-# 2. Qualitative Visual Inspection on Validation Set
-!python evaluate.py \\
+    --device {DEVICE} && \\
+python evaluate.py \\
     --model {MODEL} \\
     --checkpoint checkpoints/{MODEL}/best_{MODEL}_fold{FOLD_IDX}.pth \\
     --fold_idx {FOLD_IDX} \\
     --split val \\
     --data-root {DATA_ROOT} \\
     --save-vis \\
-    --num-vis 20
-
-# 3. Qualitative Visual Inspection on Frozen Test Set (Patients 21, 31, 41, 51)
-!python evaluate.py \\
+    --num-vis 20 && \\
+python evaluate.py \\
     --model {MODEL} \\
     --checkpoint checkpoints/{MODEL}/best_{MODEL}_fold{FOLD_IDX}.pth \\
     --fold_idx {FOLD_IDX} \\
     --split test \\
     --data-root {DATA_ROOT} \\
     --save-vis \\
-    --num-vis 20
-
-# 4. Compile Global Benchmark Leaderboard
-!python aggregate.py
+    --num-vis 20 && \\
+python aggregate.py
 """)
 
     # Cell 3: Interactive Visual Inspection Display
