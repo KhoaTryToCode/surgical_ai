@@ -74,8 +74,12 @@ EXP_DIR = os.path.join(REPO_DIR, "experiments/TEMPORAL_EXP")
 # 3. Verify git status and active commit
 !git status
 
-# 4. Install required packages
-!pip install -q transformers==4.44.2
+# 4. Ensure transformers is available (pre-installed in Kaggle)
+try:
+    import transformers
+    print(f"✅ Transformers available: {transformers.__version__}")
+except ImportError:
+    !pip install -q transformers
 """)
 
     # Cell 2: Configurable Parameters & Master Execution
