@@ -1,0 +1,43 @@
+# Base Configuration: EXPERIMENT_2 — Mask2Former Component Ablation Study
+
+dataset:
+  train_dir: "data/L3D/Train"
+  val_dir: "data/L3D/Val"
+  test_dir: "data/L3D/Test"
+  input_size: [1024, 1024]
+  num_classes: 3  # Anterior Ridge (1), Liver Silhouette (2), Falciform Ligament (3)
+  use_depth: false  # Pure standard RGB Mask2Former
+
+model:
+  backbone: "resnet50"
+  fpn_dim: 256
+  num_decoder_layers: 6
+  num_heads: 8
+  num_queries_per_class: 5
+  total_queries: 15
+
+loss:
+  lambda_cls: 2.0
+  lambda_bce: 5.0
+  lambda_dice: 5.0
+
+training:
+  epochs: 50
+  batch_size: 1
+  accumulation_steps: 4
+  effective_batch_size: 4
+  lr: 8.0e-5
+  weight_decay: 3.0e-5
+  eta_min: 1.0e-6
+  amp: true
+  clip_grad_norm: 1.0
+
+ablation_modes:
+  - name: "baseline"
+    description: "Full standard Mask2Former with Masked Attention, Multi-Scale feature cycling, and Query Self-Attention"
+  - name: "wo_masked_attn"
+    description: "Global cross-attention without spatial mask restriction"
+  - name: "wo_multiscale"
+    description: "Single-scale feature decoder at stride 16 without high-resolution 1/4 pixel embedding pyramid"
+  - name: "wo_self_attn"
+    description: "Independent parallel queries without inter-query self-attention"

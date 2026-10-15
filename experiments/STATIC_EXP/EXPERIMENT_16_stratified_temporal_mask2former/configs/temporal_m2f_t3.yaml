@@ -1,0 +1,39 @@
+model:
+  name: "temporal_mask2former"
+  base_checkpoint: "facebook/mask2former-swin-tiny-ade-semantic"
+  num_classes: 3  # 1: liver_ridge, 2: liver_silhouette, 3: falciform_ligament
+  num_queries: 100
+  hidden_dim: 256
+  clip_len: 3
+  temporal_layers: 9  # Interleaved in each of the 9 decoder layers
+  temporal_gate_init: 0.1
+  empty_token_learnable: true
+
+dataset:
+  train_split: "train"
+  val_split: "val"
+  test_split: "test"
+  image_size: 1024
+  stroke_width: 35
+  max_gap: 240
+  clip_len: 3
+  teacher_forcing_ratio: 1.0  # 100% Ground Truth for past context during training
+
+training:
+  num_epochs: 30
+  batch_size: 1
+  grad_accum_steps: 4
+  lr_backbone: 1.0e-5
+  lr_decoder: 1.0e-4
+  lr_temporal: 1.0e-4
+  weight_decay: 1.0e-4
+  clip_grad_norm: 0.1
+  loss_class_weight: 2.0
+  loss_mask_weight: 5.0
+  loss_dice_weight: 5.0
+
+metrics:
+  threshold: 0.5
+  compute_assd: true
+  compute_hd95: true
+  primary_metric: "val_macro_dice"

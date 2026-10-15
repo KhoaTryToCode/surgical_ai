@@ -29,11 +29,34 @@ runs/
 build/
 scratch/
 *.zip
+*.pdf
+*.aux
+*.out
+*.synctex.gz
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+
 results/*
 **/results/*
 !**/results/*.md
 !**/results/*.json
 result/*
 **/result/*
+
+# Visualizations & Heavy Frame Dumps
+visualizations/
+**/visualizations/*
+figures/
+writing/figures
+writing/proposal/figures/
+writing/proposal/*.pdf
+
+# Local Notebooks & Secrets
+DSAS.ipynb
+.env
+*.key
+
 
 
