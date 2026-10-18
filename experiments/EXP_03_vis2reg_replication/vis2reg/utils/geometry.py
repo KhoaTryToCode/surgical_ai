@@ -7,8 +7,8 @@ def axis_angle_to_matrix(axis_angle: torch.Tensor) -> torch.Tensor:
     """Convert axis-angle (B,3) to rotation matrices (B,3,3)."""
     angle = torch.norm(axis_angle + 1e-9, dim=-1, keepdim=True)
     axis = axis_angle / angle.clamp(min=1e-9)
-    cos = torch.cos(angle)
-    sin = torch.sin(angle)
+    cos = torch.cos(angle).squeeze(-1)
+    sin = torch.sin(angle).squeeze(-1)
     one_minus_cos = 1 - cos
 
     x, y, z = axis.unbind(-1)
@@ -40,6 +40,9 @@ def build_se3_transform(R: torch.Tensor, t: torch.Tensor, scale: torch.Tensor | 
 def apply_transform(points: torch.Tensor, R: torch.Tensor, t: torch.Tensor, scale: torch.Tensor | None = None) -> torch.Tensor:
     if scale is None:
         scale = 1.0
+    elif isinstance(scale, torch.Tensor):
+        while scale.dim() < points.dim():
+            scale = scale.unsqueeze(-1)
     return (R @ points.transpose(1, 2)).transpose(1, 2) * scale + t.unsqueeze(1)
 
 

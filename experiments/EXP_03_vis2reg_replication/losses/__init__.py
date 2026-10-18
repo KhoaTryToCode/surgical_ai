@@ -1,5 +1,8 @@
 from .objectives import (
     Vis2RegLoss,
+    SyntheticPoseLoss,
+    rotation_geodesic_distance,
+    translation_error,
     one_way_chamfer,
     symmetric_chamfer,
     silhouette_overlap_loss,
@@ -10,6 +13,9 @@ from .objectives import (
 
 __all__ = [
     "Vis2RegLoss",
+    "SyntheticPoseLoss",
+    "rotation_geodesic_distance",
+    "translation_error",
     "one_way_chamfer",
     "symmetric_chamfer",
     "silhouette_overlap_loss",

@@ -296,3 +296,83 @@ class Vis2RegLoss(nn.Module):
         losses['total'] = total
 
         return losses
+
+
+def rotation_geodesic_distance(R_pred: Tensor, R_gt: Tensor) -> Tuple[Tensor, Tensor]:
+    """
+    Computes rotation error between predicted and ground-truth rotation matrices.
+    R_pred: (B, 3, 3)
+    R_gt: (B, 3, 3)
+    Returns:
+        rre_degrees: (B,) Relative Rotation Error in degrees
+        loss_rot: (B,) 1 - cos(theta) = (3 - Trace(R_pred @ R_gt^T)) / 2
+    """
+    R_rel = torch.bmm(R_pred, R_gt.transpose(1, 2))
+    trace = R_rel[:, 0, 0] + R_rel[:, 1, 1] + R_rel[:, 2, 2]
+    cos_clamped = torch.clamp((trace - 1.0) / 2.0, min=-1.0, max=1.0)
+    rre_deg = torch.acos(cos_clamped) * (180.0 / torch.pi)
+    loss_rot = 1.0 - torch.clamp((trace - 1.0) / 2.0, min=-1.0 + 1e-7, max=1.0 - 1e-7)
+    return rre_deg, loss_rot
+
+
+def translation_error(t_pred: Tensor, t_gt: Tensor) -> Tuple[Tensor, Tensor]:
+    """
+    Computes translation error between predicted and ground-truth translations.
+    t_pred: (B, 3)
+    t_gt: (B, 3)
+    Returns:
+        rte_mm: (B,) Relative Translation Error in mm (L2 norm)
+        loss_trans: scalar Smooth L1 loss
+    """
+    diff = t_pred - t_gt
+    rte_mm = torch.linalg.norm(diff, dim=-1)
+    loss_trans = F.smooth_l1_loss(t_pred, t_gt)
+    return rte_mm, loss_trans
+
+
+class SyntheticPoseLoss(nn.Module):
+    """
+    Stage 1 Supervised Rigid Pose Loss on Synthetic Blender Simulations.
+    L_pose = L_trans + lambda_rot * L_rot + lambda_pts * L_pts
+    """
+    def __init__(
+        self,
+        lambda_rot: float = 10.0,
+        lambda_pts: float = 0.5,
+    ):
+        super().__init__()
+        self.lambda_rot = lambda_rot
+        self.lambda_pts = lambda_pts
+
+    def forward(
+        self,
+        model_outputs: Dict[str, Tensor],
+        batch: Dict[str, Tensor],
+    ) -> Dict[str, Tensor]:
+        R_pred, t_pred, _ = model_outputs['rigid_pose']
+        R_gt = batch['gt_R']
+        t_gt = batch['gt_t']
+        warped_pts = model_outputs['warped_pcd']
+        target_pts = batch['target_points']
+
+        # 1. Translation error & loss
+        rte_mm, loss_trans = translation_error(t_pred, t_gt)
+
+        # 2. Rotation error & loss
+        rre_deg, loss_rot = rotation_geodesic_distance(R_pred, R_gt)
+
+        # 3. Surface point alignment loss (One-Way Chamfer)
+        loss_pts = one_way_chamfer(warped_pts, target_pts, squared=False)
+
+        # Total multi-task pose loss
+        total_loss = loss_trans + self.lambda_rot * loss_rot.mean() + self.lambda_pts * loss_pts
+
+        return {
+            'loss_total': total_loss,
+            'loss_trans': loss_trans,
+            'loss_rot': loss_rot.mean(),
+            'loss_pts': loss_pts,
+            'rre_deg': rre_deg.mean(),
+            'rte_mm': rte_mm.mean(),
+        }
+

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 import glob
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 import yaml
 import torch
@@ -108,6 +108,37 @@ def resample_points(points: np.ndarray, max_points: int = 6000) -> Tuple[np.ndar
     return sampled, valid
 
 
+def collate_p2i_lreg(batch_or_items) -> Dict[str, Any]:
+    """
+    Collate function for P2I-LReg datasets.
+    Accepts either a list of sample dicts [dict, ...] or a single sample dict.
+    Returns stacked/batched tensor dictionary with shapes (B, N, 3), (B, 3, 3), (B, 3), etc.
+    """
+    if isinstance(batch_or_items, dict):
+        batch_list = [batch_or_items]
+    else:
+        batch_list = list(batch_or_items)
+
+    collated = {}
+    for key in batch_list[0].keys():
+        vals = [item[key] for item in batch_list]
+        if isinstance(vals[0], torch.Tensor):
+            squeezed = []
+            for v in vals:
+                if key != 'intra_masks' and v.dim() > 1 and v.shape[0] == 1:
+                    squeezed.append(v.squeeze(0))
+                else:
+                    squeezed.append(v)
+            collated[key] = torch.stack(squeezed, dim=0)
+        elif isinstance(vals[0], (int, float, np.integer, np.floating)):
+            collated[key] = torch.tensor(vals)
+        elif isinstance(vals[0], bool):
+            collated[key] = vals[0]
+        else:
+            collated[key] = vals
+    return collated
+
+
 class P2ILRegFolds:
     """
     Deterministic 5-Fold Patient Partitioner for the 21 P2I-LReg patients.
@@ -167,6 +198,7 @@ class P2ILRegSyntheticDataset(Dataset):
         self.preop_cache: Dict[str, np.ndarray] = {}
         self.intrinsics_cache: Dict[str, Dict] = {}
         self.poses_cache: Dict[str, Dict] = {}
+        self.c2w_mode: Optional[str] = None
 
         self._index_dataset(samples_per_patient)
 
@@ -233,8 +265,26 @@ class P2ILRegSyntheticDataset(Dataset):
         pose_dict = self.poses_cache.get(pid, {})
         if fid in pose_dict:
             pose_item = pose_dict[fid][0]
-            R_gt = np.array(pose_item['cam_R_c2w'], dtype=np.float32).reshape(3, 3)
-            t_gt = np.array(pose_item['cam_t_c2w'], dtype=np.float32)
+            if 'cam_R_w2c' in pose_item:
+                R_gt = np.array(pose_item['cam_R_w2c'], dtype=np.float32).reshape(3, 3)
+                t_gt = np.array(pose_item['cam_t_w2c'], dtype=np.float32)
+            elif 'cam_R_c2w' in pose_item:
+                R_raw = np.array(pose_item['cam_R_c2w'], dtype=np.float32).reshape(3, 3)
+                t_raw = np.array(pose_item['cam_t_c2w'], dtype=np.float32)
+                if self.c2w_mode is None and len(pre_pts) > 0 and len(tgt_pts) > 0:
+                    p_sub = pre_pts[:min(50, len(pre_pts))]
+                    q_sub = tgt_pts[:min(50, len(tgt_pts))]
+                    err_dir = np.mean(np.linalg.norm((p_sub @ R_raw.T + t_raw)[:, None, :] - q_sub[None, :, :], axis=-1).min(axis=1))
+                    R_inv = R_raw.T
+                    t_inv = -R_raw.T @ t_raw
+                    err_inv = np.mean(np.linalg.norm((p_sub @ R_inv.T + t_inv)[:, None, :] - q_sub[None, :, :], axis=-1).min(axis=1))
+                    self.c2w_mode = 'invert' if err_inv < err_dir else 'direct'
+                if self.c2w_mode == 'invert':
+                    R_gt = R_raw.T
+                    t_gt = -R_raw.T @ t_raw
+                else:
+                    R_gt = R_raw
+                    t_gt = t_raw
 
         return {
             'pre_points': torch.from_numpy(pre_pts).unsqueeze(0),           # (1, N, 3)
