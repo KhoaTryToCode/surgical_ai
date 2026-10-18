@@ -41,8 +41,19 @@ class WeightedSVDSolver(nn.Module):
 
         H = torch.matmul(x_centered.transpose(1, 2), weights * y_centered)  # (B, 3, 3)
 
-        # SVD on CPU can be more stable for small mats; stay on same device to keep it simple
-        U, S, Vh = torch.linalg.svd(H, full_matrices=False)
+        # Regularize H with non-identical diagonal perturbation to prevent degenerate / repeated
+        # singular values which cause division by zero in PyTorch's SVD autograd formula:
+        # dU = U * (F o (U^T dU)) where F_ij = 1 / (s_j^2 - s_i^2) for i != j.
+        B = H.shape[0]
+        device = H.device
+        dtype = H.dtype
+        jitter = torch.diag(torch.tensor([1.0, 2.0, 3.0], device=device, dtype=dtype)).unsqueeze(0).expand(B, 3, 3) * 1e-4
+        H_safe = H + jitter
+
+        if H_safe.requires_grad:
+            H_safe.register_hook(lambda grad: torch.nan_to_num(grad, nan=0.0, posinf=0.0, neginf=0.0))
+
+        U, S, Vh = torch.linalg.svd(H_safe, full_matrices=False)
         V = Vh.transpose(1, 2)
         Ut = U.transpose(1, 2)
         det = torch.sign(torch.linalg.det(V @ Ut))
@@ -72,7 +83,11 @@ class WeightedSVDSolver(nn.Module):
         ref_centered = ref_points - ref_centroid
 
         H = src_centered.t() @ (weights * ref_centered)
-        U, _, Vh = torch.linalg.svd(H)
+        jitter = torch.diag(torch.tensor([1.0, 2.0, 3.0], device=H.device, dtype=H.dtype)) * 1e-4
+        H_safe = H + jitter
+        if H_safe.requires_grad:
+            H_safe.register_hook(lambda grad: torch.nan_to_num(grad, nan=0.0, posinf=0.0, neginf=0.0))
+        U, _, Vh = torch.linalg.svd(H_safe)
         V = Vh.transpose(0, 1)
         Ut = U.transpose(0, 1)
         det = torch.sign(torch.det(V @ Ut))

@@ -88,23 +88,19 @@ def load_ply_point_cloud(ply_path: str, filter_positive_z: bool = True) -> np.nd
 
 def resample_points(points: np.ndarray, max_points: int = 6000) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Uniformly subsamples or zero-pads point cloud to max_points.
-    Returns: (padded_points [max_points, 3], valid_mask [max_points])
+    Uniformly subsamples point cloud to max_points (with replacement if n_pts < max_points).
+    Avoids zero-padding spikes that cause covariance collapse and SVD autograd degeneracy.
+    Returns: (sampled_points [max_points, 3], valid_mask [max_points])
     """
     n_pts = len(points)
     if n_pts == 0:
-        return np.zeros((max_points, 3), dtype=np.float32), np.zeros(max_points, dtype=bool)
+        pts = np.random.randn(max_points, 3).astype(np.float32) * 10.0
+        return pts, np.zeros(max_points, dtype=bool)
 
-    if n_pts >= max_points:
-        choice = np.random.choice(n_pts, max_points, replace=False)
-        sampled = points[choice]
-        valid = np.ones(max_points, dtype=bool)
-    else:
-        sampled = np.zeros((max_points, 3), dtype=np.float32)
-        sampled[:n_pts] = points
-        valid = np.zeros(max_points, dtype=bool)
-        valid[:n_pts] = True
-
+    replace = bool(n_pts < max_points)
+    choice = np.random.choice(n_pts, max_points, replace=replace)
+    sampled = points[choice].astype(np.float32)
+    valid = np.ones(max_points, dtype=bool)
     return sampled, valid
 
 

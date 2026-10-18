@@ -370,10 +370,19 @@ class Vis2Reg(nn.Module):
         if render_masks is not None:
             outputs['render_mask'] = render_masks[:, 0]
         elif render and self.point_renderer is not None:
-            image_hw = batch['intra_images'].shape[-2:]
+            image_hw = None
+            if 'intra_images' in batch and batch['intra_images'] is not None:
+                image_hw = batch['intra_images'].shape[-2:]
+            elif 'intra_masks' in batch and batch['intra_masks'] is not None:
+                image_hw = batch['intra_masks'].shape[-2:]
+            else:
+                image_hw = (512, 512)
+            K = batch['cam_intrinsics']
+            if K.dim() == 4:
+                K = K[:, 0]
             renders, _ = self.point_renderer.render_with_depth(
                 warped_world,
-                batch['cam_intrinsics'][:, 0],
+                K,
                 image_size=image_hw,
                 return_depth=True,
             )
@@ -767,11 +776,18 @@ class Vis2Reg(nn.Module):
             return None, None
         B, F, _, H, W = masks.shape
         points = warped_points.unsqueeze(1).expand(-1, F, -1, -1).reshape(B * F, -1, 3)
-        intr_flat = intrinsics.reshape(B * F, 3, 3)
-        image_hw = batch['intra_images'].shape[-2:]
+        if intrinsics.dim() == 3:
+            intr_flat = intrinsics.unsqueeze(1).expand(-1, F, -1, -1).reshape(B * F, 3, 3)
+        else:
+            intr_flat = intrinsics.reshape(B * F, 3, 3)
+        if 'intra_images' in batch and batch['intra_images'] is not None:
+            image_hw = batch['intra_images'].shape[-2:]
+        else:
+            image_hw = (H, W)
         mask, depth = self.point_renderer.render_with_depth(points, intr_flat, image_size=image_hw, return_depth=True)
         mask = mask.view(B, F, image_hw[0], image_hw[1])
-        depth = depth.view(B, F, image_hw[0], image_hw[1])
+        if depth is not None:
+            depth = depth.view(B, F, image_hw[0], image_hw[1])
         return mask, depth
 
     def _build_render_condition(

@@ -311,15 +311,33 @@ def main():
             loss = losses['loss_total']
             loss.backward()
 
-            # Gradient clipping to maintain SVD numerical stability
-            torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
-            optimizer.step()
+            # Robust gradient check: verify finite gradients before clipping/stepping
+            has_non_finite = False
+            for p in trainable_params:
+                if p.grad is not None and not torch.isfinite(p.grad).all():
+                    has_non_finite = True
+                    break
+
+            if has_non_finite:
+                optimizer.zero_grad()
+            else:
+                torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+                optimizer.step()
 
             train_loss += loss.item()
             train_trans += losses['loss_trans'].item()
             train_rot += losses['loss_rot'].item()
             train_pts += losses['loss_pts'].item()
             step_count += 1
+
+            # Periodic batch progress logging (every 100 batches)
+            if (batch_idx + 1) % 100 == 0 or (batch_idx + 1) == len(train_loader):
+                print(
+                    f"  [Epoch {epoch:02d} | Step {batch_idx+1:04d}/{len(train_loader):04d}] "
+                    f"Loss: {loss.item():.4f} (Tr:{losses['loss_trans'].item():.2f}, "
+                    f"Rot:{losses['loss_rot'].item():.4f}, CD:{losses['loss_pts'].item():.2f})",
+                    flush=True,
+                )
 
             if args.smoke_test and batch_idx >= 1:
                 break

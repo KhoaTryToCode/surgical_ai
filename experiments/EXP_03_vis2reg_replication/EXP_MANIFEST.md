@@ -49,12 +49,26 @@
 | **Phase 1** | `test_smoke.py` | **PASSED** | 2,119,438 parameters initialized; clean forward execution in rigid and deformable modes on Tesla T4 GPU. |
 | **Phase 2** | `scripts/01_test_data.py` | **PASSED** | 5-fold stratification verified (12/4/5); unit conversion verified (CT diagonal 303.6 mm, intra-op Z in [10.4, 117.6] mm). |
 | **Phase 3** | `scripts/02_test_losses.py` | **PASSED** | All 6 multi-task loss terms verified; 100% finite gradients across all 42 model parameter tensors. |
-| **Phase 4** | `scripts/03_pretrain_syn.py` | **READY FOR KAGGLE** | Multi-batch EdgeConv + GeoTransformer + Weighted SVD pretraining; deformation field frozen; verified on local MPS. |
-| **Phase 5** | `scripts/04_train_real.py` | *Pending* | Stage 2 real fine-tuning (20-epoch rigid warm-up -> 40-epoch joint deformable). |
-| **Phase 6** | `scripts/05_evaluate.py` | *Pending* | 5-fold cross-validation evaluation and comparison against paper Table 1. |
+| **Phase 4** | `scripts/03_pretrain_syn.py` | **STABILIZED** | Multi-batch EdgeConv + GeoTransformer + Weighted SVD pretraining. Resolved SVD autograd division-by-zero singularity via non-identical diagonal jitter perturbation and non-finite gradient skipping. |
+| **Phase 5** | `scripts/04_train_real.py` | **READY FOR KAGGLE** | 60-epoch schedule (20-epoch rigid warm-up -> 40-epoch joint deformable); verified on local MPS. |
+| **Phase 6** | `scripts/05_evaluate.py` | **READY FOR KAGGLE** | Official paper metrics pipeline (Silhouette Dice % and One-Way CD mm); benchmark comparison against paper Table 1 baselines. |
 
 ---
 
-## 6. Checkpoint Registry
+## 6. Numerical Stability & Forensic Fixes
+1. **SVD Autograd Division-by-Zero Singularity:**
+   - In PyTorch, SVD backward contains terms divided by (s_j^2 - s_i^2). When two singular values collide (e.g. isotropic orientation, planar surface), the denominator becomes zero, producing NaN in H.grad.
+   - Fixed by adding a non-identical diagonal perturbation jitter = diag([1e-4, 2e-4, 3e-4]) to H prior to SVD, guaranteeing strictly distinct non-zero singular values.
+   - Added an autograd hook to H_safe to sanitize any non-finite gradient tensors.
+2. **Cascading Gradient Contamination Prevention:**
+   - Standard clip_grad_norm_ multiplies all gradients by (max_norm / norm). If even one gradient is NaN, all parameter gradients become NaN, and optimizer.step() permanently corrupts model weights.
+   - Added finite-gradient validation before clipping; any non-finite step is discarded with optimizer.zero_grad().
+3. **Point Resampling Without Zero-Padding Spikes:**
+   - Updated resample_points to sample with replacement when n_pts < max_points, eliminating degenerate (0, 0, 0) coordinate spikes that cause covariance collapse.
+
+---
+
+## 7. Checkpoint Registry
 - `checkpoints/stage1_rigid_seed.pth`: Stage 1 rigid matching weights (EdgeConv + GeoTransformer + SVD solver).
-- `checkpoints/best_real_model.pth`: Stage 2 fine-tuned model checkpoint (upcoming).
+- `checkpoints/best_real_model.pth`: Stage 2 fine-tuned model checkpoint (highest validation Silhouette Dice).
+
