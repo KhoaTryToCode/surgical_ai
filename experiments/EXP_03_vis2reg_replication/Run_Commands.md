@@ -97,6 +97,15 @@ python scripts/04_train_real.py \
     --rigid_warmup_epochs 20 \
     --max_points 6000
 
+# Resuming Training (Auto-resumes from checkpoints/latest_real_checkpoint.pth)
+python scripts/04_train_real.py \
+    --data_root /kaggle/input/datasets/junezhou001/p2i-lreg/Liver_regis \
+    --fold 0 \
+    --resume \
+    --epochs 60 \
+    --rigid_warmup_epochs 20 \
+    --max_points 6000
+
 # Quick Smoke Test (1 epoch, 2 batches)
 python scripts/04_train_real.py \
     --data_root /kaggle/input/datasets/junezhou001/p2i-lreg/Liver_regis \

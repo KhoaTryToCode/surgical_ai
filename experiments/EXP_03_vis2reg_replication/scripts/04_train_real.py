@@ -125,6 +125,14 @@ def parse_args():
         help="DataLoader worker subprocesses",
     )
     parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        nargs="?",
+        const="auto",
+        help="Path to checkpoint to resume from, or pass --resume to auto-resume from latest checkpoint",
+    )
+    parser.add_argument(
         "--smoke_test",
         action="store_true",
         help="Run 1 quick epoch with 2 batches to verify pipeline without waiting",
@@ -315,28 +323,7 @@ def main():
     }
     model = Vis2Reg(cfg).to(device)
 
-    # 5. Load Stage 1 Pretrained Rigid Seed
-    seed_path = args.pretrained_seed
-    if not os.path.isabs(seed_path) and not os.path.exists(seed_path):
-        seed_path = os.path.join(EXPERIMENT_ROOT, args.pretrained_seed)
-
-    if os.path.exists(seed_path):
-        print(f"\n[Step 4] Loading Pretrained Rigid Seed from: {seed_path}...")
-        try:
-            ckpt = torch.load(seed_path, map_location=device, weights_only=True)
-        except Exception:
-            ckpt = torch.load(seed_path, map_location=device, weights_only=False)
-
-        state_dict = ckpt['model_state_dict'] if isinstance(ckpt, dict) and 'model_state_dict' in ckpt else ckpt
-        # Load weights with strict=False to accommodate newly instantiated renderer
-        missing, unexpected = model.load_state_dict(state_dict, strict=False)
-        print(f"         Loaded successfully! (Missing renderer/field keys: {len(missing)}, Unexpected: {len(unexpected)})")
-        if isinstance(ckpt, dict) and 'val_rre_deg' in ckpt:
-            print(f"         Seed Baseline RRE: {ckpt['val_rre_deg']:.3f}° | RTE: {ckpt.get('val_rte_mm', 0.0):.2f} mm")
-    else:
-        print(f"\n[Warning] Pretrained seed not found at '{args.pretrained_seed}'. Initializing from scratch.")
-
-    # 6. Multi-Task Loss Objective
+    # 5. Multi-Task Loss Objective
     criterion = Vis2RegLoss(
         lambda_3d=cfg.training['lambda_3d'],
         lambda_vis=cfg.training['lambda_vis'],
@@ -347,29 +334,97 @@ def main():
         knn_k=16,
     )
 
-    # 7. Optimizer & Scheduler Setup
+    # 6. Optimizer & Scheduler Setup
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
 
-    # 8. Checkpoint Directory
+    # 7. Checkpoint Directory & Paths
     save_dir = os.path.join(EXPERIMENT_ROOT, args.save_dir) if not os.path.isabs(args.save_dir) else args.save_dir
     os.makedirs(save_dir, exist_ok=True)
     best_checkpoint_path = os.path.join(save_dir, "best_real_model.pth")
+    latest_checkpoint_path = os.path.join(save_dir, "latest_real_checkpoint.pth")
 
-    # 9. Initial Validation Baseline
-    print("\n[Step 5] Running Baseline Validation Evaluation (Pre-Stage 2)...")
-    init_val = evaluate(model, val_loader, criterion, device, include_deformation=False)
-    print(f"         Baseline -> Dice: {init_val['dice_pct']:.2f}% | One-Way CD: {init_val['cd_mm']:.2f} mm | Loss: {init_val['loss']:.4f}")
+    start_epoch = 1
+    best_dice = -1.0
+    best_metrics = {}
+    is_resumed = False
 
-    # 10. Main 60-Epoch Training Loop (Two-Stage Schedule)
-    print(f"\n[Step 6] Starting 60-Epoch Two-Phase Schedule...")
+    # Check for resume request
+    resume_target = None
+    if args.resume is not None:
+        if args.resume == "auto":
+            if os.path.exists(latest_checkpoint_path):
+                resume_target = latest_checkpoint_path
+            elif os.path.exists(best_checkpoint_path):
+                resume_target = best_checkpoint_path
+        elif os.path.exists(args.resume):
+            resume_target = args.resume
+        elif os.path.exists(os.path.join(EXPERIMENT_ROOT, args.resume)):
+            resume_target = os.path.join(EXPERIMENT_ROOT, args.resume)
+
+    if resume_target is not None and os.path.exists(resume_target):
+        print(f"\n[Step 4] Resuming Training from: {resume_target}...")
+        try:
+            ckpt = torch.load(resume_target, map_location=device, weights_only=False)
+        except Exception:
+            ckpt = torch.load(resume_target, map_location=device, weights_only=True)
+
+        if isinstance(ckpt, dict) and 'model_state_dict' in ckpt:
+            model.load_state_dict(ckpt['model_state_dict'])
+            if 'optimizer_state_dict' in ckpt:
+                try:
+                    optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+                except Exception:
+                    pass
+            if 'scheduler_state_dict' in ckpt:
+                try:
+                    scheduler.load_state_dict(ckpt['scheduler_state_dict'])
+                except Exception:
+                    pass
+            if 'best_dice' in ckpt:
+                best_dice = ckpt['best_dice']
+            elif 'val_dice_pct' in ckpt:
+                best_dice = ckpt['val_dice_pct']
+            if 'best_metrics' in ckpt:
+                best_metrics = ckpt['best_metrics']
+            start_epoch = ckpt.get('epoch', 0) + 1
+        else:
+            model.load_state_dict(ckpt)
+            start_epoch = 1
+        is_resumed = True
+        print(f"         Resumed successfully! Resuming at Epoch {start_epoch}/{args.epochs} (Best Val Dice: {best_dice:.2f}%)")
+    else:
+        # Load Stage 1 Pretrained Rigid Seed
+        seed_path = args.pretrained_seed
+        if not os.path.isabs(seed_path) and not os.path.exists(seed_path):
+            seed_path = os.path.join(EXPERIMENT_ROOT, args.pretrained_seed)
+
+        if os.path.exists(seed_path):
+            print(f"\n[Step 4] Loading Pretrained Rigid Seed from: {seed_path}...")
+            try:
+                ckpt = torch.load(seed_path, map_location=device, weights_only=True)
+            except Exception:
+                ckpt = torch.load(seed_path, map_location=device, weights_only=False)
+
+            state_dict = ckpt['model_state_dict'] if isinstance(ckpt, dict) and 'model_state_dict' in ckpt else ckpt
+            missing, unexpected = model.load_state_dict(state_dict, strict=False)
+            print(f"         Loaded successfully! (Missing renderer/field keys: {len(missing)}, Unexpected: {len(unexpected)})")
+            if isinstance(ckpt, dict) and 'val_rre_deg' in ckpt:
+                print(f"         Seed Baseline RRE: {ckpt['val_rre_deg']:.3f}° | RTE: {ckpt.get('val_rte_mm', 0.0):.2f} mm")
+        else:
+            print(f"\n[Warning] Pretrained seed not found at '{args.pretrained_seed}'. Initializing from scratch.")
+
+        # Initial Validation Baseline
+        print("\n[Step 5] Running Baseline Validation Evaluation (Pre-Stage 2)...")
+        init_val = evaluate(model, val_loader, criterion, device, include_deformation=False)
+        print(f"         Baseline -> Dice: {init_val['dice_pct']:.2f}% | One-Way CD: {init_val['cd_mm']:.2f} mm | Loss: {init_val['loss']:.4f}")
+
+    # 8. Main 60-Epoch Training Loop (Two-Stage Schedule)
+    print(f"\n[Step 6] Starting Two-Phase Schedule (Epochs {start_epoch} to {args.epochs})...")
     print(f"         Phase A (Rigid Warm-Up): Epochs 1 to {args.rigid_warmup_epochs} (Deformation field frozen)")
     print(f"         Phase B (Joint Optimization): Epochs {args.rigid_warmup_epochs + 1} to {args.epochs} (All 6 losses active)\n")
 
-    best_dice = -1.0
-    best_metrics = {}
-
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(start_epoch, args.epochs + 1):
         is_rigid_warmup = (epoch <= args.rigid_warmup_epochs)
 
         # Freeze/Unfreeze SIREN deformation field based on schedule
@@ -446,6 +501,20 @@ def main():
         val_metrics = evaluate(model, val_loader, criterion, device, include_deformation=not is_rigid_warmup)
         current_dice = val_metrics['dice_pct']
 
+        # Always save latest checkpoint after every epoch for seamless resumption
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'best_dice': max(best_dice, current_dice),
+            'best_metrics': best_metrics if current_dice <= best_dice else val_metrics,
+            'val_dice_pct': val_metrics['dice_pct'],
+            'val_cd_mm': val_metrics['cd_mm'],
+            'fold': args.fold,
+            'config': vars(cfg) if hasattr(cfg, '__dict__') else cfg,
+        }, latest_checkpoint_path)
+
         saved_flag = ""
         if current_dice > best_dice:
             best_dice = current_dice
@@ -455,6 +524,7 @@ def main():
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
                 'val_dice_pct': val_metrics['dice_pct'],
                 'val_cd_mm': val_metrics['cd_mm'],
                 'fold': args.fold,

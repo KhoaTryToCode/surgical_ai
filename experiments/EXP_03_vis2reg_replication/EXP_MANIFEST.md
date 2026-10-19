@@ -70,5 +70,7 @@
 
 ## 7. Checkpoint Registry
 - `checkpoints/stage1_rigid_seed.pth`: Stage 1 rigid matching weights (EdgeConv + GeoTransformer + SVD solver).
+- `checkpoints/latest_rigid_checkpoint.pth`: Stage 1 latest state dict, optimizer, scheduler for seamless resumption.
+- `checkpoints/latest_real_checkpoint.pth`: Stage 2 latest state dict, optimizer, scheduler for seamless resumption.
 - `checkpoints/best_real_model.pth`: Stage 2 fine-tuned model checkpoint (highest validation Silhouette Dice).
 

@@ -111,6 +111,14 @@ def parse_args():
         help="DataLoader worker subprocesses",
     )
     parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        nargs="?",
+        const="auto",
+        help="Path to checkpoint to resume from, or pass --resume to auto-resume from latest checkpoint",
+    )
+    parser.add_argument(
         "--smoke_test",
         action="store_true",
         help="Run 1 quick epoch with 2 batches to verify pipeline without waiting",
@@ -273,22 +281,69 @@ def main():
     scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
     criterion = SyntheticPoseLoss(lambda_rot=10.0, lambda_pts=0.5)
 
-    # 6. Checkpoint Directory
+    # 6. Checkpoint Directory & Paths
     save_dir = os.path.join(EXPERIMENT_ROOT, args.save_dir) if not os.path.isabs(args.save_dir) else args.save_dir
     os.makedirs(save_dir, exist_ok=True)
     best_checkpoint_path = os.path.join(save_dir, "stage1_rigid_seed.pth")
+    latest_checkpoint_path = os.path.join(save_dir, "latest_rigid_checkpoint.pth")
 
-    # 7. Initial Pre-Training Evaluation
-    print("\n[Step 4] Running Baseline Pre-Evaluation (Untrained Model)...")
-    init_metrics = evaluate(model, val_loader, criterion, device)
-    print(f"         Baseline -> RRE: {init_metrics['rre_deg']:.2f}° | RTE: {init_metrics['rte_mm']:.2f} mm | CD: {init_metrics['cd_mm']:.2f} mm")
-
-    # 8. Main Training Loop
-    print(f"\n[Step 5] Commencing Stage 1 Training for {args.epochs} Epochs...")
+    start_epoch = 1
     best_composite_score = float('inf')
     best_metrics = {}
+    is_resumed = False
 
-    for epoch in range(1, args.epochs + 1):
+    # Check for resume request
+    resume_target = None
+    if args.resume is not None:
+        if args.resume == "auto":
+            if os.path.exists(latest_checkpoint_path):
+                resume_target = latest_checkpoint_path
+            elif os.path.exists(best_checkpoint_path):
+                resume_target = best_checkpoint_path
+        elif os.path.exists(args.resume):
+            resume_target = args.resume
+        elif os.path.exists(os.path.join(EXPERIMENT_ROOT, args.resume)):
+            resume_target = os.path.join(EXPERIMENT_ROOT, args.resume)
+
+    if resume_target is not None and os.path.exists(resume_target):
+        print(f"\n[Step 4] Resuming Training from: {resume_target}...")
+        try:
+            ckpt = torch.load(resume_target, map_location=device, weights_only=False)
+        except Exception:
+            ckpt = torch.load(resume_target, map_location=device, weights_only=True)
+
+        if isinstance(ckpt, dict) and 'model_state_dict' in ckpt:
+            model.load_state_dict(ckpt['model_state_dict'])
+            if 'optimizer_state_dict' in ckpt:
+                try:
+                    optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+                except Exception:
+                    pass
+            if 'scheduler_state_dict' in ckpt:
+                try:
+                    scheduler.load_state_dict(ckpt['scheduler_state_dict'])
+                except Exception:
+                    pass
+            if 'best_composite_score' in ckpt:
+                best_composite_score = ckpt['best_composite_score']
+            if 'best_metrics' in ckpt:
+                best_metrics = ckpt['best_metrics']
+            start_epoch = ckpt.get('epoch', 0) + 1
+        else:
+            model.load_state_dict(ckpt)
+            start_epoch = 1
+        is_resumed = True
+        print(f"         Resumed successfully! Resuming at Epoch {start_epoch}/{args.epochs}")
+    else:
+        # Initial Pre-Training Evaluation
+        print("\n[Step 4] Running Baseline Pre-Evaluation (Untrained Model)...")
+        init_metrics = evaluate(model, val_loader, criterion, device)
+        print(f"         Baseline -> RRE: {init_metrics['rre_deg']:.2f}° | RTE: {init_metrics['rte_mm']:.2f} mm | CD: {init_metrics['cd_mm']:.2f} mm")
+
+    # Main Training Loop
+    print(f"\n[Step 5] Commencing Stage 1 Training (Epochs {start_epoch} to {args.epochs})...")
+
+    for epoch in range(start_epoch, args.epochs + 1):
         model.train()
         train_loss = 0.0
         train_trans = 0.0
@@ -354,6 +409,21 @@ def main():
         val_metrics = evaluate(model, val_loader, criterion, device)
         composite = val_metrics['rre_deg'] + val_metrics['rte_mm']
 
+        # Always save latest checkpoint after every epoch for seamless resumption
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'best_composite_score': min(best_composite_score, composite),
+            'best_metrics': best_metrics if composite >= best_composite_score else val_metrics,
+            'val_rre_deg': val_metrics['rre_deg'],
+            'val_rte_mm': val_metrics['rte_mm'],
+            'val_cd_mm': val_metrics['cd_mm'],
+            'fold': args.fold,
+            'config': vars(cfg) if hasattr(cfg, '__dict__') else cfg,
+        }, latest_checkpoint_path)
+
         saved_flag = ""
         if composite < best_composite_score:
             best_composite_score = composite
@@ -363,6 +433,7 @@ def main():
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
                 'val_rre_deg': val_metrics['rre_deg'],
                 'val_rte_mm': val_metrics['rte_mm'],
                 'val_cd_mm': val_metrics['cd_mm'],
