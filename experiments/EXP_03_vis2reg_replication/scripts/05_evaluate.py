@@ -90,13 +90,9 @@ def compute_metrics(
     2. Observation-to-Model One-Way Chamfer Distance (mm)
     3. Model-to-Observation Reverse Chamfer Distance (mm)
     """
-    if pred_mask.dim() == 3:
-        pred_mask = pred_mask.squeeze(0)
-    if gt_mask.dim() == 5:
-        gt_mask = gt_mask[0, 0, 0]
-    elif gt_mask.dim() == 4:
-        gt_mask = gt_mask[0, 0]
-    elif gt_mask.dim() == 3:
+    while pred_mask.dim() > 2:
+        pred_mask = pred_mask[0]
+    while gt_mask.dim() > 2:
         gt_mask = gt_mask[0]
 
     # Resize gt_mask if needed

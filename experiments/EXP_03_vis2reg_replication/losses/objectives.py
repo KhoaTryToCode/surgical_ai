@@ -104,12 +104,14 @@ def silhouette_overlap_loss(pred_sil: Tensor, target_mask: Tensor, eps: float = 
     pred_sil: (B, H, W) or (B, 1, H, W) soft probabilities in [0, 1]
     target_mask: (B, H, W) or (B, 1, H, W) binary mask in {0, 1}
     """
-    if pred_sil.dim() == 4:
+    while pred_sil.dim() > 3:
         pred_sil = pred_sil.squeeze(1)
-    if target_mask.dim() == 5:
-        target_mask = target_mask[:, 0, 0]
-    elif target_mask.dim() == 4:
+    while target_mask.dim() > 3:
         target_mask = target_mask.squeeze(1)
+    if pred_sil.dim() == 2:
+        pred_sil = pred_sil.unsqueeze(0)
+    if target_mask.dim() == 2:
+        target_mask = target_mask.unsqueeze(0)
 
     # Resize target_mask if shapes differ
     if pred_sil.shape[-2:] != target_mask.shape[-2:]:
@@ -148,12 +150,11 @@ def extract_visible_subset(
     Returns: visible points (B, K_vis, 3)
     """
     B, N, _ = warped_points.shape
-    if target_mask.dim() == 5:
-        mask_2d = target_mask[:, 0, 0]  # (B, H, W)
-    elif target_mask.dim() == 4:
-        mask_2d = target_mask[:, 0]
-    else:
-        mask_2d = target_mask
+    while target_mask.dim() > 3:
+        target_mask = target_mask.squeeze(1)
+    if target_mask.dim() == 2:
+        target_mask = target_mask.unsqueeze(0)
+    mask_2d = target_mask
 
     H, W = mask_2d.shape[-2:]
     visible_list = []

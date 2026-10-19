@@ -774,6 +774,12 @@ class Vis2Reg(nn.Module):
         masks = batch.get('intra_masks')
         if masks is None:
             return None, None
+        while masks.dim() > 5:
+            masks = masks.squeeze(1)
+        if masks.dim() == 4:
+            masks = masks.unsqueeze(1)
+        elif masks.dim() == 3:
+            masks = masks.unsqueeze(1).unsqueeze(1)
         B, F, _, H, W = masks.shape
         points = warped_points.unsqueeze(1).expand(-1, F, -1, -1).reshape(B * F, -1, 3)
         if intrinsics.dim() == 3:

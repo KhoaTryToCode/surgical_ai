@@ -121,7 +121,13 @@ def collate_p2i_lreg(batch_or_items) -> Dict[str, Any]:
         if isinstance(vals[0], torch.Tensor):
             squeezed = []
             for v in vals:
-                if key != 'intra_masks' and v.dim() > 1 and v.shape[0] == 1:
+                if key == 'intra_masks':
+                    while v.dim() > 4:
+                        v = v.squeeze(0)
+                    while v.dim() < 4:
+                        v = v.unsqueeze(0)
+                    squeezed.append(v)
+                elif v.dim() > 1 and v.shape[0] == 1:
                     squeezed.append(v.squeeze(0))
                 else:
                     squeezed.append(v)
@@ -386,7 +392,7 @@ class P2ILRegRealDataset(Dataset):
         else:
             mask_np = np.zeros((512, 512), dtype=np.float32)
 
-        mask_tensor = torch.from_numpy(mask_np).unsqueeze(0).unsqueeze(0).unsqueeze(0)  # (1, 1, 1, H, W)
+        mask_tensor = torch.from_numpy(mask_np).unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
 
         return {
             'pre_points': torch.from_numpy(pre_pts).unsqueeze(0),
