@@ -88,7 +88,7 @@ python scripts/03_pretrain_syn.py \
 ## 6. Phase 5: Stage 2 Real Visibility-Aware Fine-Tuning
 
 ```bash
-# 60-epoch real fine-tuning with 20-epoch rigid warm-up (~12-15 min on Tesla T4)
+# Option A: Clean 60-epoch real fine-tuning with 20-epoch rigid warm-up (~12-15 min on Tesla T4)
 python scripts/04_train_real.py \
     --data_root /kaggle/input/datasets/junezhou001/p2i-lreg/Liver_regis \
     --fold 0 \
@@ -97,7 +97,17 @@ python scripts/04_train_real.py \
     --rigid_warmup_epochs 20 \
     --max_points 6000
 
-# Resuming Training (Auto-resumes from checkpoints/latest_real_checkpoint.pth)
+# Option B: Fast Resume with Deformation Reset (Preserves Epoch 20 rigid pose, resets SIREN field, starts Epoch 21)
+python scripts/04_train_real.py \
+    --data_root /kaggle/input/datasets/junezhou001/p2i-lreg/Liver_regis \
+    --fold 0 \
+    --resume auto \
+    --reset_deformation \
+    --epochs 60 \
+    --rigid_warmup_epochs 20 \
+    --max_points 6000
+
+# Option C: Standard Resume (Auto-resumes from checkpoints/latest_real_checkpoint.pth)
 python scripts/04_train_real.py \
     --data_root /kaggle/input/datasets/junezhou001/p2i-lreg/Liver_regis \
     --fold 0 \

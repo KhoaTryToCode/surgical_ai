@@ -140,10 +140,14 @@ def extract_visible_subset(
     intrinsics: Tensor,
     target_mask: Tensor,
     max_visible: int = 5000,
+    depth_margin_mm: float = 20.0,
+    grid_size: int = 64,
 ) -> Tensor:
     """
-    Constructs the mask-consistent visible point subset V_v^M.
+    Constructs the mask-consistent visible point subset V_v^M (MICCAI 2026 §2.3).
     Projects 3D camera-frame points into image coordinates and filters by target_mask.
+    Applies front-surface depth buffering to eliminate occluded posterior (back-wall)
+    vertices that project into the same pixel coords, preventing false Chamfer penalties.
     warped_points: (B, N, 3)
     intrinsics: (B, 3, 3)
     target_mask: (B, 1, 1, H, W) or (B, H, W)
@@ -164,27 +168,48 @@ def extract_visible_subset(
         K = intrinsics[b]       # (3, 3)
         m = mask_2d[b]          # (H, W)
 
-        # Perspective projection: u = fx * (x/z) + cx, v = fy * (y/z) + cy
-        z = pts[:, 2].clamp(min=1e-3)
-        u = (K[0, 0] * (pts[:, 0] / z) + K[0, 2]).round().long()
-        v = (K[1, 1] * (pts[:, 1] / z) + K[1, 2]).round().long()
+        z = pts[:, 2]
+        valid_z = z > 1e-2
+        u = (K[0, 0] * (pts[:, 0] / z.clamp(min=1e-3)) + K[0, 2]).round().long()
+        v = (K[1, 1] * (pts[:, 1] / z.clamp(min=1e-3)) + K[1, 2]).round().long()
 
         # In-bounds mask
-        in_bounds = (u >= 0) & (u < W) & (v >= 0) & (v < H) & (pts[:, 2] > 0)
+        in_bounds = (u >= 0) & (u < W) & (v >= 0) & (v < H) & valid_z
         u_valid = u[in_bounds]
         v_valid = v[in_bounds]
         pts_valid = pts[in_bounds]
+        z_valid = z[in_bounds]
 
         # Mask gate: M(u, v) == 1
         mask_hits = m[v_valid, u_valid] > 0.5
-        vis_pts = pts_valid[mask_hits]
+        u_hit = u_valid[mask_hits]
+        v_hit = v_valid[mask_hits]
+        pts_hit = pts_valid[mask_hits]
+        z_hit = z_valid[mask_hits]
 
-        if len(vis_pts) == 0:
+        if len(pts_hit) == 0:
             # Fallback if no points project inside mask
             vis_pts = pts[:max_visible]
-        elif len(vis_pts) > max_visible:
-            choice = torch.randperm(len(vis_pts), device=pts.device)[:max_visible]
-            vis_pts = vis_pts[choice]
+        else:
+            # Front-surface depth buffer: keep points within depth_margin_mm of minimum depth in bin
+            bin_u = (u_hit.float() * (grid_size / W)).long().clamp(0, grid_size - 1)
+            bin_v = (v_hit.float() * (grid_size / H)).long().clamp(0, grid_size - 1)
+            bin_idx = bin_v * grid_size + bin_u
+
+            num_bins = grid_size * grid_size
+            min_depth_grid = torch.full((num_bins,), float('inf'), device=pts.device, dtype=pts.dtype)
+            min_depth_grid.scatter_reduce_(0, bin_idx, z_hit, reduce='amin', include_self=False)
+
+            z_min_per_pt = min_depth_grid[bin_idx]
+            front_mask = z_hit <= (z_min_per_pt + depth_margin_mm)
+            vis_pts = pts_hit[front_mask]
+
+            if len(vis_pts) == 0:
+                vis_pts = pts_hit
+
+            if len(vis_pts) > max_visible:
+                choice = torch.randperm(len(vis_pts), device=pts.device)[:max_visible]
+                vis_pts = vis_pts[choice]
 
         visible_list.append(vis_pts)
 
@@ -250,13 +275,13 @@ class Vis2RegLoss(nn.Module):
         device = warped_pts.device
         zero = torch.tensor(0.0, device=device)
 
-        # 1. Observation-to-Model One-Way Chamfer (L_3D)
-        losses['3d'] = one_way_chamfer(target_pts, warped_pts, squared=True)
+        # 1. Observation-to-Model One-Way Chamfer (L_3D in mm)
+        losses['3d'] = one_way_chamfer(target_pts, warped_pts, squared=False)
 
-        # 2. Mask-Gated Visible-Domain Symmetric Chamfer (L_vis)
+        # 2. Mask-Gated Visible-Domain Symmetric Chamfer (L_vis in mm)
         if mask is not None:
             vis_subset = extract_visible_subset(warped_pts, K, mask)
-            losses['vis'] = symmetric_chamfer(vis_subset, target_pts, squared=True)
+            losses['vis'] = symmetric_chamfer(vis_subset, target_pts, squared=False)
         else:
             losses['vis'] = zero
 

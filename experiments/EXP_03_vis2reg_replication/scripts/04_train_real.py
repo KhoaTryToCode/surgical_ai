@@ -86,7 +86,18 @@ def parse_args():
         "--lr",
         type=float,
         default=3e-4,
-        help="Learning rate for AdamW (default: 3e-4)",
+        help="Learning rate for rigid matching parameters (default: 3e-4)",
+    )
+    parser.add_argument(
+        "--lr_def",
+        type=float,
+        default=1e-4,
+        help="Learning rate for SIREN deformation field during Phase B (default: 1e-4)",
+    )
+    parser.add_argument(
+        "--reset_deformation",
+        action="store_true",
+        help="Reset deformation field to zero-displacement identity and start Phase B cleanly from Epoch 21",
     )
     parser.add_argument(
         "--weight_decay",
@@ -335,7 +346,19 @@ def main():
     )
 
     # 6. Optimizer & Scheduler Setup
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    rigid_params = [
+        p for n, p in model.named_parameters()
+        if not n.startswith('deformation_field') and p.requires_grad
+    ]
+    def_params = [
+        p for n, p in model.named_parameters()
+        if n.startswith('deformation_field')
+    ]
+    param_groups = [
+        {'params': rigid_params, 'lr': args.lr, 'name': 'rigid'},
+        {'params': def_params, 'lr': args.lr_def, 'name': 'deformation'},
+    ]
+    optimizer = torch.optim.AdamW(param_groups, weight_decay=args.weight_decay)
     scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
 
     # 7. Checkpoint Directory & Paths
@@ -370,13 +393,13 @@ def main():
             ckpt = torch.load(resume_target, map_location=device, weights_only=True)
 
         if isinstance(ckpt, dict) and 'model_state_dict' in ckpt:
-            model.load_state_dict(ckpt['model_state_dict'])
-            if 'optimizer_state_dict' in ckpt:
+            model.load_state_dict(ckpt['model_state_dict'], strict=False)
+            if not args.reset_deformation and 'optimizer_state_dict' in ckpt:
                 try:
                     optimizer.load_state_dict(ckpt['optimizer_state_dict'])
                 except Exception:
                     pass
-            if 'scheduler_state_dict' in ckpt:
+            if not args.reset_deformation and 'scheduler_state_dict' in ckpt:
                 try:
                     scheduler.load_state_dict(ckpt['scheduler_state_dict'])
                 except Exception:
@@ -387,9 +410,19 @@ def main():
                 best_dice = ckpt['val_dice_pct']
             if 'best_metrics' in ckpt:
                 best_metrics = ckpt['best_metrics']
-            start_epoch = ckpt.get('epoch', 0) + 1
+
+            if args.reset_deformation:
+                print("         [Reset Deformation] Reinitializing deformation field to identity and resuming at Epoch 21...")
+                if hasattr(model, 'deformation_field') and model.deformation_field is not None:
+                    for layer in model.deformation_field.mlp:
+                        layer.init_weights()
+                    torch.nn.init.zeros_(model.deformation_field.output_layer.weight)
+                    torch.nn.init.zeros_(model.deformation_field.output_layer.bias)
+                start_epoch = args.rigid_warmup_epochs + 1
+            else:
+                start_epoch = ckpt.get('epoch', 0) + 1
         else:
-            model.load_state_dict(ckpt)
+            model.load_state_dict(ckpt, strict=False)
             start_epoch = 1
         is_resumed = True
         print(f"         Resumed successfully! Resuming at Epoch {start_epoch}/{args.epochs} (Best Val Dice: {best_dice:.2f}%)")

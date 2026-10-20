@@ -65,6 +65,18 @@
    - Added finite-gradient validation before clipping; any non-finite step is discarded with optimizer.zero_grad().
 3. **Point Resampling Without Zero-Padding Spikes:**
    - Updated resample_points to sample with replacement when n_pts < max_points, eliminating degenerate (0, 0, 0) coordinate spikes that cause covariance collapse.
+4. **SIREN Deformation Field Gradient Explosion (30^5 Multiplier):**
+   - Standard SIREN with omega_0 = 30.0 across all layers produces (d/dx sin(30x))^5 = 30^5 = 2.43 * 10^7 gradient expansion, resulting in gradient norms exceeding 8.7 * 10^8 on mlp.0.
+   - Fixed by setting hidden layer omega_0 = 1.0 with proper uniform bounds bound = sqrt(6 / d_in) / omega_0, normalizing positional coordinates by nominal anatomical scale (scale = 100 mm), and zero-initializing the output displacement layer (weight = 0, bias = 0) so initial deformation at Epoch 21 is strictly identity Delta(x) = 0.
+   - Enforced physical displacement bounding via tanh(output) * 30.0 mm.
+5. **Visible Domain False Cross-Volume Penalty (L_vis Occlusion Filtering):**
+   - In 2D silhouette projection, both anterior (front) and posterior (back) liver mesh vertices pass the 2D mask gate M(u, v) == 1.
+   - Without depth buffering, back-wall vertices (50 - 100 mm away from intraoperative camera view) were penalized against front-surface target points with squared distance (60 mm)^2 = 3600, yielding L_vis > 4,800 that violently collapsed the liver mesh.
+   - Fixed by implementing a 64x64 grid Z-buffer (amin depth reduction) keeping only front-surface vertices within depth_margin_mm = 20.0 mm of minimum depth.
+   - Converted L_3D and L_vis from squared distance (mm^2) to linear Euclidean distance (mm, squared=False), restoring balanced loss magnitudes (L_3D ~ 12 mm, L_vis ~ 25 mm, Total ~ 38) commensurate with silhouette and regularizer losses.
+6. **Dual Learning Rate Parameter Groups for Phase B:**
+   - Added separate parameter groups in AdamW: rigid matching parameters at lr = 3e-4 and SIREN deformation parameters at lr_def = 1e-4.
+   - Provided --reset_deformation CLI flag allowing users to load pre-trained Epoch 20 rigid checkpoints, reset the deformation field to 0, and smoothly execute Phase B joint training.
 
 ---
 
