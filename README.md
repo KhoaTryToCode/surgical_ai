@@ -1,10 +1,9 @@
-# 🏥 Surgical AI: Diagnosing Geometric Disparity and Temporal Modeling in Laparoscopic Liver Landmark Segmentation
+# Surgical AI: Diagnosing Geometric Disparity and Temporal Modeling in Laparoscopic Liver Landmark Segmentation
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![PyTorch 2.0+](https://img.shields.io/badge/PyTorch-2.0%2B-ee4c2c.svg)](https://pytorch.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Benchmark: L3D](https://img.shields.io/badge/Benchmark-L3D%20SOTA-orange.svg)](docs/DATASET_ANALYSIS.md)
-[![Status: Finished Research](https://img.shields.io/badge/Status-Completed%20Research-brightgreen.svg)](#benchmark-results)
 
 > **Official repository for the research paper:**  
 > *"Diagnosing Geometric Disparity and Temporal Modeling in Laparoscopic Liver Landmark Segmentation"*  
@@ -12,7 +11,7 @@
 
 ---
 
-## 📌 Executive Summary
+## Overview
 
 Laparoscopic liver anatomical landmark segmentation is an essential prerequisite for non-rigid 2D–3D registration during augmented reality (AR) hepatectomy. Accurate intraoperative delineation of continuous curvilinear landmarks—namely the **anterior liver ridge**, **silhouette contour**, and **falciform ligament**—enables anatomical guidance under severe tissue deformation and surgical occlusion.
 
@@ -23,11 +22,11 @@ This research repository conducts a systematic investigation of state-of-the-art
 
 ---
 
-## 🔬 Qualitative Highlights
+## Qualitative Results
 
 ### Surgical Pose Inversion & Mechanical Traction Disparity
 ![Audited Surgical Pose Inversion](paper/figures/fig1_train_val_flipped.png)
-*Figure 1: Comparison of mechanical traction states between training and validation cohorts. Grasper elevation hoists the anterior liver ridge (Green) into the upper canvas, yet validation splits possess a 1.95× higher concentration of these non-rigid poses (15.6% vs. 8.0%).*
+*Figure 1: Comparison of mechanical traction states between training and validation cohorts. Grasper elevation hoists the anterior liver ridge (Green) into the upper canvas, yet validation splits possess a 1.95x higher concentration of these non-rigid poses (15.6% vs. 8.0%).*
 
 ### Test Benchmark Boundary Tracking
 ![Test Benchmark Qualitative Comparison](paper/figures/fig6_exp16_test_eval.png)
@@ -35,13 +34,13 @@ This research repository conducts a systematic investigation of state-of-the-art
 
 ---
 
-## 🏆 Benchmark Results
+## Benchmark Evaluation
 
 ### Official L3D Frozen Test Benchmark (109 Frames, 4 Patients)
 
-Evaluated under strict clinical mutual exclusivity on the native $1024 \times 1024$ canvas:
+Evaluated under strict clinical mutual exclusivity on the native 1024x1024 canvas:
 
-| Method / Architecture | Micro Dice (%) $\uparrow$ | Macro Dice (%) $\uparrow$ | ASSD (px) $\downarrow$ | Anterior Ridge (%) | Silhouette (%) | Falciform Ligament (%) |
+| Method / Architecture | Micro Dice (%) | Macro Dice (%) | ASSD (px) | Anterior Ridge (%) | Silhouette (%) | Falciform Ligament (%) |
 |:---|:---:|:---:|:---:|:---:|:---:|:---:|
 | **TopoNet** (MICCAI 2025) | 65.19 | 59.79 | 28.07 | 64.30 | 72.10 | 42.97 |
 | **BCRNet** (MICCAI 2025) | --- | 69.57 | 43.55 | 68.12 | 74.30 | 66.29 |
@@ -53,7 +52,7 @@ Evaluated under strict clinical mutual exclusivity on the native $1024 \times 10
 
 ### Per-Patient Breakdown on Official Test Benchmark
 
-| Test Patient | Frames | Operative Condition | Macro Dice (%) | ASSD (px) $\downarrow$ |
+| Test Patient | Frames | Operative Condition | Macro Dice (%) | ASSD (px) |
 |:---|:---:|:---|:---:|:---:|
 | **Patient 41** | 84 | Canonical diaphragmatic view with grasper | **76.70%** | **11.60 px** |
 | **Patient 21** | 7 | Canonical orientation, clear visibility | **73.68%** | **23.57 px** |
@@ -62,7 +61,7 @@ Evaluated under strict clinical mutual exclusivity on the native $1024 \times 10
 
 ---
 
-## 📁 Repository Structure
+## Repository Structure
 
 ```text
 surgical-ai/
@@ -119,7 +118,7 @@ surgical-ai/
 
 ---
 
-## 🚀 Quickstart & Reproduction
+## Quickstart & Reproduction
 
 ### 1. Environment Setup
 
@@ -162,17 +161,17 @@ python aggregate.py
 
 ---
 
-## 📖 Key Research Documents
+## Documentation & Research Findings
 
-* 📑 **Full Paper Preprint:** [`paper/report.pdf`](paper/report.pdf)
-* 🔬 **Dataset Geometric Disparity Analysis:** [`docs/DATASET_ANALYSIS.md`](docs/DATASET_ANALYSIS.md)
-* 📋 **Experimentation Protocol & Pre-Flight Standards:** [`docs/EXPERIMENT_PROTOCOL.md`](docs/EXPERIMENT_PROTOCOL.md)
-* 📈 **16-Experiment Progression Narrative:** [`experiments/README.md`](experiments/README.md)
-* 📜 **Project Timeline & Milestones:** [`docs/CHANGELOG.md`](docs/CHANGELOG.md)
+* **Full Paper Preprint:** [`paper/report.pdf`](paper/report.pdf)
+* **Dataset Geometric Disparity Analysis:** [`docs/DATASET_ANALYSIS.md`](docs/DATASET_ANALYSIS.md)
+* **Experimentation Protocol & Pre-Flight Standards:** [`docs/EXPERIMENT_PROTOCOL.md`](docs/EXPERIMENT_PROTOCOL.md)
+* **16-Experiment Progression Narrative:** [`experiments/README.md`](experiments/README.md)
+* **Project Timeline & Milestones:** [`docs/CHANGELOG.md`](docs/CHANGELOG.md)
 
 ---
 
-## 📝 Citation
+## Citation
 
 If you find this research, dataset insights, or code useful in your academic work, please cite:
 
@@ -187,6 +186,6 @@ If you find this research, dataset insights, or code useful in your academic wor
 
 ---
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.

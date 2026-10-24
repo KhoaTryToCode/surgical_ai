@@ -35,32 +35,32 @@ Through systematic geometric auditing of anatomical landmark coordinates and mec
 
 * **Training Set (Canonical Dominated):**
   * 92.0% of training frames (847 frames) exhibit standard diaphragmatic views where the anterior liver ridge rests naturally in the inferior canvas.
-  * Extreme surgical elevation—where mechanical grasper traction hoists the anterior liver ridge into the upper margin ($Y_{\text{ridge}} < 0.015$)—accounts for only **74 frames (8.0%)**.
+  * Extreme surgical elevation—where mechanical grasper traction hoists the anterior liver ridge into the upper margin (`Y_ridge < 0.015`)—accounts for only **74 frames (8.0%)**.
 
 * **Validation Set (Inversion Dominated):**
-  * In contrast, the validation cohort contains **19 inverted frames (15.6%)**—a **1.95× higher inversion rate** than the training set.
+  * In contrast, the validation cohort contains **19 inverted frames (15.6%)**—a **1.95x higher inversion rate** than the training set.
   * **Patient 40** accounts for 15 of these extreme traction frames, exposing models to soft-tissue configurations virtually absent from training distributions.
 
-```
+```text
 Training Split (8.0% Inverted)           Validation Split (15.6% Inverted)
-┌─────────────────────────────────┐      ┌─────────────────────────────────┐
-│ Diaphragm (Top)                 │      │ Diaphragm (Top)                 │
-│                                 │      │ Anterior Ridge (Hoisted by Grasp│
-│ Anterior Ridge (Inferior Canvas)│      │                                 │
-└─────────────────────────────────┘      └─────────────────────────────────┘
++---------------------------------+      +---------------------------------+
+| Diaphragm (Top)                 |      | Diaphragm (Top)                 |
+|                                 |      | Anterior Ridge (Hoisted Graspers|
+| Anterior Ridge (Inferior Canvas)|      |                                 |
++---------------------------------+      +---------------------------------+
 ```
 
 ---
 
-## 3. Catastrophic Spatial Prior Inertia in Static Baselines
+## 3. Spatial Prior Inertia in Static Baselines
 
 When evaluated on Patient 40, standard query-based models (such as **Mask2Former Swin-Tiny**) suffer from severe **spatial prior inertia**:
 
 * The network assumes anatomical landmarks follow canonical spatial positions learned from the 92% canonical training frames.
-* Under severe traction, the model hallucinates phantom liver contours along the bottom edge, completely missing the hoisted organ boundary.
+* Under severe traction, the model predicts phantom liver contours along the bottom edge, completely missing the hoisted organ boundary.
 * On Frame 008940 of Patient 40:
-  * Baseline Macro Dice collapses to **7.56%**
-  * Average Symmetric Surface Distance (ASSD) surges to **211.77 px**
+  * Baseline Macro Dice drops to **7.56%**
+  * Average Symmetric Surface Distance (ASSD) reaches **211.77 px**
 
 ---
 
@@ -83,7 +83,7 @@ While pose re-stratification exposed the network to inverted poses during traini
 
 ## 5. Frozen Test Set Breakdown: Patient 41 vs. Patient 31
 
-The official 109-frame test set further confirms that geometric deformation is the primary determinant of model accuracy:
+The official 109-frame test set confirms that geometric deformation is the primary determinant of model accuracy:
 
 | Test Patient | Frames | Surgical Character | Macro Dice | ASSD (px) |
 |:---|:---:|:---|:---:|:---:|
@@ -92,4 +92,4 @@ The official 109-frame test set further confirms that geometric deformation is t
 | **Patient 51** | 4 | Restricted operative field of view | **62.88%** | **18.79 px** |
 | **Patient 31** | 14 | Severe mechanical elevation & traction | **44.97%** | **32.89 px** |
 
-The performance on Patient 41 demonstrates that the architecture has mastered canonical laparoscopic landmark tracking (11.6 px boundary accuracy). The degradation on Patient 31 confirms that residual errors stem from out-of-distribution non-rigid tissue deformation rather than network capacity.
+The performance on Patient 41 demonstrates that the architecture handles canonical laparoscopic landmark tracking with high precision (11.60 px boundary accuracy). The degradation on Patient 31 confirms that residual errors stem from out-of-distribution non-rigid tissue deformation rather than network capacity.

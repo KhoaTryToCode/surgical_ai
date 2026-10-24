@@ -44,7 +44,7 @@ def build_runner_notebook():
         })
 
     # Cell 0: Header Markdown
-    add_cell("markdown", """# 🚀 Surgical AI: Universal Video Landmark Benchmark Runner
+    add_cell("markdown", """# Surgical AI: Universal Video Landmark Benchmark Runner
 ### (MinVIS [EXP 17] • Cutie [EXP 18] • SAM 2 [EXP 19])
 
 This lightweight runner executes temporal experiments directly from the git repository on Kaggle GPUs.
@@ -77,15 +77,15 @@ EXP_DIR = os.path.join(REPO_DIR, "experiments/temporal")
 # 4. Ensure transformers is available (pre-installed in Kaggle)
 try:
     import transformers
-    print(f"✅ Transformers available: {transformers.__version__}")
+    print(f"[INFO] Transformers available: {transformers.__version__}")
 except ImportError:
     !pip install -q transformers
 """)
 
     # Cell 2: Configurable Parameters & Master Execution
     add_cell("code", """# ==============================================================================
-# 🎮 CONFIGURABLE EXPERIMENT RUNNER PARAMETERS
-# Modify any of these parameters to run your desired experiment and fold to your liking!
+# CONFIGURABLE EXPERIMENT RUNNER PARAMETERS
+# Modify any of these parameters to run your desired experiment and fold
 # ==============================================================================
 MODEL = "minvis"          # Architecture to run: 'minvis', 'cutie', 'sam2'
 FOLD_IDX = 0              # 5-fold cross-validation index: 0, 1, 2, 3, 4
@@ -98,7 +98,7 @@ DATA_ROOT = "data/L3D"    # Dataset root (auto-resolves on Kaggle /kaggle/input)
 DEVICE = "cuda"           # Compute device: 'cuda', 'cpu'
 # ==============================================================================
 
-print(f"🚀 Launching Benchmark: Model={MODEL.upper()} | Fold={FOLD_IDX} | Epochs={EPOCHS}")
+print(f"[RUNNER] Launching Benchmark: Model={MODEL.upper()} | Fold={FOLD_IDX} | Epochs={EPOCHS}")
 
 # Execute 5-Fold Training, Evaluation & Leaderboard Aggregation
 !python train.py \\
@@ -138,11 +138,11 @@ from IPython.display import Image, display
 val_vis = sorted(glob.glob(f"visualizations/{MODEL}/fold{FOLD_IDX}_val/*.png"))
 test_vis = sorted(glob.glob(f"visualizations/{MODEL}/fold{FOLD_IDX}_test/*.png"))
 
-print(f"📸 Validation Visualizations ({len(val_vis)} saved):")
+print(f"[INFO] Validation Visualizations ({len(val_vis)} saved):")
 for p in val_vis[:3]:
     display(Image(filename=p))
 
-print(f"📸 Frozen Test Visualizations ({len(test_vis)} saved):")
+print(f"[INFO] Frozen Test Visualizations ({len(test_vis)} saved):")
 for p in test_vis[:3]:
     display(Image(filename=p))
 """)

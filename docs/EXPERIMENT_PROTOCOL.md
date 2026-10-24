@@ -19,34 +19,34 @@ Every experiment conducted in this repository adheres to a strict scientific con
 
 Before launching any model training or evaluation run, the following specification is verified:
 
-```
-┌────────────────────────────────────────────────────────────────────────────┐
-│                       PRE-FLIGHT RUN SPECIFICATION                         │
-│                                                                            │
-│  1. INPUT SPECIFICATION:                                                   │
-│     - Modalities: Laparoscopic RGB (3-ch)                                  │
-│     - Resolution: 1024x1024 (native canvas)                                │
-│     - Split Definition: Canonical L3D (921 Train / 122 Val / 109 Test)     │
-│       or 5-Fold Patient-Disjoint Cross-Validation (1,043 pool frames)      │
-│     - Optimization: AdamW, Cosine Annealing, explicit gradient accumulation│
-│                                                                            │
-│  2. OUTPUT SPECIFICATION:                                                  │
-│     - Format: 3-class mutually exclusive landmark segmentation mask:       │
-│       * Class 1: Anterior Liver Ridge                                      │
-│       * Class 2: Liver Silhouette Contour                                  │
-│       * Class 3: Falciform Ligament                                        │
-│     - Target Canvas Stroke Width: 35 px (matching clinical standard)       │
-│                                                                            │
-│  3. METRIC DEFINITIONS:                                                    │
-│     - Macro Dice: Mean of per-class Dice scores across valid landmarks     │
-│     - Micro Dice: Global voxel-level intersection over union sum           │
-│     - ASSD (Average Symmetric Surface Distance): Boundary error in pixels  │
-│     - Per-Patient Breakdown: Separate reporting for challenging patients   │
-│                                                                            │
-│  4. SUCCESS THRESHOLDS:                                                    │
-│     - Superiority over static baseline on extreme traction frames          │
-│     - Convergence verification via tracking loss curves                    │
-└────────────────────────────────────────────────────────────────────────────┘
+```text
++----------------------------------------------------------------------------+
+|                       PRE-FLIGHT RUN SPECIFICATION                         |
+|                                                                            |
+|  1. INPUT SPECIFICATION:                                                   |
+|     - Modalities: Laparoscopic RGB (3-channel)                             |
+|     - Resolution: 1024x1024 (native canvas)                                |
+|     - Split Definition: Canonical L3D (921 Train / 122 Val / 109 Test)     |
+|       or 5-Fold Patient-Disjoint Cross-Validation (1,043 pool frames)      |
+|     - Optimization: AdamW, Cosine Annealing, explicit gradient accumulation|
+|                                                                            |
+|  2. OUTPUT SPECIFICATION:                                                  |
+|     - Format: 3-class mutually exclusive landmark segmentation mask:       |
+|       * Class 1: Anterior Liver Ridge                                      |
+|       * Class 2: Liver Silhouette Contour                                  |
+|       * Class 3: Falciform Ligament                                        |
+|     - Target Canvas Stroke Width: 35 px (matching clinical standard)       |
+|                                                                            |
+|  3. METRIC DEFINITIONS:                                                    |
+|     - Macro Dice: Mean of per-class Dice scores across valid landmarks     |
+|     - Micro Dice: Global voxel-level intersection over union sum           |
+|     - ASSD (Average Symmetric Surface Distance): Boundary error in pixels  |
+|     - Per-Patient Breakdown: Separate reporting for challenging patients   |
+|                                                                            |
+|  4. SUCCESS THRESHOLDS:                                                    |
+|     - Superiority over static baseline on extreme traction frames          |
+|     - Convergence verification via tracking loss curves                    |
++----------------------------------------------------------------------------+
 ```
 
 ---
@@ -55,17 +55,21 @@ Before launching any model training or evaluation run, the following specificati
 
 ### Metric Computation Standards
 
-All metrics are evaluated in the native image canvas space ($1024 \times 1024$) with class mutual exclusivity enforced via argmax over prediction logits:
+All metrics are evaluated in the native image canvas space (1024x1024) with class mutual exclusivity enforced via argmax over prediction logits:
 
 1. **Dice Similarity Coefficient (DSC):**
-   $$\text{DSC}_c = \frac{2 |P_c \cap G_c|}{|P_c| + |G_c| + \epsilon}$$
-   where $P_c$ is the predicted binary mask for class $c$, $G_c$ is ground truth, and $\epsilon = 10^{-6}$.
-   - **Macro Dice:** Unweighted mean over present classes: $\frac{1}{C}\sum_{c=1}^C \text{DSC}_c$
+   ```text
+   DSC_c = (2 * |P_c ∩ G_c|) / (|P_c| + |G_c| + ε)
+   ```
+   where `P_c` is the predicted binary mask for class `c`, `G_c` is ground truth, and `ε = 1e-6`.
+   - **Macro Dice:** Unweighted mean over present classes: `(1 / C) * sum_{c=1}^C DSC_c`
    - **Micro Dice:** Aggregated pixel-wise true positive ratio across all classes.
 
 2. **Average Symmetric Surface Distance (ASSD):**
-   Given boundary point sets $S(P_c)$ and $S(G_c)$:
-   $$\text{ASSD}_c = \frac{1}{|S(P_c)| + |S(G_c)|} \left( \sum_{x \in S(P_c)} \min_{y \in S(G_c)} \|x - y\|_2 + \sum_{y \in S(G_c)} \min_{x \in S(P_c)} \|y - x\|_2 \right)$$
+   Given boundary point sets `S(P_c)` and `S(G_c)`:
+   ```text
+   ASSD_c = (1 / (|S(P_c)| + |S(G_c)|)) * [ sum_{x ∈ S(P_c)} min_{y ∈ S(G_c)} ||x - y||_2 + sum_{y ∈ S(G_c)} min_{x ∈ S(P_c)} ||y - x||_2 ]
+   ```
    Reported in canvas pixels.
 
 3. **Per-Class Tracking:**

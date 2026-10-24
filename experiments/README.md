@@ -4,7 +4,7 @@ This directory organizes all experimental models, training pipelines, ablation s
 
 ---
 
-## 📁 Directory Structure
+## Directory Structure
 
 ```text
 experiments/
@@ -37,13 +37,13 @@ experiments/
 
 ---
 
-## 🔬 Progression & Master Results
+## Progression & Master Results
 
 ### 1. Official L3D Frozen Test Benchmark (109 Frames)
 
-All models are evaluated on the exact 109 frozen test frames under native $1024 \times 1024$ resolution with class mutual exclusivity:
+All models are evaluated on the exact 109 frozen test frames under native 1024x1024 resolution with class mutual exclusivity:
 
-| Model | Architecture / Method | Macro Dice (%) $\uparrow$ | Micro Dice (%) $\uparrow$ | ASSD (px) $\downarrow$ | Ridge (%) | Silhouette (%) | Ligament (%) |
+| Model | Architecture / Method | Macro Dice (%) | Micro Dice (%) | ASSD (px) | Ridge (%) | Silhouette (%) | Ligament (%) |
 |:---|:---|:---:|:---:|:---:|:---:|:---:|:---:|
 | **TopoNet** (MICCAI 2025) | ResNet-50 + BTF + clDice + Betti | 59.79 | 65.19 | 28.07 | 64.30 | 72.10 | 42.97 |
 | **BCRNet** (MICCAI 2025) | Bézier Curve Representation | 69.57 | --- | 43.55 | 68.12 | 74.30 | 66.29 |
@@ -66,9 +66,9 @@ All models are evaluated on the exact 109 frozen test frames under native $1024 
 
 ---
 
-## 💡 Key Architectural Insights
+## Architectural Insights & Key Findings
 
-1. **Topological Loss vs. Query Attention**: TopoNet enforces continuity through persistent homology ($\mathcal{L}_{\text{per}}$) and skeleton loss ($\mathcal{L}_{\text{cl}}$), which requires non-parallel CPU computations. Mask2Former achieves superior spatial awareness and faster inference (10.6 FPS vs. 11.6 FPS) through masked cross-attention.
+1. **Topological Loss vs. Query Attention**: TopoNet enforces continuity through persistent homology (`L_per`) and skeleton loss (`L_cl`), which requires non-parallel CPU computations. Mask2Former achieves superior spatial awareness and faster inference (10.6 FPS vs. 11.6 FPS) through masked cross-attention.
 2. **The Limit of Static Queries**: Both CNN and transformer static models retain spatial prior inertia. When mechanical graspers lift the anterior ridge into the superior canvas, static models hallucinate boundaries at the bottom.
-3. **Biological Junction Anchoring**: Injecting 4 anatomical junction coordinates ($J_{\text{top}}, J_{\text{bottom}}, J_{\text{lat\_r}}, J_{\text{lat\_l}}$) as query steering signals provides substantial boundary distance reductions (ASSD dropped from 28.43 px to 22.64 px).
+3. **Biological Junction Anchoring**: Injecting 4 anatomical junction coordinates (`J_top`, `J_bottom`, `J_lat_r`, `J_lat_l`) as query steering signals provides substantial boundary distance reductions (ASSD dropped from 28.43 px to 22.64 px).
 4. **Temporal Context as Spatial Anchor**: Temporal prototypes condition the current prediction on observed preceding trajectories, smoothing landmark tracking and establishing a new state of the art when unified with pose stratification.

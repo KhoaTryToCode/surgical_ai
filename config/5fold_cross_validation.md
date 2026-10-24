@@ -20,9 +20,9 @@ To address patient-level distribution shifts and provide unbiased, representativ
    - **Total Test Frames**: 109 frames (4 patients)
 2. **Zero Leakage**:
    Each fold maintains an empty intersection between training and validation patient sets:
-   $$\text{Train}_{\text{Patients}} \cap \text{Val}_{\text{Patients}} = \emptyset$$
+   `Train_Patients ∩ Val_Patients = ∅`
 3. **Exact Coverage**:
-   Every pool patient is held out for validation in exactly one fold ($7 \times 5 = 35$ patients).
+   Every pool patient is held out for validation in exactly one fold (7 x 5 = 35 patients).
 
 ---
 
