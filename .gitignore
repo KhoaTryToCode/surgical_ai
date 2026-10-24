@@ -1,4 +1,8 @@
-# Heavy Data & Model Weights Isolation
+# ==============================================================================
+# Surgical AI - Git Ignore Specification
+# ==============================================================================
+
+# Data & Checkpoints Isolation
 data/*
 !data/.gitkeep
 checkpoints/*
@@ -7,29 +11,44 @@ checkpoints/*
 *.pt
 *.onnx
 *.tar.gz
+*.bin
+*.safetensors
 
-# Cloned External Repositories & Literature PDFs
-repos/*
-!repos/.gitkeep
-papers/*
-!papers/.gitkeep
+# External Repositories, Literature & Untracked Directories
+repos/
+papers/
+scratch/
+tools/
+outputs/
+report/
 
-# Python & System
+# C / C++ & Compiled Shared Libraries
+*.so
+*.dylib
+*.a
+*.o
+.build_csrc/
+build/
+
+# Python & Environment
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
 .venv/
 env/
+venv/
 .DS_Store
 
-# Execution Logs & Heavy Results
+# Logs & Tracking
 *.log
 wandb/
 runs/
-.build_csrc/
-build/
-scratch/
-*.zip
-*.pdf
+.ipynb_checkpoints/
+DSAS.ipynb
+.env
+*.key
+
+# LaTeX Auxiliary Build Files
 *.aux
 *.out
 *.synctex.gz
@@ -38,6 +57,9 @@ scratch/
 *.fls
 *.fdb_latexmk
 
+# Heavy Experiment Frame Dumps & Visualizations
+visualizations/
+**/visualizations/*
 results/*
 **/results/*
 !**/results/*.md
@@ -45,18 +67,8 @@ results/*
 result/*
 **/result/*
 
-# Visualizations & Heavy Frame Dumps
-visualizations/
-**/visualizations/*
-figures/
-writing/figures
-writing/proposal/figures/
-writing/proposal/*.pdf
-
-# Local Notebooks & Secrets
-DSAS.ipynb
-.env
-*.key
-
-
-
+# Unused Large Proposal Binaries & PDFs
+paper/proposal/figures/
+paper/proposal/*.pdf
+*.pdf
+!paper/report.pdf

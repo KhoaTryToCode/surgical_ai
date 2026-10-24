@@ -20,8 +20,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
 from shared.utils.split_loader import get_fold_patients, get_frozen_test_patients
-from experiments.TEMPORAL_EXP.core.dataset import SingleFrameL3DDataset, PatientVideoL3DDataset, resolve_split_dir, resolve_all_split_dirs
-from experiments.TEMPORAL_EXP.core.metrics import evaluate_frame_metrics
+from experiments.temporal.core.dataset import SingleFrameL3DDataset, PatientVideoL3DDataset, resolve_split_dir, resolve_all_split_dirs
+from experiments.temporal.core.metrics import evaluate_frame_metrics
 
 
 def get_device(requested_device: Optional[str] = None) -> torch.device:

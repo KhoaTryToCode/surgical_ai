@@ -1,5 +1,0 @@
-*.pth
-*.pt
-__pycache__/
-*.pyc
-checkpoints/
